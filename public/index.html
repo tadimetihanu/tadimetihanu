@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        /* Dashboard Table Styling */
+        .dashboard-table { width: 100%; border-collapse: collapse; color:#1d1d1f; }
+        .dashboard-table th { text-align: left; padding: 8px; font-size: 0.65rem; text-transform: uppercase; color:var(--text-muted); border-bottom: 1px solid #334155; }
+        .dashboard-table td { padding: 8px; border-bottom: 1px solid #1e293b; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+    </style>
+    <title>CloudObjectIQ | Direct Object Explorer</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <script src="chart.js"></script>
+</head>
+<body>
+    <div class="background-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+    </div>
+
+    <!-- ── Admin Center Overlay ─────────────────────────── -->
+    <div id="admin-overlay" class="loading-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; z-index:9999; flex-direction:column; background:#ffffff;">
+        <div style="width: 100%; height: 100%; overflow-y: auto; background: #ffffff; padding: 40px 15%; display: flex; flex-direction: column; gap: 20px;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h2>Enterprise Admin Center</h2>
+                <button class="ghost-btn" onclick="document.getElementById('admin-overlay').style.display='none'">Close</button>
+            </div>
+            
+            <div class="tabs" style="display:flex; gap:10px; margin: 20px 0;">
+                <button class="ghost-btn" onclick="showAdminTab('users')">Users</button>
+                <button class="ghost-btn" onclick="showAdminTab('perms')">Permissions</button>
+                <button class="ghost-btn" onclick="showAdminTab('targets')">Targets</button>
+                <button class="ghost-btn" onclick="showAdminTab('catalog')">Metadata Catalog</button>
+                <button class="ghost-btn" onclick="showAdminTab('spark')">Spark Jobs</button>
+                <button class="ghost-btn" onclick="showAdminTab('analytics')">Log Analytics</button>
+                <button class="ghost-btn" onclick="showAdminTab('rag')">RAG Engine</button>
+            </div>
+
+            <div id="admin-content">
+                <!-- User/Perm tables populated by JS -->
+            </div>
+            <!-- Spark Section -->
+            <section id="spark-section" class="tab-section" style="display:none; padding:20px;">
+                <div class="card-header" style="margin-bottom:20px;">
+                    <h2 style="color:var(--text); margin:0;">Spark Jobs (On-Prem/Cloud)</h2>
+                    <p style="font-size:0.8rem; color:var(--text-muted); margin:5px 0 0;">Submit high-performance analytical jobs to Spark clusters or Hadoop YARN.</p>
+                </div>
+                
+                <div style="display:grid; grid-template-columns:1.5fr 1fr; gap:20px;">
+                    <div style="background:var(--glass-heavy); padding:20px; border-radius:15px; border:1px solid var(--border);">
+                        <div class="field-group">
+                            <label class="cfg-lbl">Compute Target (HDFS/S3/Azure)</label>
+                            <select id="spark-target" class="cfg-input">
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+                        <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px;">
+                            <div class="field-group">
+                                <label class="cfg-lbl">Main Class</label>
+                                <input id="spark-class" class="cfg-input" placeholder="com.org.AnalyticJob">
+                            </div>
+                            <div class="field-group">
+                                <label class="cfg-lbl">Application JAR</label>
+                                <input id="spark-jar" class="cfg-input" placeholder="hdfs:///jobs/app.jar">
+                            </div>
+                        </div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                            <div class="field-group">
+                                <label class="cfg-lbl">Master URL</label>
+                                <input id="spark-master" class="cfg-input" placeholder="spark://host:7077" value="local[*]">
+                            </div>
+                            <div class="field-group">
+                                <label class="cfg-lbl">Deploy Mode</label>
+                                <select id="spark-mode" class="cfg-input">
+                                    <option value="client">Client</option>
+                                    <option value="cluster">Cluster</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="field-group">
+                            <label class="cfg-lbl">Arguments (CLI)</label>
+                            <textarea id="spark-args" class="cfg-input" style="height:80px;" placeholder="--input /data --output /out"></textarea>
+                        </div>
+                        <button id="spark-submit-btn" class="btn btn-primary" style="width:100%; height:44px;" onclick="window.submitSparkJob()">🚀 Submit Spark Job</button>
+                    </div>
+                    <div>
+                        <div style="background:#000; color:#0f0; padding:15px; border-radius:12px; font-family:monospace; font-size:0.75rem; height:410px; overflow-y:auto; border:1px solid #333;" id="spark-logs">
+                            > Spark Engine Ready...
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- RAG Section -->
+            <section id="rag-section" class="tab-section" style="display:none; padding:20px;">
+                <div class="card-header" style="margin-bottom:20px;">
+                    <h2 style="color:var(--text); margin:0;">🧠 Unstructured RAG Engine</h2>
+                    <p style="font-size:0.8rem; color:var(--text-muted); margin:5px 0 0;">Index unstructured files (PDF, TXT) into Milvus or OpenSearch and query them with AI.</p>
+                </div>
+                
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+                    <div style="background:var(--glass-heavy); padding:20px; border-radius:15px; border:1px solid var(--border);">
+                        <h3 style="margin-top:0; color:var(--accent);">1. Index Document</h3>
+                        <div class="field-group">
+                            <label class="cfg-lbl">Target Vector DB</label>
+                            <select id="rag-vector-db" class="cfg-input">
+                                <option value="milvus">Milvus Database</option>
+                                <option value="opensearch">OpenSearch Cluster</option>
+                            </select>
+                        </div>
+                        <div class="field-group">
+                            <label class="cfg-lbl">Target Storage</label>
+                            <select id="rag-target" class="cfg-input"></select>
+                        </div>
+                        <div class="field-group">
+                            <label class="cfg-lbl">File Path (e.g. data.pdf)</label>
+                            <input id="rag-file" class="cfg-input" placeholder="path/to/file.pdf">
+                        </div>
+                        <div class="field-group">
+                            <label class="cfg-lbl">PDF Password (Optional)</label>
+                            <input type="password" id="rag-password" class="cfg-input" placeholder="Enter password if encrypted">
+                        </div>
+                        <button id="rag-index-btn" class="btn btn-primary" style="width:100%; height:40px; margin-bottom: 10px;" onclick="window.indexRagFile()">📥 Index from Storage</button>
+
+                        <div style="text-align: center; margin: 15px 0; position: relative;">
+                            <hr style="border: none; border-top: 1px solid var(--border); position: absolute; width: 100%; top: 50%; z-index: 1;">
+                            <span style="background: var(--glass-heavy); padding: 0 10px; position: relative; z-index: 2; color: var(--text-muted); font-size: 0.75rem; font-weight: 600;">OR</span>
+                        </div>
+
+                        <div class="field-group">
+                            <label class="cfg-lbl">Upload Local File (Any File)</label>
+                            <div style="display:flex; gap:10px; align-items:center;">
+                                <input type="file" id="rag-upload-file" class="cfg-input" accept=".pdf,.txt,.csv,.json,.parquet,.orc" style="flex:1; padding: 6px;">
+                                <button id="rag-upload-btn" class="btn btn-secondary" style="height:36px; white-space:nowrap; border-color: var(--accent); color: var(--accent);" onclick="window.uploadAndIndexRagFile()">📤 Upload & Index</button>
+                            </div>
+                        </div>
+                        <div id="rag-index-status" style="margin-top:10px; font-size:0.8rem; color:#333333;"></div>
+                    </div>
+                    
+                    <div style="background:var(--glass-heavy); padding:20px; border-radius:15px; border:1px solid var(--border); display:flex; flex-direction:column;">
+                        <h3 style="margin-top:0; color:#1d1d1f;">2. Chat / Query</h3>
+                        <div id="rag-chat-history" style="flex:1; background:#f5f5f7; border-radius:8px; padding:10px; overflow-y:auto; font-size:0.85rem; margin-bottom:10px; border:1px solid var(--border); min-height: 200px; color:#1d1d1f;">
+                            <div style="color:var(--text-muted); font-style:italic;">Ask questions against your indexed documents...</div>
+                        </div>
+                        <div style="display:flex; gap:10px;">
+                            <input id="rag-query-input" class="cfg-input" style="flex:1;" placeholder="What does the document say about..." onkeydown="if(event.key==='Enter') window.queryRag()">
+                            <button id="rag-query-btn" class="btn" style="background:#000000; color:white; border:none;" onclick="window.queryRag()">Send</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- ── CloudObjectIQ Strategic Marketing Portal ────────────────── -->
+    <div id="login-overlay" style="display: flex;">
+        <div style="max-width: 1200px; margin: auto; display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 80px; align-items: center; padding: 40px;">
+            
+            <!-- 🚀 Marketing Side -->
+            <div>
+                <div style="background:rgba(0,0,0,0.05); color: var(--text-muted); padding:6px 16px; border-radius:50px; font-size:0.75rem; font-weight:800; display:inline-block; margin-bottom:25px; border:1px solid var(--border); text-transform:uppercase; letter-spacing:1px;">
+                    Enterprise Object Explorer v2.0
+                </div>
+                <h1 style="font-size:3.8rem; line-height:1.1; font-weight:800; margin-bottom:20px; color:var(--text);">
+                    Predict. Scan. <br>
+                    <span style="background:#000000; -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;">Optimize.</span>
+                </h1>
+                <p style="font-size:1.25rem; line-height:1.6; color:var(--text-muted); margin-bottom:45px; max-width:550px;">
+                    <b>CloudObjectIQ</b> brings total transparency to your data lake. Stop guessing S3 and Azure budgets—start monitoring <b>Live Query Burn</b> with every scan.
+                </p>
+                
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:25px;">
+                    <div style="background:rgba(0,0,0,0.02); border:1px solid var(--border); padding:25px; border-radius:20px; backdrop-filter:blur(10px);">
+                        <div style="font-size:1.5rem; margin-bottom:10px;">🔥</div>
+                        <h3 style="margin:0 0 8px 0; color:var(--text); font-size:1.1rem; font-weight:700;">Live Cost Analytics</h3>
+                        <p style="margin:0; font-size:0.85rem; color:var(--text-muted); line-height:1.5;">See exact USD burn metrics for every query instantly.</p>
+                    </div>
+                    <div style="background:rgba(0,0,0,0.02); border:1px solid var(--border); padding:25px; border-radius:20px; backdrop-filter:blur(10px);">
+                        <div style="font-size:1.5rem; margin-bottom:10px;">📦</div>
+                        <h3 style="margin:0 0 8px 0; color:var(--text); font-size:1.1rem; font-weight:700;">Zero-ETL Strategy</h3>
+                        <p style="margin:0; font-size:0.85rem; color:var(--text-muted); line-height:1.5;">Query Parquet and CSV without moving data between clouds.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 🔐 Secure Login Side -->
+            <div class="login-card">
+                <div style="text-align:center; margin-bottom:30px;">
+                    <div style="width:60px; height:60px; background:#000000; border-radius:16px; margin:0 auto 20px; display:flex; align-items:center; justify-content:center; box-shadow: none;">
+                        <span style="font-weight:900; font-size:1.8rem; color:white;">Q</span>
+                    </div>
+                    <h2 style="margin:0; font-size:1.6rem; font-weight:800;">Enterprise IQ</h2>
+                    <p style="margin:8px 0 0; color:var(--text-muted); font-size:0.85rem;">Secure Session Authentication</p>
+                </div>
+                
+                <div id="login-error" style="background:rgba(239,68,68,0.1); border-radius:8px; padding:10px; color:#f87171; font-size:0.8rem; margin-bottom:15px; border:1px solid rgba(239,68,68,0.2); display:none;"></div>
+                
+                <div style="display:flex; flex-direction:column; gap:15px;">
+                    <input type="email" id="login-email" placeholder="Email Address" value="admin@cloudobjectiq.com" style="background:#ffffff; border:1px solid var(--border); color:var(--text);">
+                    <input type="password" id="login-password" placeholder="Password" value="admin123" style="background:#ffffff; border:1px solid var(--border); color:var(--text);">
+                    <button id="login-btn" onclick="login()" style="background: #000000; color:white; font-weight:700; transition: 0.3s; margin-top: 10px; border:none; padding:12px; border-radius:8px; cursor:pointer;">Sign Into Data Lake 🚀</button>
+                    
+                    <div style="text-align: center; margin: 20px 0 10px 0; position: relative;">
+                        <hr style="border: none; border-top: 1px solid var(--border); position: absolute; width: 100%; top: 50%; z-index: 1;">
+                        <span style="background: #ffffff; padding: 0 10px; position: relative; z-index: 2; color: var(--text-muted); font-size: 0.75rem; font-weight: 600;">OR CONTINUE WITH</span>
+                    </div>
+
+                    <div style="display: flex; gap: 10px; flex-direction: column;">
+                        <a href="/api/auth/google" class="oauth-btn google-btn">
+                            <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" alt="Google" style="width: 18px; height: 18px; margin-right: 10px;">
+                            Continue with Google
+                        </a>
+                        <a href="/api/auth/microsoft" class="oauth-btn microsoft-btn">
+                            <img src="https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg" alt="Microsoft" style="width: 18px; height: 18px; margin-right: 10px;">
+                            Continue with Microsoft
+                        </a>
+                    </div>
+                </div>
+                
+                <div style="font-size:0.7rem; color:var(--text-muted); margin-top:30px; text-align:center; border-top:1px solid var(--border); padding-top:20px;">
+                    🏢 System Managed by <b>Datainseek Technologies</b>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="app-container" style="display: none;">
+
+    <header>
+        <div class="logo">
+            <div class="logo-icon"></div>
+            <h1>CloudObject<span style="font-weight: 300; opacity: 0.7;">IQ</span></h1>
+        </div>
+        <div class="header-right" style="display: flex; gap: 15px; align-items: center;">
+            
+            <span id="admin-btn-container"></span>
+            <div id="user-profile" style="font-size: 0.8rem; color: var(--text-muted); cursor:pointer; text-decoration:underline;" onclick="openProfile()"></div>
+            <button class="settings-btn" onclick="openSettings()" title="Connections & Settings">⚙️</button>
+            <button class="settings-btn" onclick="logout()">Logout</button>
+        </div>
+    </header>
+
+    <!-- ── User Profile Modal ────────────────────────────── -->
+    <div class="modal-overlay" id="profile-modal" onclick="if(event.target.id==='profile-modal') closeProfile()">
+        <div class="modal" style="width:720px; padding:0; overflow:hidden; display:flex; flex-direction:column; max-height:85vh;">
+            <div style="background:linear-gradient(135deg, var(--primary), var(--primary-dark)); padding:30px; color:white;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                    <div style="display:flex; gap:20px; align-items:center;">
+                        <div style="width:80px; height:80px; border-radius:100px; background:white; color:var(--primary); font-size:2.5rem; display:flex; align-items:center; justify-content:center; font-weight:900;">👤</div>
+                        <div>
+                            <h1 id="prof-email" style="margin:0; font-size:1.4rem;"></h1>
+                            <p id="prof-role" style="margin:5px 0 0; opacity:0.8; text-transform:uppercase; letter-spacing:1px; font-size:0.75rem; font-weight:700;"></p>
+                        </div>
+                    </div>
+                    <button onclick="closeProfile()" style="background:none; border:none; color:white; cursor:pointer; font-size:1.5rem;">✕</button>
+                </div>
+            </div>
+
+            <div style="padding:24px; display:grid; grid-template-columns:repeat(5, 1fr); gap:20px; background:var(--glass-heavy); border-bottom:1px solid var(--border);">
+                <div style="text-align:center;"><p style="font-size:0.7rem; color:var(--text-muted); margin:0;">Total Queries</p><h2 id="prof-stat-queries" style="margin:5px 0 0;">0</h2></div>
+                <div style="text-align:center;"><p style="font-size:0.7rem; color:var(--text-muted); margin:0;">Compute Time</p><h2 id="prof-stat-compute" style="margin:5px 0 0;">0s</h2></div>
+                <div style="text-align:center;"><p style="font-size:0.7rem; color:var(--text-muted); margin:0;">Total Scanned</p><h2 id="prof-stat-scanned" style="margin:5px 0 0;">0 MB</h2></div>
+                <div style="text-align:center;"><p style="font-size:0.7rem; color:var(--text-muted); margin:0;">Total Burn</p><h2 id="prof-stat-burn" style="margin:5px 0 0; color:rgba(239, 68, 68, 0.9);">$0.000000</h2></div>
+                <div style="text-align:center;"><p style="font-size:0.7rem; color:var(--text-muted); margin:0;">Last Active</p><h2 id="prof-stat-active" style="margin:5px 0 0; font-size:0.9rem;">—</h2></div>
+            </div>
+
+            <div style="padding:24px; flex:1; overflow-y:auto;">
+                <h3 style="margin:0 0 15px 0; font-size:0.9rem;">🕒 Recent Queries</h3>
+                <div id="prof-history" style="display:flex; flex-direction:column; gap:10px;">
+                    <!-- Queries loaded by JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <main>
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <h3>Cloud Targets</h3>
+                <ul id="target-list" class="browser-list">
+                    <!-- Populated by JS -->
+                </ul>
+            </div>
+
+            <div class="file-browser" style="margin-top: 20px;">
+                <p class="section-title" style="margin-bottom:10px;">Object Explorer</p>
+                <!-- High-Visibility Type Filters -->
+                <div id="file-type-chips" style="display:flex; gap:6px; margin-bottom:12px; overflow-x:auto; padding-bottom:5px; scrollbar-width:none;">
+                    <button class="type-chip active" onclick="window.filterByType('all')">All</button>
+                    <button class="type-chip" onclick="window.filterByType('parquet')">✨ Parquet</button>
+                    <button class="type-chip" onclick="window.filterByType('orc')">🐘 ORC</button>
+                    <button class="type-chip" onclick="window.filterByType('csv')">📊 CSV</button>
+                    <button class="type-chip" onclick="window.filterByType('json')">📦 JSON</button>
+                </div>
+                <ul id="browser-list" class="browser-list" style="margin-bottom: 20px;"></ul>
+                <div class="upload-area" style="border:1px dashed var(--border); border-radius:12px; padding:15px; text-align:center;">
+                    <p style="margin: 0; font-size: 0.75rem;">Drop files to upload</p>
+                    <input id="file-input" type="file" multiple style="display:none" onchange="uploadFiles(this.files)">
+                    <input id="folder-input" type="file" webkitdirectory directory multiple style="display:none" onchange="uploadFiles(this.files)">
+                    <div style="display:flex; gap:8px; justify-content:center; margin-top:8px;">
+                        <button class="ghost-btn" style="font-size:0.7rem;" onclick="document.getElementById('file-input').click()">📁 Files</button>
+                        <button class="ghost-btn" style="font-size:0.7rem;" onclick="document.getElementById('folder-input').click()">📂 Folder</button>
+                    </div>
+                </div>
+            </div>
+            <div id="upload-status" style="font-size: 0.72rem; margin-top: 8px; min-height: 18px; color: var(--text-muted); text-align:center;"></div>
+
+            <!-- ── Schema Inspector Panel ─────────────────────── -->
+            <div id="schema-panel" style="display:none; margin-top:18px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                    <p class="section-title" style="margin:0;">Schema Inspector</p>
+                    <button onclick="closeSchemaPanel()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1rem;line-height:1;">✕</button>
+                </div>
+
+                <!-- File meta row -->
+                <div id="schema-meta" style="background:var(--glass-heavy); border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:10px; font-size:0.75rem;">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                        <span id="schema-file-icon" style="font-size:1rem;">📄</span>
+                        <span id="schema-file-name" style="font-weight:600; color:var(--text); word-break:break-all;"></span>
+                    </div>
+                    <div style="display:flex;gap:12px;color:var(--text-muted);">
+                        <span>🔢 <strong id="schema-row-count" style="color:var(--text);">—</strong> rows</span>
+                        <span>📐 <strong id="schema-col-count" style="color:var(--text);">—</strong> columns</span>
+                    </div>
+                </div>
+
+                <!-- Loading state -->
+                <div id="schema-loading" style="display:none; text-align:center; padding:16px; color:var(--text-muted); font-size:0.78rem;">
+                    <div style="font-size:1.2rem;margin-bottom:4px;">⏳</div>
+                    Inspecting file...
+                </div>
+
+                <!-- Error state -->
+                <div id="schema-error" style="display:none; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.25); border-radius:8px; padding:10px 12px; font-size:0.75rem; color:#f87171;"></div>
+
+                <!-- Columns table -->
+                <div id="schema-columns" style="display:none;">
+                    <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted);margin-bottom:6px;display:grid;grid-template-columns:1fr auto;gap:8px;padding:0 4px;">
+                        <span>Column</span><span>Type</span>
+                    </div>
+                    <div id="schema-col-list" style="display:flex;flex-direction:column;gap:3px;max-height:260px;overflow-y:auto;"></div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div id="schema-query-btn" style="display:none; margin-top:16px;">
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn btn-primary" onclick="insertSchemaQuery(true)" style="flex:1; font-size:0.75rem; padding:8px 0;">▶ New Query</button>
+                        <button class="btn btn-secondary" onclick="insertSchemaQuery(false)" style="flex:1; font-size:0.75rem; padding:8px 0;" title="Add this table to the current editor">➕ Append to Editor</button>
+                    </div>
+                </div>
+            </div>
+
+
+
+
+        </aside>
+
+        <section class="content-area">
+                
+                <!-- Main Screen Mode Switcher -->
+                <div style="display:flex; gap:10px; margin-bottom: 20px;">
+                    <button id="mode-sql-btn" class="view-tab active" style="font-size: 1rem; padding: 10px 20px; flex:1; border-radius: 12px;" onclick="window.switchMainMode('sql')">💻 Structured SQL Engine</button>
+                    <button id="mode-rag-btn" class="view-tab" style="font-size: 1rem; padding: 10px 20px; flex:1; border-radius: 12px; background:rgba(0,0,0,0.05); border-color:rgba(0,0,0,0.1); color:var(--text-muted);" onclick="window.switchMainMode('rag')">🧠 Unstructured Data Search</button>
+                    <button id="mode-ingest-btn" class="view-tab" style="font-size: 1rem; padding: 10px 20px; flex:1; border-radius: 12px; background:rgba(0,0,0,0.05); border-color:rgba(0,0,0,0.1); color:var(--text-muted);" onclick="window.switchMainMode('ingest')">📥 Data Ingestion</button>
+                </div>
+
+
+                <!-- 📥 INGESTION WORKSPACE -->
+                <div id="ingest-workspace" style="display:none;">
+                    <div style="background:var(--glass-heavy); padding:20px; border-radius:15px; border:1px solid var(--border); max-width:900px; margin:0 auto;">
+                        <h2 style="margin-top:0; color:var(--text-muted);">📥 Data Ingestion Hub</h2>
+                        
+                        <!-- Sub-tabs -->
+                        <div style="display:flex; gap:10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+                            <button id="ingest-tab-ftp" class="btn" style="background:var(--accent); color:white; border:none;" onclick="window.switchIngestTab('ftp')">Direct FTP/SFTP</button>
+                            <button id="ingest-tab-airbyte" class="btn" style="background:transparent; color:var(--text-muted); border:1px solid var(--border);" onclick="window.switchIngestTab('airbyte')">External Connectors (Airbyte)</button>
+                        </div>
+
+                        <!-- FTP/SFTP PANEL -->
+                        <div id="ingest-panel-ftp">
+                            <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:20px;">Stream legacy files directly into your Cloud Storage Targets without writing to local disk.</p>
+                            
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px;">
+                                <div class="field-group">
+                                    <label class="cfg-lbl">Source Protocol</label>
+                                    <select id="ingest-type" class="cfg-input">
+                                        <option value="ftp">FTP</option>
+                                        <option value="sftp">Secure FTP (SFTP)</option>
+                                    </select>
+                                </div>
+                                <div class="field-group">
+                                    <label class="cfg-lbl">Host Address</label>
+                                    <input id="ingest-host" class="cfg-input" placeholder="ftp.example.com">
+                                </div>
+                            </div>
+
+                            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px; margin-bottom:20px;">
+                                <div class="field-group">
+                                    <label class="cfg-lbl">Port (Optional)</label>
+                                    <input id="ingest-port" type="number" class="cfg-input" placeholder="21 / 22">
+                                </div>
+                                <div class="field-group">
+                                    <label class="cfg-lbl">Username</label>
+                                    <input id="ingest-user" class="cfg-input" placeholder="admin">
+                                </div>
+                                <div class="field-group">
+                                    <label class="cfg-lbl">Password</label>
+                                    <input id="ingest-pass" type="password" class="cfg-input" placeholder="••••••••">
+                                </div>
+                            </div>
+
+                            <div class="field-group" style="margin-bottom:20px;">
+                                <label class="cfg-lbl">Source File Path (Absolute path on FTP)</label>
+                                <input id="ingest-source-path" class="cfg-input" placeholder="/data/exports/daily_dump.csv">
+                            </div>
+
+                            <hr style="border:none; border-top:1px solid var(--border); margin:20px 0;">
+
+                            <h3 style="margin-top:0; font-size:1rem; color:var(--text);">Destination Cloud Storage</h3>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px;">
+                                <div class="field-group">
+                                    <label class="cfg-lbl">Target Object Storage</label>
+                                    <select id="ingest-target" class="cfg-input"></select>
+                                </div>
+                                <div class="field-group">
+                                    <label class="cfg-lbl">Destination Folder (Optional)</label>
+                                    <input id="ingest-target-folder" class="cfg-input" placeholder="raw_data/incoming/">
+                                </div>
+                            </div>
+
+                            <button id="ingest-btn" class="btn btn-primary" style="width:100%; height:45px; font-size:1rem; font-weight:700; background:linear-gradient(135deg, #f59e0b, #d97706); border:none;" onclick="window.startIngestion()">🚀 Start Streaming Transfer</button>
+                            <div id="ingest-status" style="margin-top:15px; font-size:0.85rem; text-align:center; min-height:20px;"></div>
+                        </div>
+
+                        <!-- AIRBYTE PANEL -->
+                        <div id="ingest-panel-airbyte" style="display:none;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.2); padding:15px; border-radius:10px; margin-bottom:20px;">
+                                <div>
+                                    <h3 style="margin:0; color:#000000;">Airbyte Integration Engine</h3>
+                                    <p style="margin:5px 0 0 0; font-size:0.85rem; color:var(--text-muted);">Sync data from Postgres, Salesforce, Stripe, and 300+ APIs.</p>
+                                </div>
+                                <div id="airbyte-server-status" style="font-size:0.85rem; font-weight:bold; padding:5px 10px; border-radius:5px; background:rgba(255,255,255,0.1);">
+                                    Checking Status...
+                                </div>
+                            </div>
+
+                            <div style="background:rgba(59, 130, 246, 0.1); border:1px solid rgba(59, 130, 246, 0.3); padding:15px; border-radius:10px; margin-bottom:20px;">
+                                <h4 style="margin-top:0; color:#333333;">1. Provision CloudObjectIQ Target</h4>
+                                <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:10px;">Automatically register your MinIO Data Lake inside Airbyte so it knows where to dump the incoming Parquet files.</p>
+                                <div style="display:flex; gap:10px;">
+                                    <select id="airbyte-minio-target" class="cfg-input" style="flex:1;"></select>
+                                    <button class="btn" style="background:#000000; color:white; border:none;" onclick="window.setupAirbyteDestination()">Auto-Link Destination</button>
+                                </div>
+                                <div id="airbyte-setup-status" style="font-size:0.85rem; margin-top:10px;"></div>
+                            </div>
+
+                            <div style="background:rgba(255,255,255,0.02); padding:15px; border-radius:10px; border:1px solid var(--border); margin-bottom:20px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                    <h4 style="margin:0; color:var(--text);">2. Recent Sync Jobs</h4>
+                                    <button class="btn btn-secondary" style="font-size:0.75rem; padding:4px 8px;" onclick="window.refreshAirbyteJobs()">🔄 Refresh</button>
+                                </div>
+                                <div id="airbyte-jobs-list" style="max-height:200px; overflow-y:auto; font-size:0.85rem; color:var(--text-muted);">
+                                    Loading sync history...
+                                </div>
+                            </div>
+
+                            <a href="http://localhost:8000" target="_blank" style="text-decoration:none;">
+                                <button class="btn" style="width:100%; height:45px; font-size:1rem; font-weight:700; background:var(--glass); border:1px solid #000000; color:#333333;">
+                                    🌐 Open Airbyte UI to Add Sources
+                                </button>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 🧠 RAG WORKSPACE -->
+                <div id="rag-workspace" style="display:none;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+                        <!-- Indexing Panel -->
+                        <div style="background:var(--glass-heavy); padding:20px; border-radius:15px; border:1px solid var(--border);">
+                            <h3 style="margin-top:0; color:var(--accent);">1. Index Document</h3>
+                            <div class="field-group">
+                                <label class="cfg-lbl">Target Vector DB</label>
+                                <select id="main-rag-vector-db" class="cfg-input">
+                                    <option value="milvus">Milvus Database</option>
+                                    <option value="opensearch">OpenSearch Cluster</option>
+                                </select>
+                            </div>
+                            <div class="field-group">
+                                <label class="cfg-lbl">Target Storage</label>
+                                <select id="main-rag-target" class="cfg-input"></select>
+                            </div>
+                            <div class="field-group">
+                                <label class="cfg-lbl">File Path (e.g. data.pdf)</label>
+                                <input id="main-rag-file" class="cfg-input" placeholder="path/to/file.pdf">
+                            </div>
+                            <div class="field-group">
+                                <label class="cfg-lbl">PDF Password (Optional)</label>
+                                <input type="password" id="main-rag-password" class="cfg-input" placeholder="Enter password if encrypted">
+                            </div>
+                            <button class="btn btn-primary" style="width:100%; height:40px; margin-bottom: 10px;" onclick="window.indexRagFile(true)">📥 Index from Storage</button>
+
+                            <div style="text-align: center; margin: 15px 0; position: relative;">
+                                <hr style="border: none; border-top: 1px solid var(--border); position: absolute; width: 100%; top: 50%; z-index: 1;">
+                                <span style="background: var(--glass-heavy); padding: 0 10px; position: relative; z-index: 2; color: var(--text-muted); font-size: 0.75rem; font-weight: 600;">OR</span>
+                            </div>
+
+                            <div class="field-group">
+                                <label class="cfg-lbl">Upload Local File (Any File)</label>
+                                <div style="display:flex; gap:10px; align-items:center;">
+                                    <input type="file" id="main-rag-upload-file" class="cfg-input" accept=".pdf,.txt,.csv,.json,.parquet,.orc" style="flex:1; padding: 6px;">
+                                    <button class="btn btn-secondary" style="height:36px; white-space:nowrap; border-color: var(--accent); color: var(--accent);" onclick="window.uploadAndIndexRagFile(true)">📤 Upload & Index</button>
+                                </div>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <div id="main-rag-index-status" style="margin-top:10px; font-size:0.8rem; color:#333333; margin-bottom:15px;"></div>
+                                <button id="main-rag-delete-btn" class="btn btn-secondary" style="border-color: #000000; color: #000000; height: 30px; font-size: 0.75rem;" onclick="window.deleteRagDocument()">🗑️ Delete Indexed Doc</button>
+                            </div>
+                            <div style="text-align: center; margin: 15px 0; position: relative;">
+                                <hr style="border: none; border-top: 1px solid var(--border); position: absolute; width: 100%; top: 50%; z-index: 1;">
+                                <span style="background: var(--glass-heavy); padding: 0 10px; position: relative; z-index: 2; color: var(--text-muted); font-size: 0.75rem; font-weight: 600;">AUTOMATED</span>
+                            </div>
+                            
+                            <button id="main-rag-bulk-btn" class="btn btn-secondary" style="width:100%; height:40px; margin-bottom: 10px; border-color:#000000; color:#1d1d1f;" onclick="window.startBulkIndex()">🔄 Bulk Index All Cloud Targets</button>
+                            <div id="main-rag-bulk-status" style="font-size:0.8rem; color:#000000; display:none; background:rgba(0,0,0,0.05); padding:8px; border-radius:6px; margin-top:5px;"></div>
+                        </div>
+                        
+                        <!-- Query Panel -->
+                        <div style="background:var(--glass-heavy); padding:20px; border-radius:15px; border:1px solid var(--border); display:flex; flex-direction:column; min-height: 400px;">
+                            <h3 style="margin-top:0; color:#1d1d1f;">2. Chat / Query</h3>
+                            <div id="main-rag-chat-history" style="flex:1; background:#f5f5f7; border-radius:8px; padding:15px; overflow-y:auto; font-size:0.95rem; margin-bottom:15px; border:1px solid var(--border); color:#1d1d1f; display:flex; flex-direction:column; gap:12px;">
+                                <div style="color:var(--text-muted); font-style:italic;">Ask questions against your indexed documents...</div>
+                            </div>
+                            <div style="display:flex; gap:10px;">
+                                <select id="main-rag-search-mode" class="cfg-input" style="width:230px;">
+                                    <option value="semantic">Semantic Search</option>
+                                    <option value="keyword">Full-Text Keyword Search</option>
+                                    <option value="hybrid">✨ AI Hybrid Search (RRF)</option>
+                                    <option value="exhaustive">📚 Full Document Scan (Exact Count)</option>
+                                </select>
+                                <input id="main-rag-query-input" class="cfg-input" style="flex:1; font-size: 1rem; padding: 12px;" placeholder="What does the document say about..." onkeydown="if(event.key==='Enter') window.queryRag(true)">
+                                <button class="btn" style="background:#000000; color:white; border:none; padding: 0 20px; font-size: 1rem;" onclick="window.queryRag(true)">Send</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 💻 SQL WORKSPACE -->
+                <div id="sql-workspace">
+                <!-- 🆕 Persistent Dashboard Section (Hidden if empty) -->
+                <div id="main-dashboard" style="display:none; margin-bottom:20px; background:rgba(15,23,42,0.4); border:1px solid var(--border); border-radius:15px; padding:20px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                        <h3 style="margin:0; font-size:1.1rem; color:var(--accent); display:flex; align-items:center; gap:8px;"><span>🏠</span> Executive Dashboard</h3>
+                        <button class="btn btn-secondary" onclick="clearDashboard()" style="font-size:0.7rem;">Clear All</button>
+                    </div>
+                    <div id="dashboard-items" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap:20px;">
+                        <!-- Pinned items go here -->
+                    </div>
+                </div>
+
+                <div class="query-builder-card" style="padding:0; overflow:hidden;">
+                    <!-- Notebook Tab Bar -->
+                    <div id="notebook-tabs" style="background:#f5f5f7; border-bottom:1px solid #1e293b; padding:10px 15px 0; display:flex; gap:5px; height:45px; align-items:flex-end; overflow-x:auto;">
+                        <!-- Populated by JS -->
+                        <button class="notebook-tab active" onclick="addNotebookTab()">+ New Tab</button>
+                    </div>
+
+                    <!-- AI Chat Header (Mini) -->
+                    <div style="background:rgba(0,0,0,0.02); border-bottom:1px solid rgba(0,0,0,0.05); padding:12px 20px; display:flex; align-items:center; gap:12px;">
+                        <span style="font-size:1.1rem;">✨</span>
+                        <input id="ai-prompt" type="text" placeholder="AI Notebook Assistant: 'Generate a join between iris and telemetry'" style="flex:1; background:transparent; border:none; color:#333333; font-weight:600; outline:none; font-size:0.85rem;" onkeydown="if(event.key==='Enter') aiSuggest()">
+                        <button id="ai-btn" onclick="aiSuggest()" style="background:#333333; color:white; border:none; border-radius:8px; padding:6px 15px; font-size:0.75rem; font-weight:800; cursor:pointer;">Ask AI</button>
+                    </div>
+
+                    <div class="query-editor-wrapper" style="height:280px; padding:15px; background:#f5f5f7;">
+                        <textarea id="query-editor" style="background:transparent; color:var(--text-muted); font-family:'Menlo', monospace; font-size:1.05rem; line-height:1.6;" placeholder="-- Execute standard SQL against S3 / Azure Blob storage..."></textarea>
+                    </div>
+
+                <div class="action-bar">
+                    <button class="btn btn-primary" id="run-btn" onclick="executeQuery()">Execute Query</button>
+                    <button class="btn btn-secondary" onclick="clearEditor()">Clear</button>
+                    <button class="btn btn-secondary" onclick="switchView('chart'); document.querySelector('.results-card').scrollIntoView({behavior:'smooth'})" id="chart-toggle-btn" style="display:none;">📊 Chart View</button>
+                    <button class="btn btn-secondary" onclick="openSaveDialog()" id="save-query-btn"
+                        style="background:rgba(249,115,22,0.12);border-color:rgba(249,115,22,0.4);color:#f97316;"
+                        title="Save this query">
+                        💾 Save Query
+                    </button>
+                    <button class="btn btn-secondary" onclick="openSavedQueries()"
+                        style="background:rgba(251,191,36,0.1);border-color:rgba(0,0,0,0.1);color:#666666;"
+                        title="View saved queries">
+                        📚 Saved
+                    </button>
+                    <div id="live-burn-meter" style="display:none; align-items:center; gap:12px; background:rgba(239, 68, 68, 0.08); border:1px solid rgba(239, 68, 68, 0.2); padding:6px 14px; border-radius:30px; margin-left:15px;">
+                        <div style="width:8px; height:8px; background:#000000; border-radius:10px; box-shadow:0 0 10px #000000;"></div>
+                        <div style="font-size:0.65rem; font-weight:700; color:rgba(239, 68, 68, 0.8); text-transform:uppercase; letter-spacing:0.04em;">Live Burn</div>
+                        <div style="font-size:0.8rem; font-weight:800; color:var(--text);">$<span id="current-burn-val">0.000000</span></div>
+                        <div style="width:1px; height:12px; background:rgba(255,255,255,0.1);"></div>
+                        <div style="font-size:0.65rem; color:var(--text-muted);">Scanned: <span id="current-scan-val" style="color:var(--text); font-weight:700;">0.0</span> MB</div>
+                    </div>
+                    <div style="flex: 1;"></div>
+                    <span id="exec-status" style="font-size: 0.8rem; color: var(--text-muted);"></span>
+                </div>
+
+                <!-- Inline save-name input (hidden by default) -->
+                <div id="save-query-bar" style="display:none; margin-top:10px; display:none; gap:8px; align-items:center;
+                    background:rgba(16,185,129,0.06); border:1px solid rgba(16,185,129,0.25);
+                    border-radius:10px; padding:10px 14px;">
+                    <span style="font-size:0.8rem;color:#34d399;white-space:nowrap;">💾 Query name:</span>
+                    <input id="save-query-name" type="text" placeholder="e.g. Top customers by balance"
+                        style="flex:1;background:none;border:none;outline:none;color:var(--text);
+                               font-family:'Outfit',sans-serif;font-size:0.85rem;"
+                        onkeydown="if(event.key==='Enter') confirmSaveQuery(); if(event.key==='Escape') closeSaveDialog()">
+                    <button onclick="confirmSaveQuery()"
+                        style="background:rgba(16,185,129,0.2);border:1px solid rgba(16,185,129,0.5);
+                               color:#34d399;border-radius:7px;padding:5px 14px;font-size:0.78rem;
+                               font-family:'Outfit',sans-serif;cursor:pointer;">Save</button>
+                    <button onclick="closeSaveDialog()"
+                        style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1rem;">✕</button>
+                </div>
+            </div>
+
+            <div class="results-card">
+                <div class="card-header" style="border-bottom: 1px solid var(--border); padding: 0 24px; display:flex; align-items:center; justify-content:space-between;">
+                    <div class="results-tabs">
+                        <button id="view-tab-table" class="view-tab active" onclick="switchView('table')">📋 Table View</button>
+                        <button id="view-tab-chart" class="view-tab" onclick="switchView('chart')">📊 Chart View</button>
+                    </div>
+                    <div id="export-btns" style="display:none; gap:8px;">
+                        <button class="btn btn-secondary" onclick="pinCurrentTable()" style="font-size:0.72rem; padding:5px 12px; background:rgba(0,0,0,0.05); border-color:var(--accent); color:var(--accent);">📌 Pin to Dashboard</button>
+                        <button class="btn btn-secondary" onclick="exportResults('csv')"  style="font-size:0.72rem; padding:5px 12px;">↓ CSV</button>
+                        <button class="btn btn-secondary" onclick="exportResults('pdf')"  style="font-size:0.72rem; padding:5px 12px; background:rgba(0,0,0,0.08); border-color:#333333; color:#333333;">📄 Download Report (PDF)</button>
+                        <button class="btn btn-secondary" onclick="exportResults('json')" style="font-size:0.72rem; padding:5px 12px;">↓ JSON</button>
+                    </div>
+                </div>
+                <div class="table-container" id="table-container">
+                    <table id="results-table">
+                        <thead id="table-head"></thead>
+                        <tbody id="table-body">
+                            <tr>
+                                <td colspan="100" style="text-align: center; padding: 100px; color: var(--text-muted);">
+                                    Run a query to see results.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="chart-panel" style="display:none; padding: 24px; background: #f8fafc; border-top: 1px solid var(--border);">
+                    <div style="display: flex; gap: 20px; min-height: 400px;">
+                        <!-- Left: Filters Panel (Power BI Slicers) -->
+                        <div style="width: 250px; background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 2px 10px rgba(0,0,0,0.02);">
+                            <h4 style="margin: 0 0 15px 0; display:flex; align-items:center; gap:8px;"><span>🎯</span> Global Slicers</h4>
+                            <p style="font-size:0.75rem; color:var(--text-muted); margin-top:-10px;">Filter data across visuals</p>
+                            <div id="pbi-filters" style="margin-bottom:20px;">
+                                <div style="font-size:0.8rem; color:#1d1d1f; text-align:center;">Loading slicers...</div>
+                            </div>
+                            
+                            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;"/>
+                            
+                            <h4 style="margin: 0 0 15px 0; display:flex; align-items:center; gap:8px;"><span>📏</span> Measures (DAX)</h4>
+                            <p style="font-size:0.75rem; color:var(--text-muted); margin-top:-10px;">Custom KPI Logic</p>
+                            <div id="pbi-measures" style="display:flex; flex-direction:column; gap:8px;"></div>
+                            <button onclick="addMeasure()" style="width:100%; margin-top: 15px; padding: 10px; border: 1px dashed #94a3b8; background: #f8fafc; border-radius: 8px; cursor: pointer; color: #64748b; font-weight:600; font-size:0.85rem; transition: background 0.2s;">+ Add Measure</button>
+                        </div>
+                        
+                        <!-- Right: Charts & KPIs -->
+                        <div style="flex: 1; display: flex; flex-direction: column; gap: 20px;">
+                            <div id="pbi-kpi-cards" style="display: flex; gap: 15px; overflow-x: auto; padding-bottom: 5px;">
+                                <!-- Auto-populated KPIs -->
+                            </div>
+                            
+                            <div style="background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; flex:1; display:flex; flex-direction:column; box-shadow: 0 2px 10px rgba(0,0,0,0.02);">
+                                <div style="display:flex; justify-content:space-between; margin-bottom: 20px;">
+                                    <div>
+                                        <h3 style="margin:0; font-size:1.2rem; color:#1e293b;">Interactive Report</h3>
+                                        <p style="margin:0; font-size:0.8rem; color:var(--text-muted);">Data driven by CloudObjectIQ Data Model</p>
+                                        <div id="chart-debug-status" style="font-size:0.65rem; padding-top:4px; color:var(--text-muted);">🔄 Engine Ready</div>
+                                    </div>
+                                    <div style="display:flex; gap:10px;">
+                                        <div style="display:flex; flex-direction:column; gap:4px;">
+                                            <span style="font-size:0.6rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Dimension</span>
+                                            <select id="pbi-group-col" onchange="renderPowerBI()" style="padding:8px 12px; border-radius:8px; border:1px solid #e2e8f0; outline:none; background: #f8fafc; font-weight:600; color:#334155; cursor:pointer; min-width:120px;"></select>
+                                        </div>
+                                        <div style="display:flex; flex-direction:column; gap:4px;">
+                                            <span style="font-size:0.6rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Measure</span>
+                                            <select id="pbi-numeric-col" onchange="renderPowerBI()" style="padding:8px 12px; border-radius:8px; border:1px solid #e2e8f0; outline:none; background: #f8fafc; font-weight:600; color:#334155; cursor:pointer; min-width:120px;"></select>
+                                        </div>
+                                        <div style="display:flex; flex-direction:column; gap:4px;">
+                                            <span style="font-size:0.6rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Type</span>
+                                            <select id="pbi-chart-type" onchange="renderPowerBI()" style="padding:8px 12px; border-radius:8px; border:1px solid #e2e8f0; outline:none; background: #f8fafc; font-weight:600; color:#334155; cursor:pointer;">
+                                                <option value="bar">Bar Chart</option>
+                                                <option value="pie" selected>Pie Chart</option>
+                                                <option value="line">Line Chart</option>
+                                                <option value="doughnut">Doughnut</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div id="chart-main-container" style="flex:1; position:relative;">
+                                    <div id="results-helper" style="display:none; height:100%; width:100%; position:absolute; top:0; left:0; z-index:5;"></div>
+                                    <canvas id="results-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- END sql-workspace -->
+        </section>
+    </main>
+
+    <!-- Audit Log Modal -->
+    <div class="modal-overlay" id="audit-modal" onclick="closeAuditModal(event)">
+        <div class="modal" style="width: 700px; max-height: 80vh; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 style="margin: 0; font-size: 1rem;">Audit Logs</h2>
+                <button onclick="closeAuditLog()" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem;">✕</button>
+            </div>
+            <div id="audit-entries" style="overflow-y: auto; font-size: 0.75rem; font-family: monospace; color: var(--text-muted); flex: 1;">
+                Loading...
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal — Tabbed: MinIO + Azure -->
+    <div class="modal-overlay" id="settings-modal" onclick="closeSettingsModal(event)">
+        <div class="modal" style="width:520px; padding:0; overflow:hidden; display:flex; flex-direction:column; max-height:90vh;">
+
+            <!-- Header -->
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:20px 24px; border-bottom:1px solid var(--border);">
+                <h2 style="margin:0; font-size:1rem;">⚙ Connections &amp; Settings</h2>
+                <button onclick="closeSettings()" style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:1.2rem;">✕</button>
+            </div>
+
+            <!-- Provider Tabs -->
+            <div style="display:flex; border-bottom:1px solid var(--border); padding: 0 16px; gap:4px; overflow-x:auto;">
+                <button class="cfg-tab active" id="tab-btn-minio" onclick="switchSettingsTab('minio')">MinIO 1</button>
+                <button class="cfg-tab" id="tab-btn-minio2" onclick="switchSettingsTab('minio2')">MinIO 2</button>
+                <button class="cfg-tab" id="tab-btn-s3" onclick="switchSettingsTab('s3')">S3 Cloud</button>
+                <button class="cfg-tab" id="tab-btn-azure" onclick="switchSettingsTab('azure')">Azure</button>
+                <button class="cfg-tab" id="tab-btn-adls" onclick="switchSettingsTab('adls')">ADLS</button>
+            </div>
+
+            <!-- Scrollable body: wraps both tabs -->
+            <div style="overflow-y:auto; flex:1;">
+
+            <div id="settings-tab-minio" style="padding:20px 24px; display:grid; gap:12px; font-size:0.85rem;">
+                <div><label class="cfg-lbl">Endpoint URL (Primary)</label>
+                    <input id="cfg-minio-endpoint" class="cfg-input" value="http://localhost:9000"></div>
+                <div><label class="cfg-lbl">Access Key</label>
+                    <input id="cfg-minio-access" class="cfg-input" value="minioadmin"></div>
+                <div><label class="cfg-lbl">Secret Key</label>
+                    <input id="cfg-minio-secret" class="cfg-input" type="password" value="minioadmin"></div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div><label class="cfg-lbl">Region</label>
+                        <input id="cfg-minio-region" class="cfg-input" value="us-east-1"></div>
+                    <div><label class="cfg-lbl">Bucket</label>
+                        <input id="cfg-minio-bucket" class="cfg-input" value="datainseek"></div>
+                </div>
+                <div id="test-status-minio" class="conn-status"></div>
+            </div>
+
+            <!-- MinIO 2 Tab -->
+            <div id="settings-tab-minio2" style="padding:20px 24px; display:none; gap:12px; font-size:0.85rem;">
+                <div><label class="cfg-lbl">Endpoint URL (Secondary)</label>
+                    <input id="cfg-minio2-endpoint" class="cfg-input" placeholder="http://another-minio:9000"></div>
+                <div><label class="cfg-lbl">Access Key</label>
+                    <input id="cfg-minio2-access" class="cfg-input"></div>
+                <div><label class="cfg-lbl">Secret Key</label>
+                    <input id="cfg-minio2-secret" class="cfg-input" type="password"></div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div><label class="cfg-lbl">Region</label>
+                        <input id="cfg-minio2-region" class="cfg-input" value="us-east-1"></div>
+                    <div><label class="cfg-lbl">Bucket</label>
+                        <input id="cfg-minio2-bucket" class="cfg-input"></div>
+                </div>
+                <div id="test-status-minio2" class="conn-status"></div>
+            </div>
+
+            <!-- S3 Cloud Tab -->
+            <div id="settings-tab-s3" style="padding:20px 24px; display:none; gap:12px; font-size:0.85rem; grid-template-columns: 1fr;">
+                <div><label class="cfg-lbl">Endpoint URL (Optional)</label>
+                    <input id="cfg-s3-endpoint" class="cfg-input" placeholder="https://s3.amazonaws.com"></div>
+                <div><label class="cfg-lbl">Access Key</label>
+                    <input id="cfg-s3-access" class="cfg-input" placeholder="AKIA..."></div>
+                <div><label class="cfg-lbl">Secret Key</label>
+                    <input id="cfg-s3-secret" class="cfg-input" type="password"></div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div><label class="cfg-lbl">Region</label>
+                        <input id="cfg-s3-region" class="cfg-input" placeholder="us-east-1"></div>
+                    <div><label class="cfg-lbl">Bucket</label>
+                        <input id="cfg-s3-bucket" class="cfg-input" placeholder="my-bucket"></div>
+                </div>
+                <div id="test-status-s3" class="conn-status"></div>
+            </div>
+
+            <!-- Azure Blob Tab -->
+            <div id="settings-tab-azure" style="padding:20px 24px; display:none; gap:12px; font-size:0.85rem; flex-direction:column;">
+                <div style="background:rgba(0,120,212,0.08); border:1px solid rgba(0,120,212,0.25); border-radius:10px; padding:12px; font-size:0.75rem; color:var(--text-muted); line-height:1.6;">
+                    📌 Standard Azure Blob Storage connection
+                </div>
+                <div><label class="cfg-lbl">Connection String</label>
+                    <textarea id="cfg-azure-connstr" class="cfg-input" rows="3"
+                        placeholder="DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net"></textarea></div>
+                <div><label class="cfg-lbl">Container Name</label>
+                    <input id="cfg-azure-container" class="cfg-input" placeholder="my-container"></div>
+                <div id="test-status-azure" class="conn-status"></div>
+            </div>
+
+            <!-- ADLS Gen2 Tab -->
+            <div id="settings-tab-adls" style="padding:20px 24px; display:none; gap:12px; font-size:0.85rem; grid-template-columns: 1fr;">
+                 <div style="background:rgba(50,214,255,0.08); border:1px solid rgba(50,214,255,0.25); border-radius:10px; padding:12px; font-size:0.75rem; color:var(--text-muted); line-height:1.6;">
+                    📌 ADLS Gen2 Hierarchy Storage
+                </div>
+                <div><label class="cfg-lbl">Connection String</label>
+                    <textarea id="cfg-adls-connstr" class="cfg-input" rows="3"
+                        placeholder="DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net"></textarea></div>
+                <div><label class="cfg-lbl">Container Name</label>
+                    <input id="cfg-adls-container" class="cfg-input" placeholder="my-lake-container"></div>
+                <div id="test-status-adls" class="conn-status"></div>
+            </div>
+
+            </div><!-- end scrollable body -->
+            <!-- Footer -->
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 24px; border-top:1px solid var(--border);">
+                <button class="btn btn-secondary" id="test-conn-btn" onclick="testConnection()"
+                    style="font-size:0.79rem; display:flex; align-items:center; gap:6px;">
+                    🔌 Test Connection
+                </button>
+                <div style="display:flex; gap:10px;">
+                    <button class="btn btn-secondary" onclick="closeSettings()" style="font-size:0.8rem;">Cancel</button>
+                    <button class="btn btn-primary" onclick="saveSettings()" style="font-size:0.8rem;">💾 Save &amp; Reconnect</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- ── Saved Queries Modal ──────────────────────────────── -->
+    <div class="modal-overlay" id="saved-queries-modal" onclick="if(event.target.id==='saved-queries-modal') closeSavedQueries()" style="display:none;">
+        <div class="modal" style="width:680px;padding:0;overflow:hidden;display:flex;flex-direction:column;max-height:88vh;">
+
+            <!-- Header -->
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:18px 24px;border-bottom:1px solid var(--border);">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="font-size:1.2rem;">📚</span>
+                    <h2 style="margin:0;font-size:1rem;">Saved Queries</h2>
+                    <span id="saved-count-badge" style="background:rgba(0,0,0,0.05);border:1px solid rgba(0,0,0,0.1);
+                        color:#666666;border-radius:20px;padding:1px 10px;font-size:0.72rem;font-weight:600;">0</span>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <button onclick="exportAllSql()"
+                        style="background:rgba(0,0,0,0.05);border:1px solid rgba(0,0,0,0.1);color:#1d1d1f;
+                               border-radius:8px;padding:6px 14px;font-size:0.75rem;font-family:'Outfit',sans-serif;cursor:pointer;"
+                        title="Export all saved queries as one .sql file">⬇ Export All .sql</button>
+                    <button onclick="closeSavedQueries()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1.2rem;">✕</button>
+                </div>
+            </div>
+
+            <!-- Search -->
+            <div style="padding:12px 24px;border-bottom:1px solid var(--border);">
+                <input id="saved-search" type="text" placeholder="🔍  Filter by name or SQL..."
+                    oninput="renderSavedQueries(this.value)"
+                    style="width:100%;box-sizing:border-box;background:var(--glass-heavy);border:1px solid var(--border);
+                           border-radius:8px;padding:8px 14px;color:var(--text);font-family:'Outfit',sans-serif;
+                           font-size:0.82rem;outline:none;">
+            </div>
+
+            <!-- Query list -->
+            <div id="saved-list" style="overflow-y:auto;flex:1;padding:16px 24px;display:flex;flex-direction:column;gap:10px;">
+                <!-- populated by JS -->
+            </div>
+
+            <!-- Empty state -->
+            <div id="saved-empty" style="display:none;flex:1;flex-direction:column;align-items:center;justify-content:center;
+                padding:60px;color:var(--text-muted);text-align:center;">
+                <div style="font-size:2.5rem;margin-bottom:12px;">📭</div>
+                <p style="margin:0;font-weight:600;">No saved queries yet</p>
+                <p style="margin:8px 0 0;font-size:0.8rem;">Write a query and click 💾 Save Query to store it here.</p>
+            </div>
+        </div>
+    </div>
+    <!-- Delete RAG Document Modal -->
+    <div class="modal-overlay" id="delete-rag-modal" onclick="if(event.target.id==='delete-rag-modal') document.getElementById('delete-rag-modal').style.display='none'" style="display:none;">
+        <div class="modal" style="width: 400px; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 style="margin: 0; font-size: 1rem; color: #000000;">🗑️ Delete Indexed Document</h2>
+                <button onclick="document.getElementById('delete-rag-modal').style.display='none'" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem;">✕</button>
+            </div>
+            
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 15px;">Select a document to permanently delete its vector embeddings from the selected Vector DB.</p>
+            
+            <select id="delete-rag-select" class="cfg-input" style="margin-bottom: 20px; width: 100%;">
+                <option value="">Loading documents...</option>
+            </select>
+            
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button class="btn btn-secondary" onclick="document.getElementById('delete-rag-modal').style.display='none'">Cancel</button>
+                <button class="btn btn-primary" style="background: #000000; border-color: #000000; color: white;" onclick="window.confirmDeleteRagDocument()">Delete Permanently</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=2"></script>
+</body>
+</html>

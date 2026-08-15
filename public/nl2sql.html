@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NL2SQL – Natural Language to SQL</title>
+  <meta name="description" content="Convert natural language questions to SQL queries and view results instantly." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --gradient-start: hsl(215, 80%, 55%);
+      --gradient-end: hsl(260, 70%, 55%);
+      --card-bg: rgba(255, 255, 255, 0.12);
+      --card-blur: 12px;
+      --text-primary: #ffffff;
+      --text-muted: #e0e0e0;
+    }
+    body {
+      margin: 0;
+      font-family: 'Inter', sans-serif;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+      color: var(--text-primary);
+      overflow: hidden;
+    }
+    .container {
+      backdrop-filter: blur(var(--card-blur));
+      background: var(--card-bg);
+      border-radius: 16px;
+      padding: 2rem;
+      width: 90%;
+      max-width: 600px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+      animation: slideUp 0.6s ease-out;
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    h1 {
+      margin: 0 0 1rem;
+      font-size: 2rem;
+      font-weight: 700;
+      text-align: center;
+    }
+    textarea {
+      width: 100%;
+      min-height: 120px;
+      border: none;
+      border-radius: 8px;
+      padding: 0.75rem;
+      font-size: 1rem;
+      resize: vertical;
+      background: rgba(255,255,255,0.2);
+      color: var(--text-primary);
+      backdrop-filter: blur(4px);
+    }
+    textarea::placeholder { color: var(--text-muted); }
+    button {
+      width: 100%;
+      margin-top: 1rem;
+      padding: 0.75rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #fff;
+      background: linear-gradient(90deg, #ff7e5f, #feb47b);
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    .result {
+      margin-top: 1.5rem;
+      background: rgba(255,255,255,0.1);
+      border-radius: 8px;
+      padding: 1rem;
+      font-family: monospace;
+      white-space: pre-wrap;
+    }
+    .footer {
+      margin-top: 2rem;
+      font-size: 0.85rem;
+      text-align: center;
+      color: var(--text-muted);
+    }
+    a { color: #ffcc80; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>NL2SQL</h1>
+    <textarea id="question" placeholder="Ask a question about your data... e.g., Show total sales per region last month"></textarea>
+    <button id="runBtn">Generate SQL</button>
+    <pre id="sqlResult" class="result" style="display:none;"></pre>
+    <div class="footer">Powered by <a href="/">CloudObjectIQ</a></div>
+  </div>
+  <script>
+    const runBtn = document.getElementById('runBtn');
+    const questionEl = document.getElementById('question');
+    const resultEl = document.getElementById('sqlResult');
+    runBtn.addEventListener('click', async () => {
+      const question = questionEl.value.trim();
+      if (!question) return alert('Please enter a question.');
+      runBtn.disabled = true; runBtn.textContent = 'Generating...';
+      try {
+        const resp = await fetch('/api/nl2sql', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question })
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+          resultEl.textContent = data.sql || 'No SQL returned.';
+          resultEl.style.display = 'block';
+        } else {
+          resultEl.textContent = data.error || 'Error generating SQL.';
+          resultEl.style.display = 'block';
+        }
+      } catch (e) {
+        resultEl.textContent = e.message;
+        resultEl.style.display = 'block';
+      } finally {
+        runBtn.disabled = false; runBtn.textContent = 'Generate SQL';
+      }
+    });
+  </script>
+</body>
+</html>

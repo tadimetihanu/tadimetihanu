@@ -1,0 +1,763 @@
+// ── Global crash guards — keep the server alive on unhandled errors ──
+process.on('uncaughtException', (err) => {
+    console.error('[FATAL] Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('[FATAL] Unhandled Rejection:', reason);
+});
+require('dotenv').config();
+
+const express = require('express');
+const http = require('http');
+const path = require('path');
+const cors = require('cors');
+const { Server } = require('socket.io');
+const { BlobServiceClient } = require('@azure/storage-blob');
+const { listFiles, getFileSchema, uploadFile } = require('./drivers/storage');
+const { runQuery, setEngineConfig } = require('./query/engine');
+
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } }); // 100 MB
+const fs = require('fs');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const AUDIT_LOG = path.join(__dirname, '../audit.log');
+const LOG_HISTORY = [];
+const MAX_LOGS = 200;
+
+function logToClients(level, msg, source = 'SERVER') {
+    const logEntry = { timestamp: new Date().toISOString(), level, message: msg, source };
+    LOG_HISTORY.push(logEntry);
+    if (LOG_HISTORY.length > MAX_LOGS) LOG_HISTORY.shift();
+    if (global.io) global.io.emit('server-log', logEntry);
+}
+
+// ── AUDIT LOG WATCHER ─────────────────────────────────────────
+if (fs.existsSync(AUDIT_LOG)) {
+    let lastSize = fs.statSync(AUDIT_LOG).size;
+    fs.watchFile(AUDIT_LOG, { interval: 1000 }, (curr) => {
+        if (curr.size > lastSize) {
+            const stream = fs.createReadStream(AUDIT_LOG, { start: lastSize, end: curr.size });
+            stream.on('data', (chunk) => {
+                const lines = chunk.toString().split('\n').filter(Boolean);
+                lines.forEach(line => logToClients('INFO', line, 'AUDIT'));
+            });
+            lastSize = curr.size;
+        }
+    });
+}
+
+// Redirect console to also broadcast through Socket.io
+const originalLog = console.log;
+const originalError = console.error;
+console.log = (...args) => {
+    originalLog(...args);
+    logToClients('INFO', args.join(' '));
+};
+console.error = (...args) => {
+    originalError(...args);
+    logToClients('ERROR', args.join(' '));
+};
+
+function logAudit(user, role, action, detail) {
+    const entry = `[${new Date().toISOString()}] user=${user} role=${role} action=${action} detail=${detail}\n`;
+    fs.appendFileSync(AUDIT_LOG, entry);
+}
+
+// Convert BigInt values returned by DuckDB to regular Numbers
+function sanitizeBigInt(obj) {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj === 'bigint') return Number(obj);
+    if (Array.isArray(obj)) return obj.map(sanitizeBigInt);
+    if (typeof obj === 'object') {
+        const out = {};
+        for (const [k, v] of Object.entries(obj)) out[k] = sanitizeBigInt(v);
+        return out;
+    }
+    return obj;
+}
+
+function ensureProtocol(url) {
+    if (!url) return url;
+    let out = url.trim();
+    if (!/^https?:\/\//i.test(out)) out = 'http://' + out;
+    return out.replace(/\/+$/, ''); // Strip trailing slashes
+}
+
+// ── Runtime Config (updated from Settings UI) ─────────────────
+app.post('/api/config', (req, res) => {
+    const { minio, minio2, azure, s3, adls } = req.body;
+    const storage = require('./drivers/storage');
+    if (azure?.connstr)   storage.setAzureConfig(azure);
+    if (minio?.endpoint)  storage.setMinioConfig(minio);
+    if (minio2?.endpoint) storage.setMinio2Config(minio2);
+    if (s3?.endpoint)     storage.setS3Config(s3);
+    if (adls?.connstr)    storage.setAdlsConfig(adls);
+
+    setEngineConfig({
+        minio: minio || null,
+        minio2: minio2 || null,
+        azure: azure || null,
+        s3: s3 || null,
+        adls: adls || null
+    });
+    res.json({ success: true });
+});
+
+// Apply default MinIO config to engine on startup
+setEngineConfig({
+    minio: {
+        endpoint: process.env.MINIO_ENDPOINT   || 'http://localhost:9010',
+        access:   process.env.MINIO_ACCESS_KEY || 'minioadmin',
+        secret:   process.env.MINIO_SECRET_KEY || 'minioadmin',
+        region:   process.env.MINIO_REGION     || 'us-east-1',
+        bucket:   process.env.MINIO_BUCKET     || 'datalake',
+    },
+    minio2: {
+        endpoint: process.env.MINIO2_ENDPOINT   || '',
+        access:   process.env.MINIO2_ACCESS_KEY || '',
+        secret:   process.env.MINIO2_SECRET_KEY || '',
+        region:   process.env.MINIO2_REGION      || 'us-east-1',
+        bucket:   process.env.MINIO2_BUCKET      || '',
+    },
+    azure: {
+        connstr:   process.env.AZURE_STORAGE_CONNECTION_STRING || '',
+        container: process.env.AZURE_CONTAINER || 'datainseektech',
+    },
+    s3: {
+        endpoint:  process.env.S3_ENDPOINT || 'https://s3.amazonaws.com',
+        access:    process.env.S3_ACCESS_KEY || '',
+        secret:    process.env.S3_SECRET_KEY || '',
+        bucket:    process.env.S3_BUCKET || 'cloudstream-s3',
+        region:    process.env.S3_REGION || 'us-east-1',
+    },
+    adls: {
+        connstr:   process.env.ADLS_CONNECTION_STRING || '',
+        container: process.env.ADLS_CONTAINER || 'datainseek-adls',
+    }
+});
+
+// ── File Listing ─────────────────────────────────────────────
+app.get('/api/files', async (req, res) => {
+    try {
+        const { type } = req.query;
+        const files = await listFiles(type);
+        res.json({ success: true, files });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ── Schema Inspection ──────────────────────────────────
+app.get('/api/schema', async (req, res) => {
+    const { file, provider, isScan } = req.query;
+    if (!file) return res.json({ success: false, error: 'file param required' });
+
+    const os = require('os');
+    const { runQuery } = require('./query/engine');
+    const tempFiles = [];
+
+    try {
+        let fromExpr;  // the expression to use in FROM clause
+
+        if (isScan === 'true') {
+            fromExpr = file;
+        } else {
+            const ext = file.split('.').pop().toLowerCase();
+            const localPath = path.join(__dirname, '../data', file);
+            
+            if (fs.existsSync(localPath)) {
+                const safePath = localPath.replace(/\\/g, '/');
+                fromExpr = (ext === 'csv') 
+                    ? `read_csv_auto('${safePath}', ignore_errors=true, strict_mode=false)` 
+                    : `'${safePath}'`;
+            } else {
+                // Try Azure Blob if configured
+                const storage = require('./drivers/storage');
+                const azureConn = storage._azureCfg?.connstr || process.env.AZURE_STORAGE_CONNECTION_STRING || '';
+                const azureCont = storage._azureCfg?.container || process.env.AZURE_CONTAINER || 'datainseektech';
+                
+                if (azureConn) {
+                    try {
+                        const svc = BlobServiceClient.fromConnectionString(azureConn);
+                        const blobClient = svc.getContainerClient(azureCont).getBlobClient(file);
+                        if (await blobClient.exists()) {
+                            const tmpPath = path.join(os.tmpdir(), `schema_${Date.now()}_${path.basename(file)}`);
+                            await blobClient.downloadToFile(tmpPath);
+                            tempFiles.push(tmpPath);
+                            const safeTmp = tmpPath.replace(/\\/g, '/');
+                            fromExpr = (ext === 'csv') 
+                                ? `read_csv_auto('${safeTmp}', ignore_errors=true, strict_mode=false)` 
+                                : `'${safeTmp}'`;
+                        }
+                    } catch (azErr) { console.warn('[Schema/Azure]', azErr.message); }
+                }
+                
+                // Fallback to bare filename (resolved via S3/engine if needed)
+                if (!fromExpr) {
+                    fromExpr = (ext === 'csv') 
+                        ? `read_csv_auto('${file}', ignore_errors=true, strict_mode=false)` 
+                        : `'${file}'`;
+                }
+            }
+        }
+
+        // Run DESCRIBE and COUNT in parallel via DuckDB
+        const [descRows, countRows] = await Promise.all([
+            runQuery(`DESCRIBE SELECT * FROM ${fromExpr}`),
+            runQuery(`SELECT COUNT(*) AS row_count FROM ${fromExpr}`),
+        ]);
+
+        const columns = descRows.map(r => ({
+            name:     r.column_name,
+            type:     r.column_type,
+            nullable: r.null === 'YES',
+        }));
+        const rowCount = Number(countRows[0]?.row_count ?? 0);
+
+        res.json({ success: true, file, columns, rowCount });
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    } finally {
+        for (const f of tempFiles) { try { fs.unlinkSync(f); } catch {} }
+    }
+});
+
+
+// ── Test Connection ───────────────────────────────────────────
+app.post('/api/test-connection', async (req, res) => {
+    const { provider, endpoint, access, secret, region, bucket,
+            connstr, container } = req.body;
+    try {
+        if (provider === 'minio' || provider === 'minio2') {
+            const { S3Client, HeadBucketCommand } = require('@aws-sdk/client-s3');
+            let epInput = endpoint || process.env.MINIO_ENDPOINT || 'http://localhost:9010';
+            let ep = ensureProtocol(epInput);
+            
+            // Fix Console vs API port
+            if (ep.includes(':9011')) ep = ep.replace(':9011', ':9010');
+            else if (ep.includes(':9001')) ep = ep.replace(':9001', ':9000');
+            
+            const c = new S3Client({
+                endpoint: ep, region: region || 'us-east-1',
+                credentials: { 
+                    accessKeyId: access || process.env.MINIO_ACCESS_KEY || 'minioadmin', 
+                    secretAccessKey: secret || process.env.MINIO_SECRET_KEY || 'minioadmin' 
+                },
+                forcePathStyle: true,
+            });
+            await c.send(new HeadBucketCommand({ Bucket: bucket || process.env.MINIO_BUCKET || 'datalake' }));
+            res.json({ success: true, message: `MinIO bucket reached successfully via API at ${ep}` });
+        } else if (provider === 'azure') {
+            const { BlobServiceClient } = require('@azure/storage-blob');
+            if (!connstr) return res.json({ success: false, error: 'Connection string is required' });
+            const svc = BlobServiceClient.fromConnectionString(connstr);
+            const cc  = svc.getContainerClient(container || '');
+            const exists = await cc.exists();
+            res.json({
+                success: true,
+                message: exists
+                    ? `Container "${container}" found`
+                    : `Connected — container "${container}" not found (check name)`
+            });
+        } else if (provider === 's3') {
+            const { S3Client, HeadBucketCommand } = require('@aws-sdk/client-s3');
+            const ep = ensureProtocol(endpoint);
+            const c = new S3Client({
+                endpoint: ep, region: region || 'us-east-1',
+                credentials: { accessKeyId: access, secretAccessKey: secret },
+            });
+            await c.send(new HeadBucketCommand({ Bucket: bucket }));
+            res.json({ success: true, message: `S3 bucket "${bucket}" reachable` });
+        } else if (provider === 'adls') {
+            const { BlobServiceClient } = require('@azure/storage-blob');
+            const svc = BlobServiceClient.fromConnectionString(connstr);
+            const cc  = svc.getContainerClient(container || '');
+            const exists = await cc.exists();
+            res.json({ success: true, message: exists ? `ADLS Gen2 container found` : `ADLS Connected (container not found)` });
+        } else {
+            res.json({ success: false, error: 'Unknown provider' });
+        }
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// ── Query Endpoint ───────────────────────────────────────────
+const os = require('os');
+
+app.post('/api/query', async (req, res) => {
+    const tempFiles = [];
+    try {
+        const { sql, config } = req.body;
+        const provider = config?.provider || 'minio';
+        const user     = config?.username  || 'anonymous';
+        const role     = config?.role      || 'viewer';
+        console.log(`[API] Query Request from ${user} (role=${role}) provider=${provider}`);
+        const trace = config?.settings ? JSON.stringify(config.settings).substring(0, 100) : 'NO SETTINGS';
+        console.log(`[API] [TRACE] settings: ${trace}...`);
+
+        let finalSql = sql;
+
+        // Extract all file references from SQL (quoted or unquoted)
+        // Now includes support for spaces and parentheses in filenames
+        const filePattern = /(['"]?)(\b[\w][\w.\-\s()]*\.(csv|parquet|json|xlsx|tsv))\b(['"]?)/gi;
+        const fileRefs = [...new Set([...sql.matchAll(filePattern)].map(m => m[2]))];
+
+        const storage   = require('./drivers/storage');
+        const isAzureProvider = (provider === 'azure' || provider === 'adls');
+        const azureConn = storage._azureCfg?.connstr || process.env.AZURE_STORAGE_CONNECTION_STRING || '';
+        const azureCont = storage._azureCfg?.container || process.env.AZURE_CONTAINER || 'datainseektech';
+
+        // Only check Azure if we are using an Azure provider OR if it's explicitly an az:// path
+        if (azureConn && (isAzureProvider || finalSql.includes('az://')) && fileRefs.length > 0) {
+            const svc = BlobServiceClient.fromConnectionString(azureConn);
+            const containerClient = svc.getContainerClient(azureCont);
+
+            for (const fname of fileRefs) {
+                // Skip files that exist locally in data/
+                const localPath = path.join(__dirname, '../data', fname);
+                if (fs.existsSync(localPath)) continue;
+
+                // Try to download from Azure Blob
+                try {
+                    const blobClient = containerClient.getBlobClient(fname);
+                    const exists = await blobClient.exists();
+                    if (!exists) continue;  // not an Azure file, skip
+
+                    const tmpPath = path.join(os.tmpdir(), `cloudstream_${Date.now()}_${path.basename(fname)}`);
+                    await blobClient.downloadToFile(tmpPath);
+                    tempFiles.push(tmpPath);
+
+                    // Replace all occurrences of this filename in SQL with the temp path
+                    const safeFile = fname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    finalSql = finalSql.replace(
+                        new RegExp(`['"]?${safeFile}['"]?`, 'g'),
+                        `'${tmpPath.replace(/\\/g, '/')}'`
+                    );
+                    console.log(`[Azure] Downloaded ${fname} → ${tmpPath}`);
+                } catch (blobErr) {
+                    console.warn(`[Azure] Could not download ${fname}:`, blobErr.message);
+                }
+            }
+        }
+
+        // Add a safety timeout for the query
+        const queryPromise = runQuery(finalSql, config?.settings);
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Query Timeout: The operation took longer than 30 seconds.')), 30000)
+        );
+
+        const results = await Promise.race([queryPromise, timeoutPromise]);
+        res.json({ success: true, data: sanitizeBigInt(results) });
+    } catch (error) {
+        console.error('[API] Query Error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    } finally {
+        for (const f of tempFiles) {
+            try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
+        }
+    }
+});
+
+// ── File Upload Endpoint ──────────────────────────────────────
+app.post('/api/upload', upload.array('files'), async (req, res) => {
+    try {
+        if (!req.files || req.files.length === 0)
+            return res.status(400).json({ success: false, error: 'No files received' });
+        const results = [];
+        for (const file of req.files) {
+            const result = await uploadFile(file.originalname, file.buffer, file.mimetype);
+            logAudit('upload', 'admin', 'UPLOAD', file.originalname);
+            results.push(result);
+        }
+        io.emit('files-updated');   // notify browsers to refresh file list
+        res.json({ success: true, uploaded: results });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// ── AI Text to Query Endpoint ─────────────────────────────────
+app.post('/api/ai/query', async (req, res) => {
+    try {
+        const { prompt, fileContext } = req.body;
+        const apiKey = process.env.OPENAI_API_KEY;
+        if (!apiKey) return res.status(400).json({ success: false, error: 'OpenAI API Key missing in .env' });
+        
+        const systemPrompt = "You are a DuckDB expert. Convert the user's plain text request into a valid DuckDB SQL query. Only output the raw SQL, without markdown blocks, commentary, or explanation. It must be valid SQL. The user is query against files, so use FROM 'filename.csv' etc. Context files available: " + fileContext;
+        
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'gpt-4o-mini',
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: prompt }
+                ],
+                temperature: 0.2
+            })
+        });
+
+        const json = await response.json();
+        if (json.error) throw new Error(json.error.message);
+        const sql = json.choices[0].message.content.replace(/```sql|```/g, '').trim();
+        res.json({ success: true, sql });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// ── AI Report Generation Endpoint ──────────────────────────────
+app.post('/api/ai/generate-report', async (req, res) => {
+    try {
+        const { prompt, fileContext } = req.body;
+        const apiKey = process.env.OPENAI_API_KEY;
+        if (!apiKey) return res.status(400).json({ success: false, error: 'OpenAI API Key missing in .env' });
+
+        // ── Schema Extraction Logic ─────────────────────────────
+        const files = (fileContext || "").split(",").map(f => f.trim()).filter(Boolean);
+        let schemaPrompt = "";
+        
+        try {
+            const schemas = await Promise.all(files.map(async (file) => {
+                try {
+                    const desc = await runQuery(`DESCRIBE SELECT * FROM '${file}' LIMIT 1`);
+                    const cols = desc.map(c => `${c.column_name} (${c.column_type})`).join(", ");
+                    return `File '${file}': ${cols}`;
+                } catch (e) {
+                    return `File '${file}': Schema unknown`;
+                }
+            }));
+            schemaPrompt = schemas.join("\n");
+        } catch (schemaErr) {
+            console.warn('[AI Report] Schema fetch failed:', schemaErr.message);
+        }
+
+        const systemPrompt = `You are a Report Builder for Lumina BI. 
+Based on the user request and available data context, design a 4-section report.
+IMPORTANT: You MUST use the exact column names provided in the schema context below.
+
+Schema Context:
+${schemaPrompt}
+
+Output ONLY a JSON object with this structure:
+{
+  "title": "Report Title",
+  "sections": [
+    {
+      "type": "kpi",
+      "content": { "title": "Main KPI", "sql": "SELECT SUM(col) as value FROM 'file.csv'", "label": "Text Label" }
+    },
+    {
+      "type": "chart",
+      "content": { "title": "Distribution", "sql": "SELECT col1, SUM(col2) as total FROM 'file.csv' GROUP BY col1", "chartType": "bar" }
+    },
+    {
+      "type": "text",
+      "content": { "title": "Section Title", "text": "Insight about the data..." }
+    }
+  ]
+}`;
+
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'gpt-4o-mini',
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: prompt }
+                ],
+                temperature: 0.7,
+                response_format: { type: "json_object" }
+            })
+        });
+
+        const json = await response.json();
+        if (json.error) throw new Error(json.error.message);
+        const textData = json.choices[0].message.content;
+        console.log('[AI Report] Raw response:', textData);
+        
+        try {
+            const reportData = JSON.parse(textData);
+            res.json({ success: true, report: reportData });
+        } catch (parseErr) {
+            console.error('[AI Report] JSON Parse Error:', parseErr.message, 'Raw text:', textData);
+            res.status(500).json({ success: false, error: 'AI returned invalid JSON: ' + parseErr.message });
+        }
+    } catch (err) {
+        console.error('[AI Report] Fatal Error:', err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// ── Anomaly Detection Engine ──────────────────────────────────
+app.get('/api/analytics/anomalies', async (req, res) => {
+    try {
+        const { file, column } = req.query;
+        if (!file || !column) return res.status(400).json({ success: false, error: 'File and column required' });
+
+        const { runQuery } = require('./query/engine');
+        
+        // 1. Calculate stats manually via DuckDB for performance
+        const stats = await runQuery(`
+            SELECT 
+                avg("${column}") as mean, 
+                stddev("${column}") as std 
+            FROM '${file}'
+        `);
+        
+        const { mean, std } = stats[0];
+        if (!std) return res.json({ success: true, anomalies: [], message: 'Not enough variance' });
+
+        // 2. Identify outliers using Z-score > 2
+        const threshold = 2;
+        const anomalies = await runQuery(`
+            SELECT * FROM '${file}' 
+            WHERE ABS(("${column}" - ${mean}) / ${std}) > ${threshold}
+            ORDER BY "${column}" DESC
+        `);
+
+        res.json(sanitizeBigInt({ success: true, mean, std, anomalies }));
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+
+// ── Database Connection Endpoint ──────────────────────────────
+app.post('/api/connections/db', async (req, res) => {
+    try {
+        const { type, name, host, port, database, user, pass } = req.body;
+        console.log(`[DB] Connecting to ${type} (${name}) at ${host}:${port}`);
+        
+        // In a real app, we would ATTACH these to DuckDB persistently.
+        // For now, we simulate success for the UI flow.
+        if (type === 'oracle') {
+            return res.status(400).json({ success: false, error: 'Oracle native driver requires Enterprise Plugin' });
+        }
+        
+        // Mock persistence in .env (simplified)
+        logAudit(user, 'admin', 'CONNECT_DB', `${type}://${host}:${port}/${database}`);
+        res.json({ success: true, message: `Connected to ${type} database: ${name}` });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// --- Multi-Cloud Storage Connectors ---
+app.post('/api/connections/:provider', async (req, res) => {
+    try {
+        const { provider } = req.params;
+        const { testOnly, ...creds } = req.body;
+        
+        const fs = require('fs');
+        const path = require('path');
+        const envPath = path.join(__dirname, '../.env');
+        let envContent = fs.readFileSync(envPath, 'utf8');
+
+        // Map UI names to .env keys
+        const providerMap = {
+            aws: { Prefix: 'AWS', Keys: ['ACCESS_KEY', 'SECRET_KEY', 'REGION', 'BUCKET'] },
+            azure: { Prefix: 'AZURE', Keys: ['CONNECTION_STRING', 'CONTAINER'] },
+            gcp: { Prefix: 'GCP', Keys: ['PROJECT_ID', 'BUCKET', 'KEY_FILE'] },
+            minio: { Prefix: 'MINIO', Keys: ['ENDPOINT', 'ACCESS_KEY', 'SECRET_KEY', 'BUCKET'] }
+        };
+
+        const config = providerMap[provider];
+        if (!config) return res.status(400).json({ success: false, error: 'Unknown provider' });
+
+        if (testOnly) {
+            // Real connection test
+            const { S3Client, HeadBucketCommand } = require('@aws-sdk/client-s3');
+            const { BlobServiceClient } = require('@azure/storage-blob');
+
+            try {
+                if (provider === 'minio') {
+                    let epInput = creds.endpoint || process.env.MINIO_ENDPOINT || 'http://localhost:9010';
+                    let ep = ensureProtocol(epInput);
+                    
+                    // --- SMART REDIRECT: Automatically fix Console vs API port ---
+                    if (ep.includes(':9011')) {
+                        console.log(`[MINIO_FIX] Changing console port 9011 to API port 9010 for endpoint: ${ep}`);
+                        ep = ep.replace(':9011', ':9010');
+                    } else if (ep.includes(':9001')) {
+                        console.log(`[MINIO_FIX] Changing console port 9001 to API port 9000 for endpoint: ${ep}`);
+                        ep = ep.replace(':9001', ':9000');
+                    }
+
+                    const accessKeyId = creds.access_key || creds.access || process.env.MINIO_ACCESS_KEY || 'minioadmin';
+                    const secretAccessKey = creds.secret_key || creds.secret || process.env.MINIO_SECRET_KEY || 'minioadmin';
+                    const bucket = creds.bucket || creds.bucket_name || process.env.MINIO_BUCKET || 'datalake';
+                    const region = creds.region || process.env.MINIO_REGION || 'us-east-1';
+
+                    console.log(`[MINIO_TEST] EP: ${ep}, BUCKET: ${bucket}, ACCESS: ${accessKeyId}`);
+                    
+                    if (!accessKeyId || !secretAccessKey) {
+                        throw new Error("Missing access key or secret key for MinIO connection.");
+                    }
+
+                    const { S3Client, HeadBucketCommand } = require('@aws-sdk/client-s3');
+                    const s3 = new S3Client({
+                        endpoint: ep,
+                        region: region,
+                        credentials: { accessKeyId, secretAccessKey },
+                        forcePathStyle: true,
+                    });
+                    
+                    await s3.send(new HeadBucketCommand({ Bucket: bucket }));
+                    console.log(`[MINIO_TEST] ✅ Connection to "${bucket}" SUCCESSFUL`);
+                    return res.json({ success: true, message: `MinIO bucket "${bucket}" reachable at ${ep}` });
+                } else if (provider === 'aws') {
+                    const accessKeyId = creds.access_key || creds.access;
+                    const secretAccessKey = creds.secret_key || creds.secret;
+                    const bucket = creds.bucket || 'datalake';
+                    const region = creds.region || 'us-east-1';
+
+                    if (!accessKeyId || !secretAccessKey) {
+                        throw new Error("Missing access key or secret key for AWS connection.");
+                    }
+
+                    const { S3Client, HeadBucketCommand } = require('@aws-sdk/client-s3');
+                    const s3 = new S3Client({
+                        region: region,
+                        credentials: { accessKeyId, secretAccessKey },
+                    });
+                    await s3.send(new HeadBucketCommand({ Bucket: bucket }));
+                    return res.json({ success: true, message: `AWS S3 bucket "${bucket}" reachable` });
+                } else if (provider === 'azure') {
+                    if (!creds.connection_string) throw new Error("Azure Connection String is missing");
+                    const svc = BlobServiceClient.fromConnectionString(creds.connection_string);
+                    const cc  = svc.getContainerClient(creds.container || '');
+                    const exists = await cc.exists();
+                    if (!exists) throw new Error(`Container "${creds.container}" not found`);
+                    return res.json({ success: true, message: `Azure container found` });
+                }
+                
+                return res.json({ success: true, message: `Simulated test connection to ${provider.toUpperCase()} successful!` });
+            } catch (err) {
+                let msg = err.message;
+                console.error(`[Test-Connection] DETAILED ERROR for ${provider}:`, err);
+                if (msg === 'UnknownError') {
+                    msg = `UnknownError (Check if port is correct or if server is reachable)`;
+                }
+                if (creds.endpoint && (creds.endpoint.includes(':9001') || creds.endpoint.includes(':9011'))) {
+                    msg += " (Note: You are trying to connect to the Console port 9011. Try port 9010 for the S3 API)";
+                }
+                console.error(`[Test-Connection] Error msg for ${provider}:`, msg);
+                return res.json({ success: false, error: msg });
+            }
+        }
+
+        // Sanitizie endpoint if it is minio before saving
+        if (provider === 'minio' && creds.endpoint) {
+            if (creds.endpoint.includes(':9011')) creds.endpoint = creds.endpoint.replace(':9011', ':9010');
+            else if (creds.endpoint.includes(':9001')) creds.endpoint = creds.endpoint.replace(':9001', ':9000');
+        }
+
+        for (const key of config.Keys) {
+            const val = creds[key.toLowerCase()];
+            const envKey = `${config.Prefix}_${key}`;
+            if (envContent.includes(`${envKey}=`)) {
+                envContent = envContent.replace(new RegExp(`${envKey}=.*`), `${envKey}=${val}`);
+            } else {
+                envContent += `\n${envKey}=${val}`;
+            }
+            process.env[envKey] = val;
+        }
+
+        fs.writeFileSync(envPath, envContent);
+        res.json({ success: true, message: `${provider.toUpperCase()} connection saved successfully.` });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+
+// ── Query Builder APIs ────────────────────────────────────────
+app.get('/api/query-builder/tables', async (req, res) => {
+    try {
+        const files = await listFiles('all');
+        const tables = files.map(f => ({ name: f.name, type: f.name.endsWith('.parquet') ? 'Parquet' : 'CSV' }));
+        
+        // Add some mock DB tables for demonstration
+        tables.push(
+            { name: 'mysql.users', type: 'MySQL' },
+            { name: 'postgres.transactions', type: 'Postgres' },
+            { name: 'sqlserver.inventory', type: 'SQL Server' }
+        );
+        
+        res.json({ success: true, tables });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.post('/api/query-builder/generate-sql', (req, res) => {
+    const { table, columns, filters, limit } = req.body;
+    let sql = `SELECT ${columns.length ? columns.join(', ') : '*'} FROM '${table}'`;
+    
+    const filterClauses = Object.entries(filters).map(([col, val]) => {
+        const escaped = typeof val === 'string' ? `'${val}'` : val;
+        return `"${col}" = ${escaped}`;
+    });
+    
+    if (filterClauses.length) {
+        sql += ` WHERE ${filterClauses.join(' AND ')}`;
+    }
+    
+    if (limit) sql += ` LIMIT ${limit}`;
+    
+    res.json({ success: true, sql });
+});
+
+
+// ── Audit Log Endpoint ───────────────────────────────────────
+app.get('/api/audit', (req, res) => {
+    try {
+        if (!fs.existsSync(AUDIT_LOG)) return res.json({ success: true, entries: [] });
+        const raw = fs.readFileSync(AUDIT_LOG, 'utf-8');
+        const entries = raw.trim().split('\n').filter(Boolean).slice(-100);
+        res.json({ success: true, entries });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// ── Live Logs Endpoint ───────────────────────────────────────
+app.get('/api/logs', (req, res) => {
+    res.json({ success: true, logs: LOG_HISTORY });
+});
+
+// ── External Ingest API ───────────────────────────────────────
+app.post('/api/logs/ingest', (req, res) => {
+    const { level, message, source } = req.body;
+    if (!message) return res.status(400).json({ success: false, error: 'Message required' });
+    logToClients(level || 'INFO', message, source || 'EXTERNAL');
+    res.json({ success: true });
+});
+
+app.use(express.static(path.join(__dirname, '../public')));
+
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: '*' } });
+global.io = io; // Make it accessible to logToClients
+
+io.on('connection', (socket) => {
+    console.log('Client connected:', socket.id);
+    socket.on('disconnect', () => console.log('Client disconnected:', socket.id));
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => { console.log(`Datainseek BI Explorer at http://localhost:${PORT}`); });

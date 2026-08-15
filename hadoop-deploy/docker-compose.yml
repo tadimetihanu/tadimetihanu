@@ -1,0 +1,52 @@
+version: "3"
+
+services:
+  namenode:
+    image: apache/hadoop:3
+    hostname: namenode
+    command: ["hdfs", "namenode"]
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    environment:
+      ENSURE_NAMENODE_DIR: "/tmp/hadoop-root/dfs/name"
+    volumes:
+      - hadoop_namenode:/opt/hadoop/data/name
+      - ./data:/tmp/ingest
+
+  datanode:
+    image: apache/hadoop:3
+    hostname: datanode
+    command: ["hdfs", "datanode"]
+    environment:
+      CORE-SITE.XML_fs.defaultFS: "hdfs://namenode:9000"
+      HDFS-SITE.XML_dfs.datanode.address: "0.0.0.0:9866"
+      HDFS-SITE.XML_dfs.datanode.http.address: "0.0.0.0:9864"
+    depends_on:
+      - namenode
+    volumes:
+      - hadoop_datanode:/opt/hadoop/data/data
+
+  resourcemanager:
+    image: apache/hadoop:3
+    hostname: resourcemanager
+    command: ["yarn", "resourcemanager"]
+    depends_on:
+      - namenode
+      - datanode
+    environment:
+      CORE-SITE.XML_fs.defaultFS: "hdfs://namenode:9000"
+
+  nodemanager:
+    image: apache/hadoop:3
+    hostname: nodemanager
+    command: ["yarn", "nodemanager"]
+    depends_on:
+      - resourcemanager
+    environment:
+      CORE-SITE.XML_fs.defaultFS: "hdfs://namenode:9000"
+      YARN-SITE.XML_yarn.resourcemanager.hostname: "resourcemanager"
+
+volumes:
+  hadoop_namenode:
+  hadoop_datanode:

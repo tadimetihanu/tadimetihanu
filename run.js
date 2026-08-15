@@ -1,0 +1,1 @@
+const { runQuery } = require('./src/query/engine'); async function main() { try { const sql = \SET extension_directory='./data/extensions'; LOAD orc; SELECT * FROM read_orc('s3://datalake/performance_1m.orc') LIMIT 5;\; const r = await runQuery('admin', sql, '81d80fa7-4520-4157-91d7-05a47ce5b2c1'); console.table(r); } catch(e) { console.error(e); } } main();

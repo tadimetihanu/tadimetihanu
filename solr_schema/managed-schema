@@ -1,0 +1,18 @@
+<schema version="1.6">
+  <fields>
+    <field name="id" type="string" indexed="true" stored="true" required="true" multiValued="false"/>
+    <field name="title" type="text_general" indexed="true" stored="true"/>
+    <field name="content" type="text_general" indexed="true" stored="true"/>
+    <field name="doc_type" type="string" indexed="true" stored="true" multiValued="true"/>
+    <field name="jurisdiction" type="string" indexed="true" stored="true"/>
+    <field name="created_at" type="date" indexed="true" stored="true"/>
+    <field name="tags" type="string" indexed="true" stored="true" multiValued="true"/>
+    <field name="source_path" type="string" indexed="false" stored="true"/>
+    <!-- Optional dense vector field for hybrid kNN -->
+    <field name="embedding_vector" type="knn_vector" indexed="true" stored="false" dimension="768"/>
+  </fields>
+
+  <uniqueKey>id</uniqueKey>
+  <defaultSearchField>content</defaultSearchField>
+  <solrQueryParser defaultOperator="OR"/>
+</schema>

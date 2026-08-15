@@ -1,0 +1,20 @@
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install MCP Python SDK and HTTP client
+RUN pip install --no-cache-dir mcp[fastmcp] httpx
+
+# Copy the server script
+COPY mcp_ollama.py .
+
+# Environment variable for Ollama connection
+ENV OLLAMA_HOST=http://host.docker.internal:11434
+
+# Standard MCP entrypoint (FastMCP uses stdio by default)
+CMD ["python", "mcp_ollama.py"]

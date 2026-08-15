@@ -1,0 +1,17 @@
+[
+  {
+    "target_id": "81d80fa7-4520-4157-91d7-05a47ce5b2c1",
+    "target_name": "MinIO Local",
+    "bucket": "datalake"
+  },
+  {
+    "target_id": "28e0979b-53ef-47ba-be22-9942fc54999e",
+    "target_name": "Azuredatalakestorage1",
+    "bucket": "inseekdata"
+  },
+  {
+    "target_id": "9d3a96e1-3622-4e87-b938-fb2b9737ca26",
+    "target_name": "AzureBlob",
+    "bucket": "datainseektech"
+  }
+]

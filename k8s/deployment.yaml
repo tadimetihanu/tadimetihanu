@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudobjectiq-deploy
+  labels: { app: cloudobjectiq }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: cloudobjectiq } }
+  template:
+    metadata: { labels: { app: cloudobjectiq } }
+    spec:
+      containers:
+      - name: cloudobject
+        image: ciqacr4781.azurecr.io/cloudobjectiq:v1
+        ports: [{ containerPort: 3000 }]
+        # Resources for DuckDB performance (Horizontal Scaling Target)
+        resources:
+          requests: { cpu: "500m", memory: "1Gi" }
+          limits: { cpu: "1000m", memory: "2Gi" }
+        env:
+        - name: NODE_ENV
+          value: "production"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudobjectiq-service
+spec:
+  type: LoadBalancer
+  ports: [{ port: 80, targetPort: 3000 }]
+  selector: { app: cloudobjectiq }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cloudobjectiq-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cloudobjectiq-deploy
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60

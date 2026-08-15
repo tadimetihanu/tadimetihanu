@@ -1,0 +1,15 @@
+# 🐘 CloudObjectIQ Production Gateway
+FROM node:18-slim
+
+WORKDIR /app
+
+# Install native dependencies for DuckDB/SQLite
+RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+
+COPY package*.json ./
+RUN npm install --production
+
+COPY . .
+
+EXPOSE 3001
+CMD ["node", "src/server.js"]

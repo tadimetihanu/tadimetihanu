@@ -1,0 +1,4 @@
+This is a test document about the CloudObjectIQ system. 
+CloudObjectIQ is an enterprise data lake tool that supports Parquet, ORC, CSV, and now unstructured files using Milvus Lite and RAG.
+The system is managed by Datainseek Technologies.
+The live burn meter tracks USD cost per query dynamically.

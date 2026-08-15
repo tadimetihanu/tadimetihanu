@@ -1,0 +1,6 @@
+node_modules
+.git
+data/metadata.db
+minio_data
+mysql_data
+spark_data

@@ -1,0 +1,14 @@
+{
+  "dev": {
+    "driver": "sqlite3",
+    "filename": "./data/metadata.db"
+  },
+  "sqlite": {
+    "driver": "sqlite3",
+    "filename": "./data/metadata.db"
+  },
+  "prod": {
+    "driver": "sqlite3",
+    "filename": "./data/metadata.db"
+  }
+}

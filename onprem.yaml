@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # --- THE ANALYTICS ENGINE ---
+  cloudobjectiq-service:
+    build: .
+    image: cloudobjectiq:onprem
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - MINIO_ENDPOINT=minio-service:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=password123
+    depends_on:
+      - minio-service
+    restart: always
+
+  # --- LOCAL DATA LAKE (S3 Compatible) ---
+  minio-service:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"     # API
+      - "9001:9001"     # Console
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=password123
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    restart: always
+
+  # --- AUTO-PROVISIONER (Setup Buckets) ---
+  createbuckets-service:
+    image: minio/mc
+    depends_on:
+      - minio-service
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc alias set local http://minio-service:9000 admin password123) do echo 'Waiting for MinIO...' && sleep 1; done;
+      /usr/bin/mc mb local/landing;
+      /usr/bin/mc mb local/gold;
+      exit 0;
+      "
+
+volumes:
+  minio_data:

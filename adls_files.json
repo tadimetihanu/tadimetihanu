@@ -1,0 +1,202 @@
+[
+  {
+    "name": "csvdata",
+    "size": 0,
+    "lastModified": "2026-03-31T09:56:35.000Z"
+  },
+  {
+    "name": "csvdata/supermarket_sales.csv",
+    "size": 70928,
+    "lastModified": "2026-03-31T09:56:35.000Z"
+  },
+  {
+    "name": "excel",
+    "size": 0,
+    "lastModified": "2026-04-04T01:52:23.000Z"
+  },
+  {
+    "name": "excel/FSI-2023-DOWNLOAD.xlsx",
+    "size": 26952,
+    "lastModified": "2026-04-04T01:52:23.000Z"
+  },
+  {
+    "name": "excel/SuperStoreUS-2015.xlsx",
+    "size": 374868,
+    "lastModified": "2026-04-04T01:52:23.000Z"
+  },
+  {
+    "name": "excel/fsi-2016.xlsx",
+    "size": 34249,
+    "lastModified": "2026-04-04T01:52:22.000Z"
+  },
+  {
+    "name": "excel/fsi-2017.xlsx",
+    "size": 121572,
+    "lastModified": "2026-04-04T01:52:23.000Z"
+  },
+  {
+    "name": "excel/fsi-2018.xlsx",
+    "size": 128655,
+    "lastModified": "2026-04-04T01:52:23.000Z"
+  },
+  {
+    "name": "excel/fsi-2019.xlsx",
+    "size": 109427,
+    "lastModified": "2026-04-04T01:52:23.000Z"
+  },
+  {
+    "name": "excel/fsi-2020.xlsx",
+    "size": 255656,
+    "lastModified": "2026-04-04T01:52:23.000Z"
+  },
+  {
+    "name": "excel/fsi-2021.xlsx",
+    "size": 26698,
+    "lastModified": "2026-04-04T01:52:23.000Z"
+  },
+  {
+    "name": "excel/fsi-2022-download.xlsx",
+    "size": 61507,
+    "lastModified": "2026-04-04T01:52:23.000Z"
+  },
+  {
+    "name": "orcdata",
+    "size": 0,
+    "lastModified": "2026-04-06T15:19:23.000Z"
+  },
+  {
+    "name": "orcdata/_SUCCESS",
+    "size": 0,
+    "lastModified": "2026-04-06T15:19:22.000Z"
+  },
+  {
+    "name": "orcdata/part-00000-43c63acf-d5c6-4101-b40b-7a0536d295a2-c000.snappy.orc",
+    "size": 373,
+    "lastModified": "2026-04-06T15:19:23.000Z"
+  },
+  {
+    "name": "orcdata/part-00001-43c63acf-d5c6-4101-b40b-7a0536d295a2-c000.snappy.orc",
+    "size": 391,
+    "lastModified": "2026-04-06T15:19:23.000Z"
+  },
+  {
+    "name": "orcdata/part-00002-43c63acf-d5c6-4101-b40b-7a0536d295a2-c000.snappy.orc",
+    "size": 392,
+    "lastModified": "2026-04-06T15:19:23.000Z"
+  },
+  {
+    "name": "orcdata/part-00003-43c63acf-d5c6-4101-b40b-7a0536d295a2-c000.snappy.orc",
+    "size": 371,
+    "lastModified": "2026-04-06T15:19:23.000Z"
+  },
+  {
+    "name": "orcdata/part-00004-43c63acf-d5c6-4101-b40b-7a0536d295a2-c000.snappy.orc",
+    "size": 382,
+    "lastModified": "2026-04-06T15:19:23.000Z"
+  },
+  {
+    "name": "orcdata/part-00005-43c63acf-d5c6-4101-b40b-7a0536d295a2-c000.snappy.orc",
+    "size": 393,
+    "lastModified": "2026-04-06T15:19:23.000Z"
+  },
+  {
+    "name": "orcdata/part-00006-43c63acf-d5c6-4101-b40b-7a0536d295a2-c000.snappy.orc",
+    "size": 390,
+    "lastModified": "2026-04-06T15:19:23.000Z"
+  },
+  {
+    "name": "orcdata/part-00007-43c63acf-d5c6-4101-b40b-7a0536d295a2-c000.snappy.orc",
+    "size": 388,
+    "lastModified": "2026-04-06T15:19:23.000Z"
+  },
+  {
+    "name": "parquetdata",
+    "size": 0,
+    "lastModified": "2026-04-06T10:19:22.000Z"
+  },
+  {
+    "name": "parquetdata/AJ_LEGAL_HOLDS_DATA_308910_1.parquet",
+    "size": 1756,
+    "lastModified": "2026-04-06T10:19:22.000Z"
+  },
+  {
+    "name": "parquetdata/AJ_LEGAL_HOLDS_DATA_308919_1.parquet",
+    "size": 375,
+    "lastModified": "2026-04-06T10:19:22.000Z"
+  },
+  {
+    "name": "parquetdata/AJ_LEGAL_HOLDS_DATA_310168_1.parquet",
+    "size": 1712,
+    "lastModified": "2026-04-06T10:19:22.000Z"
+  },
+  {
+    "name": "parquetdata/AJ_LEGAL_HOLDS_DATA_310199_1.parquet",
+    "size": 1599,
+    "lastModified": "2026-04-06T10:19:22.000Z"
+  },
+  {
+    "name": "parquetdata/AJ_LEGAL_HOLDS_DATA_310200_1.parquet",
+    "size": 1599,
+    "lastModified": "2026-04-06T10:19:22.000Z"
+  },
+  {
+    "name": "parquetdata/flightdata",
+    "size": 0,
+    "lastModified": "2026-04-03T09:20:23.000Z"
+  },
+  {
+    "name": "parquetdata/flightdata/flights-1m.parquet",
+    "size": 7301503,
+    "lastModified": "2026-04-03T09:20:23.000Z"
+  },
+  {
+    "name": "parquetdata/flightdata/flights-2m.parquet",
+    "size": 7301503,
+    "lastModified": "2026-04-03T09:19:28.000Z"
+  },
+  {
+    "name": "parquetdata/flights-1m.parquet",
+    "size": 7301503,
+    "lastModified": "2026-04-03T16:58:35.000Z"
+  },
+  {
+    "name": "parquetdata/house-price.parquet",
+    "size": 9249,
+    "lastModified": "2026-04-03T16:58:31.000Z"
+  },
+  {
+    "name": "parquetdata/iris (1).parquet",
+    "size": 2446,
+    "lastModified": "2026-04-03T16:58:31.000Z"
+  },
+  {
+    "name": "parquetdata/iris.parquet",
+    "size": 2446,
+    "lastModified": "2026-04-03T16:58:31.000Z"
+  },
+  {
+    "name": "parquetdata/mtcars.parquet",
+    "size": 2942,
+    "lastModified": "2026-04-03T16:58:31.000Z"
+  },
+  {
+    "name": "parquetdata/titanic (1).parquet",
+    "size": 40011,
+    "lastModified": "2026-04-03T16:58:33.000Z"
+  },
+  {
+    "name": "parquetdata/titanic.parquet",
+    "size": 40011,
+    "lastModified": "2026-04-03T16:58:33.000Z"
+  },
+  {
+    "name": "parquetdata/weather.parquet",
+    "size": 21004,
+    "lastModified": "2026-04-03T16:58:33.000Z"
+  },
+  {
+    "name": "test",
+    "size": 0,
+    "lastModified": "2026-04-03T16:56:23.000Z"
+  }
+]

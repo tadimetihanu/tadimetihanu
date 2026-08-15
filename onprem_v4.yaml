@@ -1,0 +1,12 @@
+﻿version: '3.8'
+services:
+  app:
+    build: .
+    ports: ['3001:3000']
+    environment: [NODE_ENV=production, MINIO_ENDPOINT=minio:9000]
+    depends_on: [minio]
+  minio:
+    image: minio/minio
+    ports: ['9002:9000', '9003:9001']
+    command: server /data --console-address ':9001'
+

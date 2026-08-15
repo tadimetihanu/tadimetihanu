@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CloudObjectIQ | The Zero-ETL Cloud Data Lakehouse</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.4);
+            --bg: #0a0a0e;
+            --glass: rgba(255, 255, 255, 0.03);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+
+        /* --- STUNNING BACKGROUND RADIALS --- */
+        .glow-sphere {
+            position: fixed;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, var(--primary-glow) 0%, transparent 70%);
+            z-index: -1;
+            filter: blur(80px);
+            opacity: 0.5;
+        }
+
+        .top-left { top: -200px; left: -200px; }
+        .bottom-right { bottom: -200px; right: -200px; }
+
+        /* --- HERO SECTION --- */
+        .navbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 80px;
+            background: rgba(10, 10, 14, 0.8);
+            backdrop-filter: blur(20px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .logo { font-size: 1.5rem; font-weight: 800; letter-spacing: -1px; background: linear-gradient(to right, #818cf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+        .hero {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            padding: 120px 20px 80px;
+        }
+
+        h1 {
+            font-size: 5rem;
+            max-width: 900px;
+            margin: 0;
+            letter-spacing: -2px;
+            background: linear-gradient(135deg, #ffffff 50%, #64748b 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            line-height: 1.1;
+        }
+
+        .hero p {
+            font-size: 1.25rem;
+            color: var(--text-muted);
+            max-width: 600px;
+            margin: 24px 0 40px;
+        }
+
+        .cta-btn {
+            background: var(--primary);
+            color: white;
+            padding: 16px 36px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: 600;
+            box-shadow: 0 0 25px var(--primary-glow);
+            transition: all 0.3s ease;
+        }
+
+        .cta-btn:hover { transform: translateY(-3px); box-shadow: 0 0 45px var(--primary-glow); }
+
+        /* --- DASHBOARD PREVIEW --- */
+        .preview-container {
+            width: 1000px;
+            height: 600px;
+            margin: 60px auto;
+            background: var(--glass);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px;
+            position: relative;
+            box-shadow: 0 100px 100px rgba(0,0,0,0.5);
+            overflow: hidden;
+        }
+
+        .preview-header { height: 40px; background: rgba(255,255,255,0.05); display: flex; align-items:center; padding: 0 15px; gap: 8px; }
+        .dot { width: 10px; height: 10px; border-radius: 10px; }
+        .red { background: #ff5f57; } .yellow { background: #febc2e; } .green { background: #28c840; }
+
+        .preview-content { padding: 40px; }
+        .sql-box { background: #000; border-radius: 10px; padding: 20px; font-family: 'JetBrains Mono', monospace; color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.2); }
+
+        /* --- FEATURES GRID --- */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 30px;
+            padding: 80px;
+            max-width: 1200px;
+            margin: auto;
+        }
+
+        .feature-card {
+            background: var(--glass);
+            padding: 30px;
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: 0.3s;
+        }
+
+        .feature-card:hover { border-color: var(--primary); background: rgba(255, 255, 255, 0.05); }
+        .icon { font-size: 2rem; margin-bottom: 20px; }
+        .feature-card h3 { margin: 0 0 15px; }
+
+        footer { text-align: center; padding: 60px 20px; border-top: 1px solid rgba(255, 255, 255, 0.05); color: var(--text-muted); font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <div class="glow-sphere top-left"></div>
+    <div class="glow-sphere bottom-right"></div>
+
+    <nav class="navbar">
+        <div class="logo">CloudObjectIQ</div>
+        <div style="display:flex; gap:30px;">
+            <a href="#" style="color:white; text-decoration:none; font-size:0.9rem;">Product</a>
+            <a href="#" style="color:white; text-decoration:none; font-size:0.9rem;">Governance</a>
+            <a href="#" style="color:white; text-decoration:none; font-size:0.9rem;">Azure Portal</a>
+        </div>
+        <a href="#" class="cta-btn" style="padding:10px 24px; font-size:0.9rem;">Sign Up Free</a>
+    </nav>
+
+    <header class="hero">
+        <h1>Unified Query. <br> Zero Data Movement.</h1>
+        <p>Analyze your CSV, Parquet, and Excel files across Azure Blob, S3, and MinIO in one beautiful SQL interface. No ETL, no complexity.</p>
+        <a href="#" class="cta-btn">Start Instant Deployment</a>
+    </header>
+
+    <div class="preview-container">
+        <div class="preview-header">
+            <div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div>
+            <div style="flex:1; text-align:center; font-size:0.75rem; color: #4b5563;">https://portal.cloudobjectiq.io</div>
+        </div>
+        <div class="preview-content">
+            <div class="sql-box">
+                <span style="color:#d1d5db;">-- Join ADLS Gen2 with S3 Cloud Cold Storage</span><br>
+                SELECT a.product, SUM(s.units) AS total_sales<br>
+                FROM 'az://production/inventory.parquet' a<br>
+                JOIN 's3://historical/sales_history.csv' s ON a.id = s.prod_id<br>
+                GROUP BY 1 ORDER BY 2 DESC;
+            </div>
+            <div style="margin-top:30px; display:grid; grid-template-columns: 2fr 1fr; gap:20px;">
+                <div style="height:200px; background:rgba(99, 102, 241, 0.05); border-radius:12px; border:1px dashed var(--primary);"></div>
+                <div style="height:200px; background:rgba(255,255,255,0.03); border-radius:12px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <section class="features-grid">
+        <div class="feature-card">
+            <div class="icon">☁️</div>
+            <h3>Cross-Storage Federation</h3>
+            <p>Query Azure Data Lake Gen2 and S3 Buckets in a single JOIN statement. No data transfer fees, just pure SQL.</p>
+        </div>
+        <div class="feature-card">
+            <div class="icon">🔒</div>
+            <h3>ACM Governance</h3>
+            <p>Our proprietary Access Control Matrix ensures only authorized roles can query sensitive cloud folders.</p>
+        </div>
+        <div class="feature-card">
+            <div class="icon">✨</div>
+            <h3>AI SQL Assistant</h3>
+            <p>Natural language to SQL. Describe your data needs, and our AI builds the enterprise-grade query for you.</p>
+        </div>
+    </section>
+
+    <footer>
+        &copy; 2026 CloudObjectIQ Inc. Powered by DuckDB & Azure Container Apps.
+    </footer>
+</body>
+</html>
