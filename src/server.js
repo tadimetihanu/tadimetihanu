@@ -21,6 +21,24 @@ const { authenticate, isAdmin, loginLimiter, SECRET_KEY } = require('./middlewar
 const { checkAccess } = require('./middleware/checkAccess');
 
 const db = new Database('./data/metadata.db');
+
+try {
+    const adminCheck = db.prepare('SELECT * FROM users WHERE email = ?').get('admin@cloudobjectiq.com');
+    if (!adminCheck) {
+        console.log('[Boot] Admin user missing. Seeding admin@cloudobjectiq.com...');
+        const adminHash = bcrypt.hashSync('admin123', 10);
+        db.prepare('INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?)').run('admin@cloudobjectiq.com', adminHash, 'admin');
+        console.log('[Boot] Admin seeded successfully!');
+    } else if (!bcrypt.compareSync('admin123', adminCheck.password_hash)) {
+        console.log('[Boot] Admin password mismatch. Resetting to admin123...');
+        const adminHash = bcrypt.hashSync('admin123', 10);
+        db.prepare('UPDATE users SET password_hash = ? WHERE email = ?').run(adminHash, 'admin@cloudobjectiq.com');
+        console.log('[Boot] Admin password reset to admin123!');
+    }
+} catch (e) {
+    console.error('[Boot] Auto-seed failed (tables might not exist yet):', e.message);
+}
+
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 

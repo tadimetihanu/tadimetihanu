@@ -7,6 +7,6 @@
  */
 module.exports = {
   // Write build output to ./build instead of the default .next folder.
-  distDir: "build",
+  // distDir: "build",
   // You can add additional Next.js config options here.
 };
