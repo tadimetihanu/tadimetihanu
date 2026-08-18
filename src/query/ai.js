@@ -15,11 +15,16 @@ if (!fs.existsSync(dbDir)) {
 }
 const metaDb = new Database(dbPath);
 
-const OPENAI_KEY = process.env.OPENAI_API_KEY || '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';
-
-const openai = new OpenAI({ apiKey: OPENAI_KEY });
+function getOpenAIClient() {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+        throw new Error('OPENAI_API_KEY environment variable is not configured.');
+    }
+    return new OpenAI({ apiKey });
+}
 
 async function suggestQuery(userId, userPrompt, targetId, fileName) {
+    const openai = getOpenAIClient();
     const target = metaDb.prepare('SELECT * FROM targets WHERE target_id = ?').get(targetId);
     if (!target) throw new Error('Invalid Target');
 
