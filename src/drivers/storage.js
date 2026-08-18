@@ -3,17 +3,17 @@ const { S3Client, ListObjectsV2Command, PutObjectCommand } = require('@aws-sdk/c
 const { BlobServiceClient } = require('@azure/storage-blob');
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
 
-const db = new Database('./data/metadata.db');
-
-// ── Target Resolver ───────────────────────────────────────────
-function getTarget(targetId) {
-    const target = db.prepare('SELECT * FROM targets WHERE target_id = ?').get(targetId);
-    if (!target) throw new Error(`Target ${targetId} not found`);
-    return target;
+// Ensure the data directory exists before opening SQLite
+const dbPath = process.env.DATABASE_PATH || path.resolve(process.cwd(), 'data/metadata.db');
+const dbDir = path.dirname(dbPath);
+if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
 }
 
-function _ensureProtocol(url) {
+const db = new Database(dbPath);
+
     if (!url) return url;
     let out = url.trim();
     if (!/^https?:\/\//i.test(out)) out = 'http://' + out;
@@ -373,3 +373,21 @@ module.exports = {
     getTarget,
     testConnection
 };
+const fs = require('fs');
+const path = require('path');
+const Database = require('better-sqlite3');
+
+// Set database path
+const dbPath = process.env.DATABASE_PATH || path.resolve(__dirname, '../../data/database.sqlite');
+
+// Create the directory if it does not exist
+const dbDir = path.dirname(dbPath);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+
+// Initialize the database
+const db = new Database(dbPath);
+
+module.exports = db;
+
