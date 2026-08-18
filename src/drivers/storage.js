@@ -37,7 +37,7 @@ function getS3Client(target) {
 
     return new S3Client({
         endpoint:    ep,
-        region:      target.region || 'us-east-1',
+        region: (ep.includes('.r2.') ? 'auto' : (target.region || 'us-east-1')),
         credentials: { 
             accessKeyId: target.access_key, 
             secretAccessKey: target.secret_key 
