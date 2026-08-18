@@ -1093,6 +1093,18 @@ app.post('/api/rag/upload_and_index', authenticate, upload.single('file'), async
         
         const tempPath = path.join(process.cwd(), 'data', `tmp_${Date.now()}_${req.file.originalname}`);
         fs.writeFileSync(tempPath, req.file.buffer);
+
+        const targetId = req.body.targetId;
+        if (targetId && targetId !== 'none') {
+            try {
+                const { uploadFile } = require('./drivers/storage');
+                await uploadFile(targetId, `rag_documents/${req.file.originalname}`, req.file.buffer, req.file.mimetype);
+                console.log(`[RAG Upload] Saved ${req.file.originalname} to target ${targetId}`);
+            } catch (storageErr) {
+                console.error(`[RAG Upload] Failed to save to target ${targetId}:`, storageErr.message);
+                // We continue indexing even if cloud upload fails
+            }
+        }
         
         const result = await runRagEngine('index', tempPath, 'semantic', req.file.originalname, password);
         

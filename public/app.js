@@ -662,6 +662,7 @@ window.uploadAndIndexRagFile = async (isMain = false) => {
     const fileInput = document.getElementById(prefix + 'upload-file');
     const password = document.getElementById(prefix + 'password')?.value || '';
     const vectorDb = document.getElementById(prefix + 'vector-db')?.value || 'milvus';
+    const targetId = document.getElementById(prefix + 'target')?.value || 'none';
     const status = document.getElementById(prefix + 'index-status');
     if (!fileInput.files || fileInput.files.length === 0) return showStatus('Select a file to upload', 'error');
     
@@ -669,6 +670,7 @@ window.uploadAndIndexRagFile = async (isMain = false) => {
     const formData = new FormData();
     if (password) formData.append('password', password);
     formData.append('vectorDb', vectorDb);
+    formData.append('targetId', targetId);
     formData.append('file', file);
     
     status.innerText = 'Uploading and indexing document...';
