@@ -3,13 +3,28 @@ require('dotenv').config();
 const { OpenAI } = require('openai');
 const { Parser } = require('node-sql-parser');
 const Database = require('better-sqlite3');
+const path = require('path');
+const fs = require('fs');
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const parser = new Parser();
-const metaDb = new Database('./data/metadata.db');
+
+const dbPath = process.env.DATABASE_PATH || path.resolve(process.cwd(), 'data/metadata.db');
+const dbDir = path.dirname(dbPath);
+if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+}
+const metaDb = new Database(dbPath);
+
+function getOpenAIClient() {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+        throw new Error('OPENAI_API_KEY is missing. Please set it in your Render environment variables.');
+    }
+    return new OpenAI({ apiKey });
+}
 
 async function suggestQuery(userId, userPrompt, targetId, fileName) {
-    if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is missing');
+    const openai = getOpenAIClient();
 
     const target = metaDb.prepare('SELECT * FROM targets WHERE target_id = ?').get(targetId);
     if (!target) throw new Error('Invalid Target');
@@ -73,7 +88,7 @@ async function suggestQuery(userId, userPrompt, targetId, fileName) {
         try {
             const ast = parser.astify(sql);
             const tables = Array.isArray(ast) ? ast.flatMap(a => a.from || []) : (ast.from || []);
-            
+
             // 1. Only SELECT allowed
             const type = Array.isArray(ast) ? ast[0].type : ast.type;
             if (type !== 'select') throw new Error('Only SELECT queries are permitted');
@@ -81,7 +96,6 @@ async function suggestQuery(userId, userPrompt, targetId, fileName) {
             // 2. Prefix Enforcement
             for (const t of tables) {
                 const tablePath = t.table || '';
-                // If it is a string literal (quoted), get it without quotes
                 const cleanPath = tablePath.replace(/['"]/g, '');
                 if (cleanPath.includes('://') && !cleanPath.startsWith(allowedPrefix)) {
                     throw new Error(`Unauthorized path access: ${cleanPath}`);
