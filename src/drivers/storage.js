@@ -14,6 +14,14 @@ if (!fs.existsSync(dbDir)) {
 
 const db = new Database(dbPath);
 
+// ── Target Resolver ───────────────────────────────────────────
+function getTarget(targetId) {
+    const target = db.prepare('SELECT * FROM targets WHERE target_id = ?').get(targetId);
+    if (!target) throw new Error(`Target ${targetId} not found`);
+    return target;
+}
+
+function _ensureProtocol(url) {
     if (!url) return url;
     let out = url.trim();
     if (!/^https?:\/\//i.test(out)) out = 'http://' + out;
@@ -93,11 +101,10 @@ async function testConnection(config) {
             return { success: true };
         } else if (config.type === 'azure' || config.type === 'adls') {
             const Azure = require('@azure/storage-blob');
-            // Use dummy target for builder
             const blobService = getAzureClient({ 
-                endpoint: config.endpoint, 
-                access_key: config.credentials.split(':')[0], 
-                secret_key: config.credentials.split(':')[1] 
+               endpoint: config.endpoint, 
+               access_key: config.credentials.split(':')[0], 
+               secret_key: config.credentials.split(':')[1] 
             });
             const container = blobService.getContainerClient(config.bucket);
             await container.getProperties();
@@ -148,7 +155,6 @@ async function listFiles(targetId) {
             }
             const data = await res.json();
             results = (data.files || []).map(f => {
-                // Remove prefix to get relative filename
                 let relPath = f.path;
                 if (relPath.startsWith(dbfsPath)) relPath = relPath.slice(dbfsPath.length);
                 if (relPath.startsWith('/')) relPath = relPath.slice(1);
@@ -162,13 +168,11 @@ async function listFiles(targetId) {
             throw new Error(`Provider ${target.provider_type} not implemented`);
         }
 
-        // Group Spark datasets (directories ending in .parquet, .orc, .csv, .json)
         const datasets = new Map();
         const rawResults = [];
 
         for (const f of results) {
-            // Check if this file is inside a dataset directory
-            const match = f.name.match(/^(.*?\.(?:parquet|orc|csv|json|delta|iceberg))\//i);
+            const match = f.name.match(/^(.*?\. (?:parquet|orc|csv|json|delta|iceberg))\//i);
             if (match) {
                 const datasetName = match[1];
                 if (!datasets.has(datasetName)) {
@@ -186,7 +190,6 @@ async function listFiles(targetId) {
         
         const finalResults = [...rawResults, ...Array.from(datasets.values())];
 
-        // Filter out metadata files that confuse DuckDB/Users
         const ignoredExtensions = ['.crc', '.tmp', '.pending'];
         const ignoredNames = ['_success', '_metadata', '_common_metadata'];
 
@@ -195,7 +198,7 @@ async function listFiles(targetId) {
             const basename = path.basename(name).toLowerCase();
             if (ignoredNames.includes(basename)) return false;
             if (ignoredExtensions.some(ext => name.endsWith(ext))) return false;
-            if (basename.startsWith('.')) return false; // Hide hidden files
+            if (basename.startsWith('.')) return false;
             return true;
         });
     } catch (err) {
@@ -229,7 +232,7 @@ async function uploadFile(targetId, filename, buffer, mimetype) {
         const containerClient = blobService.getContainerClient(target.bucket);
         const blockBlob = containerClient.getBlockBlobClient(filename);
         await blockBlob.upload(buffer, buffer.length, {
-            blobHTTPHeaders: { blobContentType: mimetype || 'application/octet-stream' },
+            blobHTTPHeaders: { blobContentType: mimetype || 'application/octet-stream' }
         });
         return { container: target.bucket, key: filename };
     }
@@ -304,7 +307,6 @@ async function downloadFile(targetId, filename, destPath) {
     const fs = require('fs');
     const target = getTarget(targetId);
 
-    // Auto-strip prefixes to prevent NoSuchKey errors
     let cleanFilename = filename;
     const s3Prefix = `s3://${target.bucket}/`;
     const azPrefix = `az://${target.bucket}/`;
@@ -316,7 +318,6 @@ async function downloadFile(targetId, filename, destPath) {
     } else if (cleanFilename.startsWith(`${target.bucket}/`)) {
         cleanFilename = cleanFilename.replace(`${target.bucket}/`, '');
     }
-    // Remove leading slash if any
     if (cleanFilename.startsWith('/')) {
         cleanFilename = cleanFilename.substring(1);
     }
@@ -373,21 +374,3 @@ module.exports = {
     getTarget,
     testConnection
 };
-const fs = require('fs');
-const path = require('path');
-const Database = require('better-sqlite3');
-
-// Set database path
-const dbPath = process.env.DATABASE_PATH || path.resolve(__dirname, '../../data/database.sqlite');
-
-// Create the directory if it does not exist
-const dbDir = path.dirname(dbPath);
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
-
-// Initialize the database
-const db = new Database(dbPath);
-
-module.exports = db;
-
