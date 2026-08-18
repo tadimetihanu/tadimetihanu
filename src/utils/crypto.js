@@ -13,4 +13,3 @@ function decrypt(cipher) {
 }
 
 module.exports = { encrypt, decrypt };
-
