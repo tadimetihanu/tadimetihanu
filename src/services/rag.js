@@ -1,12 +1,15 @@
 const { spawn } = require('child_process');
 const path = require('path');
 
+// Use python3 on Linux/Render and python on Windows
+const pythonCmd = process.env.PYTHON_CMD || (process.platform === 'win32' ? 'python' : 'python3');
+
 function runRagEngine(action, payload, mode = 'hybrid', sourceName = null, password = null) {
     return new Promise((resolve, reject) => {
         const scriptPath = path.join(__dirname, 'rag_engine.py');
         const args = [scriptPath, action, payload, mode, sourceName || "None"];
         if (password) args.push(password);
-        const pythonProcess = spawn('python', args);
+        const pythonProcess = spawn(pythonCmd, args);
         
         let output = '';
         let errorOutput = '';
@@ -27,7 +30,6 @@ function runRagEngine(action, payload, mode = 'hybrid', sourceName = null, passw
             }
             
             try {
-                // Parse the last line of stdout which should be the JSON response
                 const lines = output.trim().split('\n');
                 const lastLine = lines[lines.length - 1];
                 const result = JSON.parse(lastLine);
@@ -49,7 +51,7 @@ function runLegalRagEngine(action, payload, extraArg = null) {
         const scriptPath = path.join(__dirname, 'legal_rag_engine.py');
         const args = [scriptPath, action, payload];
         if (extraArg) args.push(extraArg);
-        const pythonProcess = spawn('python', args);
+        const pythonProcess = spawn(pythonCmd, args);
         
         let output = '';
         let errorOutput = '';
@@ -70,7 +72,6 @@ function runLegalRagEngine(action, payload, extraArg = null) {
             }
             
             try {
-                // Parse the last line of stdout which should be the JSON response
                 const lines = output.trim().split('\n');
                 const lastLine = lines[lines.length - 1];
                 const result = JSON.parse(lastLine);
