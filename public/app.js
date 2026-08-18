@@ -1654,3 +1654,47 @@ window.submitSparkJob = async () => {
         logs.scrollTop = logs.scrollHeight;
     }
 };
+
+// --- Added Target Screen Logic ---
+window.submitNewTarget = async function() {
+    const targetName = document.getElementById('add-target-name').value;
+    const providerType = document.getElementById('add-target-type').value;
+    const endpoint = document.getElementById('add-target-endpoint').value;
+    const bucket = document.getElementById('add-target-bucket').value;
+    const credentials = document.getElementById('add-target-creds').value;
+    const region = document.getElementById('add-target-region').value || 'auto';
+
+    if (!targetName || !endpoint || !bucket || !credentials) {
+        alert('Please fill out all required fields.');
+        return;
+    }
+
+    try {
+        const res = await apiFetch('/api/admin/targets', {
+            method: 'POST',
+            body: {
+                target_name: targetName,
+                provider_type: providerType,
+                endpoint: endpoint,
+                bucket: bucket,
+                credentials: credentials,
+                region: region
+            }
+        });
+
+        if (res.success) {
+            document.getElementById('add-target-modal').style.display = 'none';
+            // Clear fields
+            document.getElementById('add-target-name').value = '';
+            document.getElementById('add-target-endpoint').value = '';
+            document.getElementById('add-target-bucket').value = '';
+            document.getElementById('add-target-creds').value = '';
+            // Refresh targets list
+            loadTargets();
+        } else {
+            alert('Failed to add target: ' + res.error);
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+};

@@ -278,7 +278,10 @@
     <main>
         <aside class="sidebar">
             <div class="sidebar-section">
-                <h3>Cloud Targets</h3>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3>Cloud Targets</h3>
+                    <button onclick="document.getElementById('add-target-modal').style.display='flex'" style="background:none; border:none; color:var(--primary); cursor:pointer; font-size:1.2rem;" title="Add new Cloud Target">⊕</button>
+                </div>
                 <ul id="target-list" class="browser-list">
                     <!-- Populated by JS -->
                 </ul>
@@ -882,6 +885,54 @@
             </div>
         </div>
     </div>
+    <!-- Add Target Modal -->
+    <div class="modal-overlay" id="add-target-modal" onclick="if(event.target.id==='add-target-modal') document.getElementById('add-target-modal').style.display='none'" style="display:none;">
+        <div class="modal" style="width: 500px; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 style="margin: 0; font-size: 1.2rem;">Add Cloud Target</h2>
+                <button onclick="document.getElementById('add-target-modal').style.display='none'" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem;">✕</button>
+            </div>
+            
+            <div class="field-group" style="margin-bottom: 15px;">
+                <label class="cfg-lbl">Target Name</label>
+                <input id="add-target-name" class="cfg-input" placeholder="e.g. Cloudflare R2 Datinseek">
+            </div>
+            
+            <div class="field-group" style="margin-bottom: 15px;">
+                <label class="cfg-lbl">Provider Type</label>
+                <select id="add-target-type" class="cfg-input">
+                    <option value="minio">S3 Compatible (AWS, MinIO, R2)</option>
+                    <option value="azure">Azure Blob Storage</option>
+                </select>
+            </div>
+            
+            <div class="field-group" style="margin-bottom: 15px;">
+                <label class="cfg-lbl">Endpoint URL</label>
+                <input id="add-target-endpoint" class="cfg-input" placeholder="https://...r2.cloudflarestorage.com">
+            </div>
+            
+            <div class="field-group" style="margin-bottom: 15px;">
+                <label class="cfg-lbl">Bucket / Container</label>
+                <input id="add-target-bucket" class="cfg-input" placeholder="datinseek">
+            </div>
+            
+            <div class="field-group" style="margin-bottom: 15px;">
+                <label class="cfg-lbl">Credentials (AccessKey:SecretKey)</label>
+                <input id="add-target-creds" class="cfg-input" placeholder="YOUR_ACCESS_KEY:YOUR_SECRET_KEY">
+            </div>
+            
+            <div class="field-group" style="margin-bottom: 20px;">
+                <label class="cfg-lbl">Region</label>
+                <input id="add-target-region" class="cfg-input" placeholder="us-east-1 or auto" value="auto">
+            </div>
+            
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button class="btn btn-secondary" onclick="document.getElementById('add-target-modal').style.display='none'">Cancel</button>
+                <button class="btn btn-primary" onclick="window.submitNewTarget()">Add Target</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Delete RAG Document Modal -->
     <div class="modal-overlay" id="delete-rag-modal" onclick="if(event.target.id==='delete-rag-modal') document.getElementById('delete-rag-modal').style.display='none'" style="display:none;">
         <div class="modal" style="width: 400px; display: flex; flex-direction: column;">
@@ -906,3 +957,4 @@
     <script src="app.js?v=2"></script>
 </body>
 </html>
+
