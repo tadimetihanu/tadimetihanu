@@ -9,7 +9,9 @@ function runRagEngine(action, payload, mode = 'hybrid', sourceName = null, passw
         const scriptPath = path.join(__dirname, 'rag_engine.py');
         const args = [scriptPath, action, payload, mode, sourceName || "None"];
         if (password) args.push(password);
-        const pythonProcess = spawn(pythonCmd, args);
+        
+        // Explicitly inherit process.env so Python receives OPENAI_API_KEY
+        const pythonProcess = spawn(pythonCmd, args, { env: process.env });
         
         let output = '';
         let errorOutput = '';
@@ -51,7 +53,8 @@ function runLegalRagEngine(action, payload, extraArg = null) {
         const scriptPath = path.join(__dirname, 'legal_rag_engine.py');
         const args = [scriptPath, action, payload];
         if (extraArg) args.push(extraArg);
-        const pythonProcess = spawn(pythonCmd, args);
+        
+        const pythonProcess = spawn(pythonCmd, args, { env: process.env });
         
         let output = '';
         let errorOutput = '';
