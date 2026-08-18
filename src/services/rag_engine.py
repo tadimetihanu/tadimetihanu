@@ -1,6 +1,11 @@
 import sys
 import os
 import json
+import warnings
+
+# Suppress library deprecation warnings for clean JSON responses
+warnings.filterwarnings("ignore")
+
 from pymilvus import MilvusClient
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -23,16 +28,29 @@ def get_openai_key():
 def init_milvus():
     os.makedirs("./data", exist_ok=True)
     client = MilvusClient(DB_PATH)
+    
     if not client.has_collection(collection_name=COLLECTION_NAME):
         client.create_collection(
             collection_name=COLLECTION_NAME,
             dimension=DIMENSION
         )
+    else:
+        try:
+            client.load_collection(collection_name=COLLECTION_NAME)
+        except Exception:
+            pass
+
     if not client.has_collection(collection_name=CACHE_COLLECTION_NAME):
         client.create_collection(
             collection_name=CACHE_COLLECTION_NAME,
             dimension=DIMENSION
         )
+    else:
+        try:
+            client.load_collection(collection_name=CACHE_COLLECTION_NAME)
+        except Exception:
+            pass
+
     return client
 
 def load_pdf_with_pypdf(file_path, password=None):
@@ -135,8 +153,17 @@ def index_file(file_path, source_name=None, password=None):
     client = init_milvus()
     res = client.insert(collection_name=COLLECTION_NAME, data=data)
     
+    # Reload after insert to ensure search/query can read fresh vectors
+    try:
+        client.load_collection(collection_name=COLLECTION_NAME)
+    except Exception:
+        pass
+
     if client.has_collection(collection_name=CACHE_COLLECTION_NAME):
-        client.delete(collection_name=CACHE_COLLECTION_NAME, filter="id >= 0")
+        try:
+            client.delete(collection_name=CACHE_COLLECTION_NAME, filter="id >= 0")
+        except Exception:
+            pass
     
     print(json.dumps({"success": True, "inserted": res.get('insert_count', len(data)), "chunks": len(splits)}))
 
@@ -145,11 +172,18 @@ def delete_document(source_name):
     client = init_milvus()
     res = client.delete(collection_name=COLLECTION_NAME, filter=f'source == "{source_name}"')
     if client.has_collection(collection_name=CACHE_COLLECTION_NAME):
-        client.delete(collection_name=CACHE_COLLECTION_NAME, filter="id >= 0")
+        try:
+            client.delete(collection_name=CACHE_COLLECTION_NAME, filter="id >= 0")
+        except Exception:
+            pass
     print(json.dumps({"success": True, "deleted": res.get('delete_count', 0)}))
 
 def list_sources():
     client = init_milvus()
+    try:
+        client.load_collection(collection_name=COLLECTION_NAME)
+    except Exception:
+        pass
     res = client.query(collection_name=COLLECTION_NAME, filter="id >= 0", output_fields=["source"])
     sources = list(set([r.get("source") for r in res if "source" in r]))
     print(json.dumps({"success": True, "sources": sources}))
@@ -160,6 +194,11 @@ def query_index(query_text, mode="hybrid"):
     query_vector = embeddings.embed_query(query_text)
     
     client = init_milvus()
+    try:
+        client.load_collection(collection_name=COLLECTION_NAME)
+    except Exception:
+        pass
+
     search_res = client.search(
         collection_name=COLLECTION_NAME,
         data=[query_vector],
