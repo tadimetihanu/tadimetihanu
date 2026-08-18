@@ -90,7 +90,7 @@ const MOCKS = {
 
 async function testConnection(config) {
     try {
-        if (config.type === 's3') {
+        if (config.type === 's3' || config.type === 'r2') {
             const S3 = require('@aws-sdk/client-s3');
             const ep = _ensureProtocol(config.endpoint);
             const client = new S3.S3Client({
@@ -120,7 +120,7 @@ async function listFiles(targetId) {
 
     try {
         let results = [];
-        if (target.provider_type === 'minio' || target.provider_type === 's3') {
+        if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2') {
             const s3 = getS3Client(target);
             const cmd = new ListObjectsV2Command({ Bucket: target.bucket });
             const res = await s3.send(cmd);
@@ -217,7 +217,7 @@ async function listFiles(targetId) {
 async function uploadFile(targetId, filename, buffer, mimetype) {
     const target = getTarget(targetId);
 
-    if (target.provider_type === 'minio' || target.provider_type === 's3') {
+    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2') {
         const s3 = getS3Client(target);
         const cmd = new PutObjectCommand({
             Bucket: target.bucket, Key: filename,
@@ -269,7 +269,7 @@ async function uploadFile(targetId, filename, buffer, mimetype) {
 async function uploadStream(targetId, filename, stream, mimetype, sizeHint) {
     const target = getTarget(targetId);
 
-    if (target.provider_type === 'minio' || target.provider_type === 's3') {
+    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2') {
         const { Upload } = require('@aws-sdk/lib-storage');
         const s3 = getS3Client(target);
         
@@ -322,7 +322,7 @@ async function downloadFile(targetId, filename, destPath) {
         cleanFilename = cleanFilename.substring(1);
     }
 
-    if (target.provider_type === 'minio' || target.provider_type === 's3') {
+    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2') {
         const { GetObjectCommand } = require('@aws-sdk/client-s3');
         const s3 = getS3Client(target);
         const cmd = new GetObjectCommand({ Bucket: target.bucket, Key: cleanFilename });

@@ -1445,6 +1445,7 @@ window.openTargetEditor = async (targetId = null) => {
                     <select id="tgt-type" class="cfg-input" style="height:44px; width:104%" onchange="document.getElementById('krb-fields-edit').style.display = this.value === 'hdfs' ? 'block' : 'none'">
                         <option value="minio" ${target.provider_type === 'minio'?'selected':''}>MinIO</option>
                         <option value="s3" ${target.provider_type === 's3'?'selected':''}>S3 / MinIO</option>
+                          <option value="r2" ${target.provider_type === 'r2'?'selected':''}>Cloudflare R2</option>
                         <option value="azure" ${target.provider_type === 'azure'?'selected':''}>Azure Blob</option>
                         <option value="adls" ${target.provider_type === 'adls'?'selected':''}>Azure Data Lake (ADLS)</option>
                         <option value="hdfs" ${target.provider_type === 'hdfs'?'selected':''}>HDFS / On-Prem</option>

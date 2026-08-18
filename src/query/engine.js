@@ -81,7 +81,7 @@ function calculateCost(sql, rows) {
 async function initSecret(target) {
     const type = target.provider_type;
 
-    if (type === 'minio' || type === 's3') {
+    if (type === 'minio' || type === 's3' || type === 'r2') {
         const rawEp = target.endpoint || '';
         const ep = rawEp.replace(/^https?:\/\//, '').replace(/\/$/, '');
         const ssl = rawEp.startsWith('https');

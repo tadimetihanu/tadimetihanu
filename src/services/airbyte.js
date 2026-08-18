@@ -45,7 +45,7 @@ async function getWorkspaceId() {
  */
 async function setupMinioDestination(targetId) {
     const target = getTarget(targetId);
-    if (!target || (target.provider_type !== 'minio' && target.provider_type !== 's3')) {
+    if (!target || (target.provider_type !== 'minio' && target.provider_type !== 's3' && target.provider_type !== 'r2')) {
         throw new Error('Only MinIO/S3 targets are currently supported for auto-provisioning');
     }
 
