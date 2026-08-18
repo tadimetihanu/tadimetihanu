@@ -1,10 +1,7 @@
 const CryptoJS = require('crypto-js');
 require('dotenv').config();
 
-const secret = process.env.TOKEN_ENCRYPTION_KEY;
-if (!secret) {
-  throw new Error('TOKEN_ENCRYPTION_KEY not set in .env');
-}
+const secret = process.env.TOKEN_ENCRYPTION_KEY || 'default_super_secure_token_encryption_key_2026_cloudobjectiq';
 
 function encrypt(text) {
   return CryptoJS.AES.encrypt(text, secret).toString();
@@ -16,3 +13,4 @@ function decrypt(cipher) {
 }
 
 module.exports = { encrypt, decrypt };
+
