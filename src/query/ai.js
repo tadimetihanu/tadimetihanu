@@ -15,23 +15,16 @@ if (!fs.existsSync(dbDir)) {
 }
 const metaDb = new Database(dbPath);
 
-function getOpenAIClient() {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-        throw new Error('OPENAI_API_KEY is missing. Please set it in your Render environment variables.');
-    }
-    return new OpenAI({ apiKey });
-}
+const OPENAI_KEY = process.env.OPENAI_API_KEY || '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';
+
+const openai = new OpenAI({ apiKey: OPENAI_KEY });
 
 async function suggestQuery(userId, userPrompt, targetId, fileName) {
-    const openai = getOpenAIClient();
-
     const target = metaDb.prepare('SELECT * FROM targets WHERE target_id = ?').get(targetId);
     if (!target) throw new Error('Invalid Target');
 
     let allowedPrefix;
     if (target.provider_type === 'azure' || target.provider_type === 'adls') {
-        // Broad scope prefix: az://CONTAINER/
         allowedPrefix = `az://${target.bucket}/`;
     } else {
         allowedPrefix = `s3://${target.bucket}/`;
@@ -77,7 +70,6 @@ async function suggestQuery(userId, userPrompt, targetId, fileName) {
         });
 
         let sql = response.choices[0].message.content.trim();
-        // Robust SQL extraction
         if (sql.includes('```')) {
             sql = sql.split('```')[1];
             if (sql.startsWith('sql')) sql = sql.substring(3);
@@ -89,11 +81,9 @@ async function suggestQuery(userId, userPrompt, targetId, fileName) {
             const ast = parser.astify(sql);
             const tables = Array.isArray(ast) ? ast.flatMap(a => a.from || []) : (ast.from || []);
 
-            // 1. Only SELECT allowed
             const type = Array.isArray(ast) ? ast[0].type : ast.type;
             if (type !== 'select') throw new Error('Only SELECT queries are permitted');
 
-            // 2. Prefix Enforcement
             for (const t of tables) {
                 const tablePath = t.table || '';
                 const cleanPath = tablePath.replace(/['"]/g, '');
