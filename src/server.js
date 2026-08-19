@@ -231,10 +231,10 @@ function handleOAuthLogin(profile, res) {
 app.get('/api/auth/google', (req, res, next) => {
     if (!process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID === 'your_google_client_id_here' || process.env.GOOGLE_CLIENT_ID === 'dummy_id') {
         console.log('⚠️ [Auth] Using Mock Google Login (No Client ID provided)');
-        return handleOAuthLogin({ id: 'mock-google-123', emails: [{ value: 'mock_google_user@example.com' }], displayName: 'Mock Google User', oauth_provider: 'google' }, res);
-    }
-    passport.authenticate('google', { scope: ['openid', 'profile', 'email', 'https://www.googleapis.com/auth/drive'], accessType: 'offline', prompt: 'consent' })(req, res, next);
+         }
+    passport.authenticate('google', { scope: ['openid', 'profile', 'email'], accessType: 'offline', prompt: 'consent' })(req, res, next);
 });
+
 app.get('/api/auth/google/callback', passport.authenticate('google', { failureRedirect: '/?error=auth_failed' }), (req, res) => handleOAuthLogin(req.user, res));
 
 app.get('/api/auth/microsoft', (req, res, next) => {
