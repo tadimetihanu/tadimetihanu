@@ -129,13 +129,33 @@ async function listFiles(targetId) {
         
         else if (target.provider_type === 'azure' || target.provider_type === 'adls') {
             const blobService = getAzureClient(target);
-            const containerClient = blobService.getContainerClient(target.bucket);
-            for await (const blob of containerClient.listBlobsFlat()) {
-                results.push({
-                    name: blob.name,
-                    size: blob.properties.contentLength || 0,
-                    lastModified: blob.properties.lastModified?.toISOString?.() || '',
-                });
+            const containerName = target.bucket;
+            if (!containerName) {
+                throw new Error(`Target '${target.target_name}' has no container/bucket configured. Please set a container name in Admin Center.`);
+            }
+            const containerClient = blobService.getContainerClient(containerName);
+            try {
+                for await (const blob of containerClient.listBlobsFlat()) {
+                    results.push({
+                        name: blob.name,
+                        size: blob.properties.contentLength || 0,
+                        lastModified: blob.properties.lastModified?.toISOString?.() || '',
+                    });
+                }
+            } catch (azureErr) {
+                if (azureErr.statusCode === 404 || (azureErr.message && azureErr.message.includes('specified container does not exist'))) {
+                    let availableContainers = [];
+                    try {
+                        for await (const c of blobService.listContainers()) {
+                            availableContainers.push(c.name);
+                        }
+                    } catch (e) {}
+                    const hint = availableContainers.length > 0
+                        ? ` Available containers in account: [${availableContainers.join(', ')}]. Update the target bucket in Admin Center.`
+                        : ` Please create container '${containerName}' in your Azure Storage Account portal.`;
+                    throw new Error(`Azure Container '${containerName}' not found.${hint}`);
+                }
+                throw azureErr;
             }
         } else if (target.provider_type === 'databricks') {
             const ep = target.endpoint.replace(/\/$/, '');
@@ -233,6 +253,7 @@ async function uploadFile(targetId, filename, buffer, mimetype) {
     if (target.provider_type === 'azure' || target.provider_type === 'adls') {
         const blobService = getAzureClient(target);
         const containerClient = blobService.getContainerClient(target.bucket);
+        try { await containerClient.createIfNotExists(); } catch (e) {}
         const blockBlob = containerClient.getBlockBlobClient(filename);
         await blockBlob.upload(buffer, buffer.length, {
             blobHTTPHeaders: { blobContentType: mimetype || 'application/octet-stream' },
@@ -299,6 +320,7 @@ async function uploadStream(targetId, filename, stream, mimetype, sizeHint) {
     if (target.provider_type === 'azure' || target.provider_type === 'adls') {
         const blobService = getAzureClient(target);
         const containerClient = blobService.getContainerClient(target.bucket);
+        try { await containerClient.createIfNotExists(); } catch (e) {}
         const blockBlob = containerClient.getBlockBlobClient(filename);
         
         await blockBlob.uploadStream(stream, 4 * 1024 * 1024, 4, {
