@@ -3,6 +3,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>
+        (function () {
+            try {
+                if (typeof window !== 'undefined') {
+                    if (!window.crypto) window.crypto = window.msCrypto || {};
+                    if (!window.crypto.getRandomValues) {
+                        window.crypto.getRandomValues = function (arr) {
+                            for (var i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
+                            return arr;
+                        };
+                    }
+                    if (!window.crypto.randomUUID) {
+                        window.crypto.randomUUID = function () {
+                            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+                                var r = (Math.random() * 16) | 0;
+                                var v = c === 'x' ? r : (r & 0x3) | 0x8;
+                                return v.toString(16);
+                            });
+                        };
+                    }
+                    if (typeof globalThis !== 'undefined' && !globalThis.crypto) {
+                        globalThis.crypto = window.crypto;
+                    }
+                }
+            } catch (e) {}
+        })();
+    </script>
     <style>
         /* Dashboard Table Styling */
         .dashboard-table { width: 100%; border-collapse: collapse; color:#1d1d1f; }

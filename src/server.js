@@ -1,8 +1,15 @@
+const nodeCrypto = require('crypto');
+if (!globalThis.crypto) {
+    globalThis.crypto = nodeCrypto.webcrypto || nodeCrypto;
+}
+if (!global.crypto) {
+    global.crypto = nodeCrypto;
+}
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
-const crypto = require('crypto');
+const crypto = nodeCrypto;
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
