@@ -486,19 +486,44 @@ window.switchMainMode = (mode) => {
 };
 
 
+window.handleIngestTypeChange = (type) => {
+    const hostLabel = document.getElementById('ingest-host-label');
+    const hostInput = document.getElementById('ingest-host');
+    const portInput = document.getElementById('ingest-port');
+    const userInput = document.getElementById('ingest-user');
+    const passInput = document.getElementById('ingest-pass');
+    const pathInput = document.getElementById('ingest-source-path');
+
+    if (type === 'gdrive') {
+        if (hostLabel) hostLabel.innerText = 'Google Drive Folder ID (or root)';
+        if (hostInput) { hostInput.placeholder = 'root (or folder ID)'; hostInput.value = hostInput.value || 'root'; }
+        if (portInput) { portInput.disabled = true; portInput.value = ''; }
+        if (userInput) userInput.placeholder = 'Service Account / Client ID (Optional)';
+        if (passInput) passInput.placeholder = 'Private Key / Secret (Optional)';
+        if (pathInput) pathInput.placeholder = 'customer_churn_analysis.csv';
+    } else {
+        if (hostLabel) hostLabel.innerText = 'Host Address';
+        if (hostInput) hostInput.placeholder = 'ftp.example.com';
+        if (portInput) portInput.disabled = false;
+        if (userInput) userInput.placeholder = 'admin';
+        if (passInput) passInput.placeholder = '••••••••';
+        if (pathInput) pathInput.placeholder = '/data/exports/daily_dump.csv';
+    }
+};
+
 window.startIngestion = async () => {
     const type = document.getElementById('ingest-type').value;
-    const host = document.getElementById('ingest-host').value;
+    const host = document.getElementById('ingest-host').value || (type === 'gdrive' ? 'root' : '');
     const port = document.getElementById('ingest-port').value;
-    const user = document.getElementById('ingest-user').value;
-    const password = document.getElementById('ingest-pass').value;
+    const user = document.getElementById('ingest-user').value || (type === 'gdrive' ? 'demo_gdrive_user' : '');
+    const password = document.getElementById('ingest-pass').value || (type === 'gdrive' ? 'demo_gdrive_key' : '');
     const sourcePath = document.getElementById('ingest-source-path').value;
     const targetId = document.getElementById('ingest-target').value;
     const targetFolder = document.getElementById('ingest-target-folder').value;
     const status = document.getElementById('ingest-status');
 
-    if (!host || !user || !password || !sourcePath || !targetId) {
-        status.innerHTML = '<span style="color:var(--error);">Please fill out all required fields (Host, User, Pass, Source Path, Target).</span>';
+    if (!host || !sourcePath || !targetId || (type !== 'gdrive' && (!user || !password))) {
+        status.innerHTML = '<span style="color:var(--error);">Please fill out required fields (Source Host/Folder, File Path, Target Object Storage).</span>';
         return;
     }
 
@@ -662,7 +687,6 @@ window.uploadAndIndexRagFile = async (isMain = false) => {
     const fileInput = document.getElementById(prefix + 'upload-file');
     const password = document.getElementById(prefix + 'password')?.value || '';
     const vectorDb = document.getElementById(prefix + 'vector-db')?.value || 'milvus';
-    const targetId = document.getElementById(prefix + 'target')?.value || 'none';
     const status = document.getElementById(prefix + 'index-status');
     if (!fileInput.files || fileInput.files.length === 0) return showStatus('Select a file to upload', 'error');
     
@@ -670,7 +694,6 @@ window.uploadAndIndexRagFile = async (isMain = false) => {
     const formData = new FormData();
     if (password) formData.append('password', password);
     formData.append('vectorDb', vectorDb);
-    formData.append('targetId', targetId);
     formData.append('file', file);
     
     status.innerText = 'Uploading and indexing document...';
@@ -945,19 +968,27 @@ function renderTargets() {
         li.className = 'browser-item';
         li.style.listStyle = 'none';
 
-        // Use orange for MinIO and Azure per user request
+        // Use orange for MinIO and Azure, Google branding for Google Drive
         const type = (t.provider_type || '').toLowerCase();
         const isOrange = ['minio', 'azure', 'adls', 'blob'].includes(type);
-        const bgColor = isOrange ? 'var(--orange)' : 'var(--primary)';
+        const isGDrive = ['gdrive', 'googledrive', 'drive'].includes(type);
+
+        let bgStyle = isOrange ? 'background:var(--orange);' : 'background:var(--primary);';
+        let badgeContent = (t.provider_type || 'S')[0].toUpperCase();
+
+        if (isGDrive) {
+            bgStyle = 'background: linear-gradient(135deg, #4285F4 0%, #34A853 45%, #FBBC05 75%, #EA4335 100%); box-shadow: 0 2px 8px rgba(66, 133, 244, 0.4);';
+            badgeContent = '📁';
+        }
 
         li.innerHTML = `
             <div class="target-card ${t.target_id === _activeTargetId ? 'active' : ''}" onclick="window.selectTarget('${t.target_id}')" style="cursor:pointer; padding:12px; border-radius:12px; border:1px solid var(--border); display:flex; gap:12px; align-items:center; margin-bottom:8px; background:var(--glass);">
-                <div style="width:32px; height:32px; border-radius:8px; background:${bgColor}; color:white; display:flex; align-items:center; justify-content:center; font-weight:700;">${(t.provider_type || 'S')[0].toUpperCase()}</div>
+                <div style="width:32px; height:32px; border-radius:8px; ${bgStyle} color:white; display:flex; align-items:center; justify-content:center; font-weight:700; font-size: 1rem;">${badgeContent}</div>
                 <div style="flex:1;">
                     <p style="margin:0; font-size:0.85rem; font-weight:700;">${t.target_name}</p>
                     <div style="display:flex; align-items:center; gap:5px;">
                         <span style="width:6px; height:6px; background:${t.is_active ? '#10b981' : '#ef4444'}; border-radius:10px;"></span>
-                        <small style="font-size:0.65rem; color:var(--text-muted);">${t.is_active ? 'Online' : 'Offline'}</small>
+                        <small style="font-size:0.65rem; color:var(--text-muted);">${t.is_active ? (isGDrive ? 'Google Drive Active' : 'Online') : 'Offline'}</small>
                     </div>
                 </div>
             </div>`;
@@ -1440,14 +1471,17 @@ window.openTargetEditor = async (targetId = null) => {
 
     container.innerHTML = `
         <div style="background:var(--glass-heavy); padding:20px; border-radius:15px; border:1px solid var(--border);">
-            <h3>${targetId ? '📝 Edit Target' : '➕ Add New Target'}</h3>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                <h3 style="margin:0;">${targetId ? '📝 Edit Target' : '➕ Add New Target'}</h3>
+                ${!targetId ? '<button class="ghost-btn" style="border-color:#4285F4; color:#4285F4; font-size:0.75rem;" onclick="window.fillDemoGDrive()">✨ Fast Fill Google Drive Demo</button>' : ''}
+            </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px;">
                 <div><label class="cfg-lbl">Target Name</label><input id="tgt-name" class="cfg-input" value="${target.target_name || ''}"></div>
                 <div><label class="cfg-lbl">Provider</label>
-                    <select id="tgt-type" class="cfg-input" style="height:44px; width:104%" onchange="document.getElementById('krb-fields-edit').style.display = this.value === 'hdfs' ? 'block' : 'none'">
+                    <select id="tgt-type" class="cfg-input" style="height:44px; width:104%" onchange="window.handleTargetTypeChange(this.value)">
+                        <option value="gdrive" ${target.provider_type === 'gdrive' || target.provider_type === 'googledrive' ? 'selected':''}>📁 Google Drive</option>
                         <option value="minio" ${target.provider_type === 'minio'?'selected':''}>MinIO</option>
                         <option value="s3" ${target.provider_type === 's3'?'selected':''}>S3 / MinIO</option>
-                          <option value="r2" ${target.provider_type === 'r2'?'selected':''}>Cloudflare R2</option>
                         <option value="azure" ${target.provider_type === 'azure'?'selected':''}>Azure Blob</option>
                         <option value="adls" ${target.provider_type === 'adls'?'selected':''}>Azure Data Lake (ADLS)</option>
                         <option value="hdfs" ${target.provider_type === 'hdfs'?'selected':''}>HDFS / On-Prem</option>
@@ -1455,14 +1489,14 @@ window.openTargetEditor = async (targetId = null) => {
                         <option value="databricks" ${target.provider_type === 'databricks'?'selected':''}>Databricks (DBFS)</option>
                     </select>
                 </div>
-                <div><label class="cfg-lbl">Endpoint URL</label><input id="tgt-endpoint" class="cfg-input" value="${target.endpoint || ''}"></div>
+                <div><label class="cfg-lbl" id="lbl-endpoint">Endpoint URL</label><input id="tgt-endpoint" class="cfg-input" value="${target.endpoint || ''}"></div>
                 <div id="krb-fields-edit" style="display:${target.provider_type==='hdfs'?'block':'none'}; border-top:1px solid var(--border); padding-top:10px; margin-top:10px;">
                      <div><label class="cfg-lbl" style="color:#fbbf24;">Kerberos Principal</label><input id="tgt-principal" class="cfg-input" value="${target.krb_principal || ''}"></div>
                      <div><label class="cfg-lbl" style="color:#fbbf24;">Kerberos Keytab Path</label><input id="tgt-keytab" class="cfg-input" value="${target.krb_keytab || ''}"></div>
                 </div>
-                <div><label class="cfg-lbl">Bucket / Container</label><input id="tgt-bucket" class="cfg-input" value="${target.bucket || ''}"></div>
-                <div><label class="cfg-lbl">Access Key / Connection String</label><input id="tgt-access" class="cfg-input" value="${target.access_key || ''}"></div>
-                <div><label class="cfg-lbl">Secret Key (Optional)</label><input id="tgt-secret" class="cfg-input" type="password" value="${target.secret_key || ''}"></div>
+                <div><label class="cfg-lbl" id="lbl-bucket">Bucket / Folder ID</label><input id="tgt-bucket" class="cfg-input" value="${target.bucket || ''}"></div>
+                <div><label class="cfg-lbl" id="lbl-access">Access Key / Service Account Email</label><input id="tgt-access" class="cfg-input" value="${target.access_key || ''}"></div>
+                <div><label class="cfg-lbl" id="lbl-secret">Secret Key / Private Key JSON (Optional)</label><input id="tgt-secret" class="cfg-input" type="password" value="${target.secret_key || ''}"></div>
                 <div><label class="cfg-lbl">Region</label><input id="tgt-region" class="cfg-input" value="${target.region || ''}"></div>
             </div>
             <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
@@ -1471,6 +1505,31 @@ window.openTargetEditor = async (targetId = null) => {
             </div>
         </div>
     `;
+};
+
+window.handleTargetTypeChange = (type) => {
+    const krb = document.getElementById('krb-fields-edit');
+    if (krb) krb.style.display = type === 'hdfs' ? 'block' : 'none';
+    const endpointInput = document.getElementById('tgt-endpoint');
+    const bucketLabel = document.getElementById('lbl-bucket');
+    const bucketInput = document.getElementById('tgt-bucket');
+    if (type === 'gdrive') {
+        if (endpointInput && !endpointInput.value) endpointInput.value = 'https://www.googleapis.com/drive/v3';
+        if (bucketLabel) bucketLabel.innerText = 'Folder ID (or root)';
+        if (bucketInput && !bucketInput.value) bucketInput.value = 'root';
+    } else {
+        if (bucketLabel) bucketLabel.innerText = 'Bucket / Container';
+    }
+};
+
+window.fillDemoGDrive = () => {
+    document.getElementById('tgt-name').value = 'Enterprise Google Drive Lake';
+    document.getElementById('tgt-type').value = 'gdrive';
+    document.getElementById('tgt-endpoint').value = 'https://www.googleapis.com/drive/v3';
+    document.getElementById('tgt-bucket').value = 'root';
+    document.getElementById('tgt-access').value = 'demo-service-account@google-drive-lake.iam.gserviceaccount.com';
+    document.getElementById('tgt-secret').value = 'demo-private-key';
+    document.getElementById('tgt-region').value = 'global';
 };
 
 window.saveTarget = async (id) => {
@@ -1655,49 +1714,5 @@ window.submitSparkJob = async () => {
         btn.disabled = false;
         btn.innerText = '🚀 Submit Spark Job';
         logs.scrollTop = logs.scrollHeight;
-    }
-};
-
-// --- Added Target Screen Logic ---
-window.submitNewTarget = async function() {
-    const targetName = document.getElementById('add-target-name').value;
-    const providerType = document.getElementById('add-target-type').value;
-    const endpoint = document.getElementById('add-target-endpoint').value;
-    const bucket = document.getElementById('add-target-bucket').value;
-    const credentials = document.getElementById('add-target-creds').value;
-    const region = document.getElementById('add-target-region').value || 'auto';
-
-    if (!targetName || !endpoint || !bucket || !credentials) {
-        alert('Please fill out all required fields.');
-        return;
-    }
-
-    try {
-        const res = await apiFetch('/api/admin/targets', {
-            method: 'POST',
-            body: {
-                target_name: targetName,
-                provider_type: providerType,
-                endpoint: endpoint,
-                bucket: bucket,
-                credentials: credentials,
-                region: region
-            }
-        });
-
-        if (res.success) {
-            document.getElementById('add-target-modal').style.display = 'none';
-            // Clear fields
-            document.getElementById('add-target-name').value = '';
-            document.getElementById('add-target-endpoint').value = '';
-            document.getElementById('add-target-bucket').value = '';
-            document.getElementById('add-target-creds').value = '';
-            // Refresh targets list
-            loadTargets();
-        } else {
-            alert('Failed to add target: ' + res.error);
-        }
-    } catch (err) {
-        alert('Error: ' + err.message);
     }
 };

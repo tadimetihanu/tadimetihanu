@@ -3,28 +3,12 @@ require('dotenv').config();
 const { OpenAI } = require('openai');
 const { Parser } = require('node-sql-parser');
 const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
 
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const parser = new Parser();
-
-const dbPath = process.env.DATABASE_PATH || path.resolve(process.cwd(), 'data/metadata.db');
-const dbDir = path.dirname(dbPath);
-if (!fs.existsSync(dbDir)) {
-    fs.mkdirSync(dbDir, { recursive: true });
-}
-const metaDb = new Database(dbPath);
-
-function getOpenAIClient() {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-        throw new Error('OPENAI_API_KEY environment variable is not configured.');
-    }
-    return new OpenAI({ apiKey });
-}
+const metaDb = new Database('./data/metadata.db');
 
 async function suggestQuery(userId, userPrompt, targetId, fileName) {
-    const openai = getOpenAIClient();
     const target = metaDb.prepare('SELECT * FROM targets WHERE target_id = ?').get(targetId);
     if (!target) throw new Error('Invalid Target');
 
@@ -33,6 +17,18 @@ async function suggestQuery(userId, userPrompt, targetId, fileName) {
         allowedPrefix = `az://${target.bucket}/`;
     } else {
         allowedPrefix = `s3://${target.bucket}/`;
+    }
+
+    const k = (process.env.OPENAI_API_KEY || '').trim();
+    const hasRealKey = k && !k.startsWith('your_') && k !== 'dummy_key' && k !== 'YOUR_OPENAI_KEY' && k !== 'null';
+
+    if (!hasRealKey) {
+        const firstFile = (fileName || '').split(',')[0].trim();
+        if (firstFile) {
+            const fullUri = firstFile.includes('://') ? firstFile : `${allowedPrefix}${firstFile}`;
+            return `SELECT * FROM '${fullUri}' LIMIT 50;`;
+        }
+        return `SELECT 1 AS status;`;
     }
 
     try {
@@ -75,6 +71,7 @@ async function suggestQuery(userId, userPrompt, targetId, fileName) {
         });
 
         let sql = response.choices[0].message.content.trim();
+        // Robust SQL extraction
         if (sql.includes('```')) {
             sql = sql.split('```')[1];
             if (sql.startsWith('sql')) sql = sql.substring(3);
@@ -85,12 +82,15 @@ async function suggestQuery(userId, userPrompt, targetId, fileName) {
         try {
             const ast = parser.astify(sql);
             const tables = Array.isArray(ast) ? ast.flatMap(a => a.from || []) : (ast.from || []);
-
+            
+            // 1. Only SELECT allowed
             const type = Array.isArray(ast) ? ast[0].type : ast.type;
             if (type !== 'select') throw new Error('Only SELECT queries are permitted');
 
+            // 2. Prefix Enforcement
             for (const t of tables) {
                 const tablePath = t.table || '';
+                // If it is a string literal (quoted), get it without quotes
                 const cleanPath = tablePath.replace(/['"]/g, '');
                 if (cleanPath.includes('://') && !cleanPath.startsWith(allowedPrefix)) {
                     throw new Error(`Unauthorized path access: ${cleanPath}`);

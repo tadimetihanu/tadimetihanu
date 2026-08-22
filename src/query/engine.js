@@ -1,6 +1,9 @@
 const duckdb = require('duckdb');
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const gdrive = require('../drivers/gdrive');
 
 // ── Global Connections ────────────────────────────────────────
 const metaDb = new Database('./data/metadata.db');
@@ -31,8 +34,9 @@ async function boot() {
         // We continue anyway, some queries might work
         _isBooted = true;
     }
+    return true;
 }
-boot();
+const _bootPromise = boot();
 
 function enqueue(fn) {
     const p = _queue.then(async () => {
@@ -81,7 +85,7 @@ function calculateCost(sql, rows) {
 async function initSecret(target) {
     const type = target.provider_type;
 
-    if (type === 'minio' || type === 's3' || type === 'r2') {
+    if (type === 'minio' || type === 's3') {
         const rawEp = target.endpoint || '';
         const ep = rawEp.replace(/^https?:\/\//, '').replace(/\/$/, '');
         const ssl = rawEp.startsWith('https');
@@ -125,10 +129,7 @@ async function initSecret(target) {
 
 // ── Query Execution ───────────────────────────────────────────
 async function runQuery(userId, sql, targetId) {
-    if (!_isBooted) {
-        await new Promise(r => setTimeout(r, 3000));
-        if (!_isBooted) throw new Error('System still initializing. Please retry.');
-    }
+    await _bootPromise;
 
     const target = getTarget(targetId);
     const startTime = Date.now();
@@ -136,10 +137,36 @@ async function runQuery(userId, sql, targetId) {
     return enqueue(async () => {
         try {
             await initSecret(target);
-            console.log(`🔍 [Query] Executing: ${sql.substring(0, 80)}...`);
+
+            let executableSql = sql;
+
+            // Handle Google Drive file caching and path transformation
+            if (target.provider_type === 'gdrive' || target.provider_type === 'googledrive') {
+                const fileRefMatches = sql.match(/['"](gdrive:\/\/[^'"]+|[^'"]+\.(?:parquet|csv|json|orc|tsv|txt))['"]/gi) || [];
+                for (const matchStr of fileRefMatches) {
+                    const rawPath = matchStr.replace(/^['"]|['"]$/g, '');
+                    const filename = path.basename(rawPath);
+                    let localCached = gdrive.getCachedFilePath(filename);
+                    if (!localCached || !fs.existsSync(localCached)) {
+                        const targetDest = path.join(gdrive.CACHE_DIR, filename);
+                        try {
+                            await gdrive.downloadFile(target, filename, targetDest);
+                            localCached = targetDest;
+                        } catch (err) {
+                            console.warn(`[GDrive Engine] Could not download ${filename} on demand:`, err.message);
+                        }
+                    }
+                    if (localCached && fs.existsSync(localCached)) {
+                        const normalizedPath = localCached.replace(/\\/g, '/');
+                        executableSql = executableSql.split(rawPath).join(normalizedPath);
+                    }
+                }
+            }
+
+            console.log(`🔍 [Query] Executing: ${executableSql.substring(0, 80)}...`);
 
             const rows = await new Promise((res, rej) => {
-                conn.all(sql, (err, rows) => {
+                conn.all(executableSql, (err, rows) => {
                     if (err) rej(err);
                     else res(rows);
                 });

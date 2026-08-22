@@ -33,7 +33,7 @@ async function seed() {
             bucket: process.env.MINIO_BUCKET,
             access: process.env.MINIO_ACCESS_KEY,
             secret: process.env.MINIO_SECRET_KEY,
-            region: (process.env.MINIO_ENDPOINT || '').includes('.r2.') ? 'auto' : 'us-east-1'
+            region: 'us-east-1'
         },
         {
             id: crypto.randomUUID(),

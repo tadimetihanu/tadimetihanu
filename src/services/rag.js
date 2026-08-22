@@ -1,17 +1,24 @@
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
-// Use python3 on Linux/Render and python on Windows
-const pythonCmd = process.env.PYTHON_CMD || (process.platform === 'win32' ? 'python' : 'python3');
+function getPythonPath() {
+    if (process.env.PYTHON_PATH && fs.existsSync(process.env.PYTHON_PATH)) {
+        return process.env.PYTHON_PATH;
+    }
+    const defaultUserPath = 'C:\\Users\\tadim\\AppData\\Local\\Programs\\Python\\Python311\\python.exe';
+    if (fs.existsSync(defaultUserPath)) {
+        return defaultUserPath;
+    }
+    return 'python';
+}
 
 function runRagEngine(action, payload, mode = 'hybrid', sourceName = null, password = null) {
     return new Promise((resolve, reject) => {
         const scriptPath = path.join(__dirname, 'rag_engine.py');
         const args = [scriptPath, action, payload, mode, sourceName || "None"];
         if (password) args.push(password);
-        
-        // Explicitly inherit process.env so Python receives OPENAI_API_KEY
-        const pythonProcess = spawn(pythonCmd, args, { env: process.env });
+        const pythonProcess = spawn(getPythonPath(), args);
         
         let output = '';
         let errorOutput = '';
@@ -32,6 +39,7 @@ function runRagEngine(action, payload, mode = 'hybrid', sourceName = null, passw
             }
             
             try {
+                // Parse the last line of stdout which should be the JSON response
                 const lines = output.trim().split('\n');
                 const lastLine = lines[lines.length - 1];
                 const result = JSON.parse(lastLine);
@@ -53,8 +61,7 @@ function runLegalRagEngine(action, payload, extraArg = null) {
         const scriptPath = path.join(__dirname, 'legal_rag_engine.py');
         const args = [scriptPath, action, payload];
         if (extraArg) args.push(extraArg);
-        
-        const pythonProcess = spawn(pythonCmd, args, { env: process.env });
+        const pythonProcess = spawn(getPythonPath(), args);
         
         let output = '';
         let errorOutput = '';
@@ -75,6 +82,7 @@ function runLegalRagEngine(action, payload, extraArg = null) {
             }
             
             try {
+                // Parse the last line of stdout which should be the JSON response
                 const lines = output.trim().split('\n');
                 const lastLine = lines[lines.length - 1];
                 const result = JSON.parse(lastLine);

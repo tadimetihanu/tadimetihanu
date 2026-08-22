@@ -3,12 +3,16 @@ from pymilvus import MilvusClient
 from openai import AsyncOpenAI
 import uuid
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Initialize Milvus Lite
 milvus_client = MilvusClient("./milvus_demo.db")
 
 # Initialize OpenAI
-openai_client = AsyncOpenAI(api_key="YOUR_OPENAI_KEY")
+api_key = os.getenv("OPENAI_API_KEY")
+openai_client = AsyncOpenAI(api_key=api_key) if api_key else None
 
 from minio import Minio
 import io

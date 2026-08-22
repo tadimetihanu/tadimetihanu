@@ -2,9 +2,14 @@ import fitz
 import io
 import base64
 import asyncio
+import os
 from openai import AsyncOpenAI
+from dotenv import load_dotenv
 
-openai_client = AsyncOpenAI(api_key="YOUR_OPENAI_KEY")
+load_dotenv()
+
+api_key = os.getenv("OPENAI_API_KEY")
+openai_client = AsyncOpenAI(api_key=api_key) if api_key else None
 
 async def extract_text_from_image(image_bytes: bytes) -> str:
     base64_image = base64.b64encode(image_bytes).decode('utf-8')

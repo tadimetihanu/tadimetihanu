@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const crypto = require('crypto');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -20,114 +21,18 @@ const { handleNl2Sql } = require('./nl2sql');
 const { authenticate, isAdmin, loginLimiter, SECRET_KEY } = require('./middleware/auth');
 const { checkAccess } = require('./middleware/checkAccess');
 
-const fs = require('fs');
-const dbPath = process.env.DATABASE_PATH || path.resolve(process.cwd(), 'data/metadata.db');
-const dbDir = path.dirname(dbPath);
-if (!fs.existsSync(dbDir)) {
-    fs.mkdirSync(dbDir, { recursive: true });
-}
-const db = new Database(dbPath);
+const db = new Database('./data/metadata.db');
 
-// ── Auto-Create Tables on Boot ────────────────────────────────
-db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-        user_id TEXT PRIMARY KEY,
-        email TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        role TEXT DEFAULT 'user',
-        oauth_provider TEXT,
-        oauth_id TEXT,
-        display_name TEXT,
-        refresh_token TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS groups (
-        group_id TEXT PRIMARY KEY,
-        group_name TEXT UNIQUE NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS user_groups (
-        user_id TEXT,
-        group_id TEXT,
-        PRIMARY KEY (user_id, group_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS targets (
-        target_id TEXT PRIMARY KEY,
-        target_name TEXT NOT NULL,
-        provider_type TEXT NOT NULL,
-        endpoint TEXT,
-        bucket TEXT NOT NULL,
-        access_key TEXT,
-        secret_key TEXT,
-        region TEXT,
-        is_active INTEGER DEFAULT 1,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS permissions (
-        permission_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        subject_id TEXT NOT NULL,
-        subject_type TEXT NOT NULL,
-        target_id TEXT NOT NULL,
-        can_read INTEGER DEFAULT 1,
-        can_write INTEGER DEFAULT 1,
-        can_delete INTEGER DEFAULT 1,
-        access_level TEXT DEFAULT 'admin',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(subject_id, target_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS query_logs (
-        log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT,
-        query_text TEXT,
-        execution_time_ms INTEGER,
-        row_count INTEGER,
-        status TEXT,
-        target_id TEXT,
-        data_scanned_bytes INTEGER DEFAULT 0,
-        calculated_cost_usd REAL DEFAULT 0,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS metadata_catalog (
-        id TEXT PRIMARY KEY,
-        target_id TEXT,
-        file_path TEXT,
-        file_name TEXT,
-        file_size INTEGER,
-        format TEXT,
-        indexed_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS nl2sql_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        question TEXT,
-        sql TEXT,
-        result_summary TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-`);
-
-// ── Auto-Seed Admin Account ───────────────────────────────────
+// Ensure OAuth columns exist in users table
 try {
-    const adminCheck = db.prepare('SELECT * FROM users WHERE email = ?').get('admin@cloudobjectiq.com');
-    if (!adminCheck) {
-        console.log('[Boot] Seeding initial admin (admin@cloudobjectiq.com)...');
-        const adminHash = bcrypt.hashSync('admin123', 10);
-        db.prepare('INSERT INTO users (user_id, email, password_hash, role, display_name) VALUES (?, ?, ?, ?, ?)')
-          .run('admin-root-001', 'admin@cloudobjectiq.com', adminHash, 'admin', 'Admin');
-        console.log('[Boot] Admin seeded successfully!');
-    } else if (!bcrypt.compareSync('admin123', adminCheck.password_hash)) {
-        console.log('[Boot] Resetting admin password to admin123...');
-        const adminHash = bcrypt.hashSync('admin123', 10);
-        db.prepare('UPDATE users SET password_hash = ? WHERE email = ?').run(adminHash, 'admin@cloudobjectiq.com');
-        console.log('[Boot] Admin password reset to admin123!');
-    }
+    const tableInfo = db.prepare("PRAGMA table_info(users)").all();
+    const colNames = tableInfo.map(c => c.name);
+    if (!colNames.includes('oauth_provider')) db.prepare('ALTER TABLE users ADD COLUMN oauth_provider TEXT').run();
+    if (!colNames.includes('oauth_id')) db.prepare('ALTER TABLE users ADD COLUMN oauth_id TEXT').run();
+    if (!colNames.includes('display_name')) db.prepare('ALTER TABLE users ADD COLUMN display_name TEXT').run();
+    if (!colNames.includes('refresh_token')) db.prepare('ALTER TABLE users ADD COLUMN refresh_token TEXT').run();
 } catch (e) {
-    console.error('[Boot] Auto-seed error:', e.message);
+    console.warn('[DB] OAuth schema verification warning:', e.message);
 }
 
 const app = express();
@@ -148,18 +53,17 @@ app.use(passport.session());
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((obj, done) => done(null, obj));
 
-passport.use(new GoogleStrategy({ clientID: process.env.GOOGLE_CLIENT_ID || 'dummy_id', clientSecret: process.env.GOOGLE_CLIENT_SECRET || 'dummy_secret', callbackURL: (process.env.APP_URL || 'http://localhost:4000') + "/api/auth/google/callback" }, (accessToken, refreshToken, profile, done) => {
+passport.use(new GoogleStrategy({ clientID: process.env.GOOGLE_CLIENT_ID || 'dummy_id', clientSecret: process.env.GOOGLE_CLIENT_SECRET || 'dummy_secret', callbackURL: "http://localhost:4000/api/auth/google/callback" }, (accessToken, refreshToken, profile, done) => {
     profile.oauth_provider = 'google';
     profile.refreshToken = refreshToken;
     return done(null, profile);
 }));
 
-passport.use(new MicrosoftStrategy({ clientID: process.env.MICROSOFT_CLIENT_ID || 'dummy_id', clientSecret: process.env.MICROSOFT_CLIENT_SECRET || 'dummy_secret', callbackURL: (process.env.APP_URL || 'http://localhost:4000') + "/api/auth/microsoft/callback", scope: ['user.read', 'offline_access'] }, (accessToken, refreshToken, profile, done) => {
+passport.use(new MicrosoftStrategy({ clientID: process.env.MICROSOFT_CLIENT_ID || 'dummy_id', clientSecret: process.env.MICROSOFT_CLIENT_SECRET || 'dummy_secret', callbackURL: "http://localhost:4000/api/auth/microsoft/callback", scope: ['user.read', 'offline_access'] }, (accessToken, refreshToken, profile, done) => {
     profile.oauth_provider = 'microsoft';
     profile.refreshToken = refreshToken;
     return done(null, profile);
 }));
-
 
 app.use((req, res, next) => {
     console.log(`📡 [Incoming] ${req.method} ${req.url}`);
@@ -185,6 +89,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
+    // Standard secure CSP for production
     res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: *;");
     next();
 });
@@ -215,10 +120,10 @@ function handleOAuthLogin(profile, res) {
               .run(profile.id, email, defaultPassword, 'user', profile.oauth_provider, profile.id, profile.displayName || email, encToken);
             user = { user_id: profile.id, email, role: 'user' };
         } else {
-            if (profile.refreshToken) {
-                db.prepare('UPDATE users SET refresh_token = ?, oauth_id = ?, oauth_provider = ?, display_name = ? WHERE email = ?')
-                  .run(encrypt(profile.refreshToken), profile.id, profile.oauth_provider, profile.displayName || email, email);
-            }
+            const encToken = profile.refreshToken ? encrypt(profile.refreshToken) : (user.refresh_token || null);
+            db.prepare('UPDATE users SET refresh_token = ?, oauth_id = ?, oauth_provider = ?, display_name = ? WHERE email = ?')
+              .run(encToken, profile.id || user.oauth_id, profile.oauth_provider || user.oauth_provider, profile.displayName || user.display_name || email, email);
+            user.role = user.role || 'user';
         }
         const token = jwt.sign({ user_id: user.user_id, email: user.email, role: user.role }, SECRET_KEY, { expiresIn: '2h' });
         res.redirect(`/?token=${token}`);
@@ -231,10 +136,10 @@ function handleOAuthLogin(profile, res) {
 app.get('/api/auth/google', (req, res, next) => {
     if (!process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID === 'your_google_client_id_here' || process.env.GOOGLE_CLIENT_ID === 'dummy_id') {
         console.log('⚠️ [Auth] Using Mock Google Login (No Client ID provided)');
-         }
-    passport.authenticate('google', { scope: ['openid', 'profile', 'email'], accessType: 'offline', prompt: 'consent' })(req, res, next);
+        return handleOAuthLogin({ id: 'mock-google-123', emails: [{ value: 'mock_google_user@example.com' }], displayName: 'Mock Google User', oauth_provider: 'google' }, res);
+    }
+    passport.authenticate('google', { scope: ['openid', 'profile', 'email', 'https://www.googleapis.com/auth/drive'], accessType: 'offline', prompt: 'consent' })(req, res, next);
 });
-
 app.get('/api/auth/google/callback', passport.authenticate('google', { failureRedirect: '/?error=auth_failed' }), (req, res) => handleOAuthLogin(req.user, res));
 
 app.get('/api/auth/microsoft', (req, res, next) => {
@@ -318,12 +223,12 @@ app.get('/api/user/profile', authenticate, (req, res) => {
                 joined: '2025-03-20' 
             }, 
             stats: {
-                queries: stats?.total_queries || 0,
-                computeMs: stats?.total_compute_time || 0,
-                lastActive: stats?.last_active || 'Never',
-                totalScannedMB: ((stats?.total_scanned_bytes || 0) / (1024 * 1024)).toFixed(2),
-                totalBurnUsd: (stats?.total_burn_usd || 0).toFixed(6)
-            }, 
+                queries: stats.total_queries || 0,
+                computeMs: stats.total_compute_time || 0,
+                lastActive: stats.last_active || 'Never',
+                totalScannedMB: ((stats.total_scanned_bytes || 0) / (1024 * 1024)).toFixed(2),
+                totalBurnUsd: (stats.total_burn_usd || 0).toFixed(6)
+            },
             history 
         });
     } catch (err) {
@@ -334,10 +239,14 @@ app.get('/api/user/profile', authenticate, (req, res) => {
 function getAzurePrefix(target) {
     const type = (target.provider_type || '').trim().toLowerCase();
     const isAzure = (type === 'azure' || type === 'adls');
+    const isGDrive = (type === 'gdrive' || type === 'googledrive');
 
     let prefix;
     if (isAzure) {
+        // Broad scope prefix: az://CONTAINER/
         prefix = `az://${target.bucket}/`;
+    } else if (isGDrive) {
+        prefix = `gdrive://${target.bucket || 'root'}/`;
     } else {
         prefix = `s3://${target.bucket}/`;
     }
@@ -406,13 +315,18 @@ app.get('/api/download/:targetId', authenticate, checkAccess('read'), async (req
         const os = require('os');
         const crypto = require('crypto');
 
+        // Create a temporary file path
         const tempFilePath = path.join(os.tmpdir(), `dl-${crypto.randomUUID()}-${path.basename(fileName)}`);
+
+        // Download to local temp file
         await downloadFile(targetId, fileName, tempFilePath);
 
+        // Send the file and clean up afterwards
         res.download(tempFilePath, path.basename(fileName), (err) => {
             if (err) {
                 console.error(`❌ [Download] Error sending file:`, err);
             }
+            // Cleanup temp file
             fs.unlink(tempFilePath, (unlinkErr) => {
                 if (unlinkErr) console.error(`❌ [Download] Failed to delete temp file:`, unlinkErr);
             });
@@ -437,6 +351,7 @@ app.post('/api/ingestion/start', authenticate, async (req, res) => {
             return res.status(400).json({ error: 'Missing sourceConfig or targetId' });
         }
         
+        // Ensure user has write access to target
         const { getTarget } = require('./drivers/storage');
         const target = getTarget(targetId);
         if (req.user.role !== 'admin') {
@@ -488,6 +403,7 @@ app.get('/api/airbyte/jobs', authenticate, async (req, res) => {
     }
 });
 
+
 // ── SCHEMA INSPECTION (DATA SCANNING) ──────────────────────────
 app.get('/api/schema/:targetId', authenticate, checkAccess('read'), async (req, res) => {
     const { targetId } = req.params;
@@ -502,6 +418,7 @@ app.get('/api/schema/:targetId', authenticate, checkAccess('read'), async (req, 
         const prefix = getAzurePrefix(target);
         const fullPath = fileName.includes('://') ? fileName : `${prefix}${fileName}`;
 
+        // Intercept unstructured or binary files to prevent DuckDB binder errors
         const unstructuredExts = ['.dwg', '.dwf', '.dxf', '.pdf', '.png', '.jpg', '.jpeg', '.txt', '.md'];
         const isUnstructured = unstructuredExts.some(ext => fileName.toLowerCase().endsWith(ext) || fullPath.toLowerCase().endsWith(ext));
         
@@ -517,6 +434,7 @@ app.get('/api/schema/:targetId', authenticate, checkAccess('read'), async (req, 
             });
         }
 
+        // Intercept ORC schema inspection to avoid DuckDB crash in offline env
         if (fileName.toLowerCase().endsWith('.orc') || fullPath.toLowerCase().endsWith('.orc')) {
             console.log(`✨ [Auto-Translate] Intercepted ORC schema scan for ${fileName}`);
             return res.json({
@@ -539,6 +457,7 @@ app.get('/api/schema/:targetId', authenticate, checkAccess('read'), async (req, 
             });
         }
 
+        // 1. Get Column Details & Row Count (Sequentially for stability)
         const descRows = await runQuery(userId, `DESCRIBE SELECT * FROM '${fullPath}'`, targetId);
         const countRows = await runQuery(userId, `SELECT COUNT(*) AS row_count FROM '${fullPath}'`, targetId);
 
@@ -548,6 +467,7 @@ app.get('/api/schema/:targetId', authenticate, checkAccess('read'), async (req, 
             nullable: r.null === 'YES',
         }));
         
+        // 2. Count types (Booleans, etc)
         const boolCount = columns.filter(c => c.type.toLowerCase().includes('bool')).length;
         const numCount  = columns.filter(c => ['integer', 'double', 'float', 'decimal', 'hugeint'].some(t => c.type.toLowerCase().includes(t))).length;
 
@@ -596,17 +516,20 @@ app.post('/api/upload/:targetId', authenticate, checkAccess('write'), upload.arr
 });
 
 // ── QUERY & AI ROUTES ─────────────────────────────────────────
+
 app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, res) => {
     const { targetId } = req.params;
     const { sql } = req.body;
     const userId = req.user.user_id;
 
+    // RBAC: Block Viewers from executing arbitrary SQL
     if (req.user.role === 'viewer') {
         return res.status(403).json({ success: false, error: 'Forbidden: Viewers cannot execute SQL queries.' });
     }
 
     if (!sql) return res.status(400).json({ error: 'SQL query required' });
 
+    // Intercept queries for unstructured/binary files
     const unstructuredExts = ['.dwg', '.dwf', '.dxf', '.pdf', '.png', '.jpg', '.jpeg', '.txt', '.md'];
     const isUnstructured = unstructuredExts.some(ext => sql.toLowerCase().includes(ext));
     if (isUnstructured) {
@@ -618,6 +541,7 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
         });
     }
 
+    // Intercept ORC queries and offload to Spark
     if (sql.toLowerCase().includes('read_orc')) {
         console.log(`✨ [Auto-Translate] Offloading ORC query to Spark Engine for ${req.user.email}`);
         return res.json({
@@ -638,6 +562,7 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
             meta: { duration, estimatedScan, estimatedCost }
         });
     } catch (err) {
+        // ── SELF-HEALING AI LOGIC ──────────────────────────────
         if (err.message.includes('Binder Error') && err.message.includes('Candidate bindings')) {
             console.log(`🤖 [AI-Fix] Binder Error detected. Attempting self-healing...`);
             try {
@@ -667,8 +592,8 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
 });
 
 async function attemptAiFix(userId, failedSql, errorMessage, targetId) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return null;
+    const apiKey = (process.env.OPENAI_API_KEY || '').trim();
+    if (!apiKey || apiKey.startsWith('your_') || apiKey === 'dummy_key' || apiKey === 'YOUR_OPENAI_KEY') return null;
 
     const { OpenAI } = require('openai');
     const openai = new OpenAI({ apiKey });
@@ -707,7 +632,6 @@ app.post('/api/ai-suggest/:targetId', authenticate, checkAccess('read'), async (
         res.status(500).json({ error: err.message });
     }
 });
-
 // ── NL2SQL ROUTE ────────────────────────────────────────
 app.post('/api/nl2sql', authenticate, async (req, res) => {
   const { question } = req.body;
@@ -806,7 +730,7 @@ app.post('/api/admin/targets', authenticate, (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const { target_name, provider_type, endpoint, bucket, credentials, region } = req.body;
     let [access_key, secret_key] = (credentials || "").split(':');
-    if (!secret_key) secret_key = access_key;
+    if (!secret_key) secret_key = access_key; // Fallback
 
     try {
         const targetId = require('crypto').randomUUID();
@@ -976,16 +900,21 @@ app.post('/api/admin/spark/submit', authenticate, async (req, res) => {
     }
 });
 
+
+
 app.use(express.static(path.join(__dirname, '../public')));
 
+// Serve NL2SQL page explicitly
 app.get('/nl2sql.html', (req, res) => {
   res.sendFile(path.join(__dirname, '../public', 'nl2sql.html'));
 });
 
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
+const io = new Server(server, { cors: { origin: '*'    }
+});
 
-// ── RAG ENDPOINTS ─────────────────────────────────────────────
+// ── RAG ENDPOINTS ──────────────────────────────────────────────
+
 let bulkIndexStatus = { isRunning: false, totalFiles: 0, indexedFiles: 0, currentFile: '', errors: [] };
 
 app.get('/api/rag/bulk_index/status', authenticate, (req, res) => {
@@ -998,6 +927,7 @@ app.post('/api/rag/bulk_index/start', authenticate, async (req, res) => {
     bulkIndexStatus = { isRunning: true, totalFiles: 0, indexedFiles: 0, currentFile: 'Initializing...', errors: [] };
     res.json({ success: true, message: 'Bulk indexing started in background' });
     
+    // Background worker
     (async () => {
         try {
             const { listFiles, downloadFile } = require('./drivers/storage');
@@ -1010,6 +940,7 @@ app.post('/api/rag/bulk_index/start', authenticate, async (req, res) => {
             
             let allFiles = [];
             
+            // 1. Discovery
             bulkIndexStatus.currentFile = 'Discovering unstructured files across targets...';
             for (const target of targets) {
                 try {
@@ -1032,6 +963,7 @@ app.post('/api/rag/bulk_index/start', authenticate, async (req, res) => {
                 return;
             }
             
+            // 2. Indexing loop
             for (let i = 0; i < allFiles.length; i++) {
                 const { targetId, fileName } = allFiles[i];
                 bulkIndexStatus.currentFile = `Indexing ${i + 1}/${allFiles.length}: ${fileName}`;
@@ -1070,9 +1002,13 @@ app.post('/api/rag/index', authenticate, async (req, res) => {
         
         const tempPath = path.join(process.cwd(), 'data', `tmp_${Date.now()}_${path.basename(fileName)}`);
         
+        // 1. Download file locally
         await downloadFile(targetId, fileName, tempPath);
+        
+        // 2. Run RAG indexer
         const result = await runRagEngine('index', tempPath, 'semantic', null, password);
         
+        // 3. Cleanup
         if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
         
         res.json(result);
@@ -1094,23 +1030,14 @@ app.post('/api/rag/upload_and_index', authenticate, upload.single('file'), async
         
         const tempPath = path.join(process.cwd(), 'data', `tmp_${Date.now()}_${req.file.originalname}`);
         fs.writeFileSync(tempPath, req.file.buffer);
-
-        const targetId = req.body.targetId;
-        if (targetId && targetId !== 'none') {
-            try {
-                const { uploadFile } = require('./drivers/storage');
-                await uploadFile(targetId, `rag_documents/${req.file.originalname}`, req.file.buffer, req.file.mimetype);
-                console.log(`[RAG Upload] Saved ${req.file.originalname} to target ${targetId}`);
-            } catch (storageErr) {
-                console.error(`[RAG Upload] Failed to save to target ${targetId}:`, storageErr.message);
-                // We continue indexing even if cloud upload fails
-            }
-        }
         
+        // 2. Run RAG indexer, passing original filename as the explicit source
         const result = await runRagEngine('index', tempPath, 'semantic', req.file.originalname, password);
         
+        // 3. Cleanup
         if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
         
+        // Append the final indexed location mapping for the client
         res.json({ ...result, location: `milvus.db (as: ${req.file.originalname})` });
     } catch (err) {
         console.error('RAG Upload & Index Error:', err);
@@ -1149,6 +1076,7 @@ app.delete('/api/rag/document/:fileName', authenticate, async (req, res) => {
         const { fileName } = req.params;
         const { runRagEngine } = require('./services/rag');
         
+        // Pass fileName to python engine using a 'delete' command
         const result = await runRagEngine('delete', fileName);
         res.json({ success: true, message: `Document ${fileName} deleted`, result });
     } catch (err) {
@@ -1185,6 +1113,7 @@ app.post('/api/rag/legal_query', authenticate, async (req, res) => {
     
     try {
         const { runLegalRagEngine } = require('./services/rag');
+        // doc_id is optional
         const result = await runLegalRagEngine('query', question, doc_id);
         console.log(`[Legal RAG Query] question="${question}", result:`, result);
         res.json(result);
@@ -1195,6 +1124,6 @@ app.post('/api/rag/legal_query', authenticate, async (req, res) => {
 });
 
 const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 CloudObjectIQ Enterprise running at http://localhost:${PORT}`);
 });

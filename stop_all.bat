@@ -1,23 +1,18 @@
 @echo off
-echo ========================================================
-echo Stopping ALL CloudObjectIQ Services
-echo ========================================================
+title Stop CloudObjectIQ Services
+echo Stopping CloudObjectIQ Server and MinIO...
 
-echo.
-echo [1/3] Stopping Native MinIO Server...
-taskkill /IM minio.exe /F 2>nul
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :4000') do (
+    taskkill /f /pid %%a 2>nul
+)
 
-echo.
-echo [2/3] Stopping Node.js Application...
-cd /d D:\CloudObjectIQ_Ready
-powershell -ExecutionPolicy Bypass -File .\stop_app.ps1
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :9000') do (
+    taskkill /f /pid %%a 2>nul
+)
 
-echo.
-echo [3/3] Stopping Milvus via Docker Compose...
-docker-compose -f milvus-docker-compose.yml down
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :9001') do (
+    taskkill /f /pid %%a 2>nul
+)
 
-echo.
-echo ========================================================
-echo All services stopped successfully!
-echo ========================================================
-pause
+echo Services stopped.
+timeout /t 2 /nobreak >nul

@@ -21,6 +21,10 @@ exports.up = function(db) {
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       role TEXT DEFAULT 'viewer',
+      oauth_provider TEXT,
+      oauth_id TEXT,
+      display_name TEXT,
+      refresh_token TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 

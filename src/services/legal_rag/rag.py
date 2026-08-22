@@ -1,12 +1,17 @@
 import asyncio
+import os
 from typing import TypedDict, Annotated, Sequence
 from openai import AsyncOpenAI
 from pymilvus import MilvusClient
 from langgraph.graph import StateGraph, END
 from duckduckgo_search import DDGS
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Initialize OpenAI client
-client = AsyncOpenAI(api_key="YOUR_OPENAI_KEY")
+api_key = os.getenv("OPENAI_API_KEY")
+client = AsyncOpenAI(api_key=api_key) if api_key else None
 
 # Initialize Milvus Lite
 milvus_client = MilvusClient("./milvus_demo.db")

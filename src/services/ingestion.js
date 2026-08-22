@@ -2,6 +2,9 @@ const ftp = require("basic-ftp");
 const Client = require("ssh2-sftp-client");
 const storage = require("../drivers/storage");
 const path = require("path");
+const fs = require("fs");
+const os = require("os");
+const crypto = require("crypto");
 const { PassThrough } = require("stream");
 
 async function ingestFile(sourceConfig, targetId, targetFolder) {
@@ -17,8 +20,37 @@ async function ingestFile(sourceConfig, targetId, targetFolder) {
         return await ingestFromFTP(host, port, user, password, sourcePath, targetId, destinationKey);
     } else if (type === 'sftp') {
         return await ingestFromSFTP(host, port, user, password, sourcePath, targetId, destinationKey);
+    } else if (type === 'gdrive' || type === 'googledrive') {
+        return await ingestFromGDrive(sourceConfig, targetId, destinationKey);
     } else {
         throw new Error(`Unsupported ingestion source type: ${type}`);
+    }
+}
+
+async function ingestFromGDrive(sourceConfig, targetId, destinationKey) {
+    const gdrive = require("../drivers/gdrive");
+    const fs = require('fs');
+    const os = require('os');
+    const crypto = require('crypto');
+
+    const tempFile = path.join(os.tmpdir(), `gdrive-ingest-${crypto.randomUUID()}-${path.basename(sourceConfig.sourcePath)}`);
+    
+    // Download source file to temp
+    await gdrive.downloadFile({
+        bucket: sourceConfig.folderId || sourceConfig.host || 'root',
+        access_key: sourceConfig.user || '',
+        secret_key: sourceConfig.password || ''
+    }, sourceConfig.sourcePath, tempFile);
+
+    const fileStream = fs.createReadStream(tempFile);
+    try {
+        const uploadResult = await storage.uploadStream(targetId, destinationKey, fileStream, 'application/octet-stream');
+        return uploadResult;
+    } finally {
+        fileStream.close();
+        if (fs.existsSync(tempFile)) {
+            try { fs.unlinkSync(tempFile); } catch (e) {}
+        }
     }
 }
 

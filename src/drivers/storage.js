@@ -1,18 +1,12 @@
-// Storage driver — Supports dynamic targets via the metadata DB
 const { S3Client, ListObjectsV2Command, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { BlobServiceClient } = require('@azure/storage-blob');
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+const gdrive = require('./gdrive');
 
-// Ensure the data directory exists before opening SQLite
-const dbPath = process.env.DATABASE_PATH || path.resolve(process.cwd(), 'data/metadata.db');
-const dbDir = path.dirname(dbPath);
-if (!fs.existsSync(dbDir)) {
-    fs.mkdirSync(dbDir, { recursive: true });
-}
-
-const db = new Database(dbPath);
+const db = new Database('./data/metadata.db');
 
 // ── Target Resolver ───────────────────────────────────────────
 function getTarget(targetId) {
@@ -37,7 +31,7 @@ function getS3Client(target) {
 
     return new S3Client({
         endpoint:    ep,
-        region: (ep.includes('.r2.') ? 'auto' : (target.region || 'us-east-1')),
+        region:      target.region || 'us-east-1',
         credentials: { 
             accessKeyId: target.access_key, 
             secretAccessKey: target.secret_key 
@@ -90,7 +84,9 @@ const MOCKS = {
 
 async function testConnection(config) {
     try {
-        if (config.type === 's3' || config.type === 'r2') {
+        if (config.type === 'gdrive' || config.type === 'googledrive') {
+            return await gdrive.testConnection(config);
+        } else if (config.type === 's3') {
             const S3 = require('@aws-sdk/client-s3');
             const ep = _ensureProtocol(config.endpoint);
             const client = new S3.S3Client({
@@ -101,10 +97,11 @@ async function testConnection(config) {
             return { success: true };
         } else if (config.type === 'azure' || config.type === 'adls') {
             const Azure = require('@azure/storage-blob');
+            // Use dummy target for builder
             const blobService = getAzureClient({ 
-               endpoint: config.endpoint, 
-               access_key: config.credentials.split(':')[0], 
-               secret_key: config.credentials.split(':')[1] 
+                endpoint: config.endpoint, 
+                access_key: config.credentials.split(':')[0], 
+                secret_key: config.credentials.split(':')[1] 
             });
             const container = blobService.getContainerClient(config.bucket);
             await container.getProperties();
@@ -120,7 +117,7 @@ async function listFiles(targetId) {
 
     try {
         let results = [];
-        if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2') {
+        if (target.provider_type === 'minio' || target.provider_type === 's3') {
             const s3 = getS3Client(target);
             const cmd = new ListObjectsV2Command({ Bucket: target.bucket });
             const res = await s3.send(cmd);
@@ -155,6 +152,7 @@ async function listFiles(targetId) {
             }
             const data = await res.json();
             results = (data.files || []).map(f => {
+                // Remove prefix to get relative filename
                 let relPath = f.path;
                 if (relPath.startsWith(dbfsPath)) relPath = relPath.slice(dbfsPath.length);
                 if (relPath.startsWith('/')) relPath = relPath.slice(1);
@@ -164,15 +162,19 @@ async function listFiles(targetId) {
                     lastModified: f.modification_time ? new Date(f.modification_time).toISOString() : ''
                 };
             });
+        } else if (target.provider_type === 'gdrive' || target.provider_type === 'googledrive') {
+            results = await gdrive.listFiles(target);
         } else {
             throw new Error(`Provider ${target.provider_type} not implemented`);
         }
 
+        // Group Spark datasets (directories ending in .parquet, .orc, .csv, .json)
         const datasets = new Map();
         const rawResults = [];
 
         for (const f of results) {
-            const match = f.name.match(/^(.*?\. (?:parquet|orc|csv|json|delta|iceberg))\//i);
+            // Check if this file is inside a dataset directory
+            const match = f.name.match(/^(.*?\.(?:parquet|orc|csv|json|delta|iceberg))\//i);
             if (match) {
                 const datasetName = match[1];
                 if (!datasets.has(datasetName)) {
@@ -190,6 +192,7 @@ async function listFiles(targetId) {
         
         const finalResults = [...rawResults, ...Array.from(datasets.values())];
 
+        // Filter out metadata files that confuse DuckDB/Users
         const ignoredExtensions = ['.crc', '.tmp', '.pending'];
         const ignoredNames = ['_success', '_metadata', '_common_metadata'];
 
@@ -198,7 +201,7 @@ async function listFiles(targetId) {
             const basename = path.basename(name).toLowerCase();
             if (ignoredNames.includes(basename)) return false;
             if (ignoredExtensions.some(ext => name.endsWith(ext))) return false;
-            if (basename.startsWith('.')) return false;
+            if (basename.startsWith('.')) return false; // Hide hidden files
             return true;
         });
     } catch (err) {
@@ -217,7 +220,7 @@ async function listFiles(targetId) {
 async function uploadFile(targetId, filename, buffer, mimetype) {
     const target = getTarget(targetId);
 
-    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2') {
+    if (target.provider_type === 'minio' || target.provider_type === 's3') {
         const s3 = getS3Client(target);
         const cmd = new PutObjectCommand({
             Bucket: target.bucket, Key: filename,
@@ -232,7 +235,7 @@ async function uploadFile(targetId, filename, buffer, mimetype) {
         const containerClient = blobService.getContainerClient(target.bucket);
         const blockBlob = containerClient.getBlockBlobClient(filename);
         await blockBlob.upload(buffer, buffer.length, {
-            blobHTTPHeaders: { blobContentType: mimetype || 'application/octet-stream' }
+            blobHTTPHeaders: { blobContentType: mimetype || 'application/octet-stream' },
         });
         return { container: target.bucket, key: filename };
     }
@@ -263,13 +266,17 @@ async function uploadFile(targetId, filename, buffer, mimetype) {
         return { bucket: target.bucket, key: destPath };
     }
 
+    if (target.provider_type === 'gdrive' || target.provider_type === 'googledrive') {
+        return await gdrive.uploadFile(target, filename, buffer, mimetype);
+    }
+
     throw new Error(`Upload not implemented for ${target.provider_type}`);
 }
 
 async function uploadStream(targetId, filename, stream, mimetype, sizeHint) {
     const target = getTarget(targetId);
 
-    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2') {
+    if (target.provider_type === 'minio' || target.provider_type === 's3') {
         const { Upload } = require('@aws-sdk/lib-storage');
         const s3 = getS3Client(target);
         
@@ -300,6 +307,10 @@ async function uploadStream(targetId, filename, stream, mimetype, sizeHint) {
         return { container: target.bucket, key: filename };
     }
 
+    if (target.provider_type === 'gdrive' || target.provider_type === 'googledrive') {
+        return await gdrive.uploadStream(target, filename, stream, mimetype);
+    }
+
     throw new Error(`Upload stream not implemented for ${target.provider_type}`);
 }
 
@@ -307,22 +318,27 @@ async function downloadFile(targetId, filename, destPath) {
     const fs = require('fs');
     const target = getTarget(targetId);
 
+    // Auto-strip prefixes to prevent NoSuchKey errors
     let cleanFilename = filename;
     const s3Prefix = `s3://${target.bucket}/`;
     const azPrefix = `az://${target.bucket}/`;
+    const gdPrefix = `gdrive://${target.bucket}/`;
     
     if (cleanFilename.startsWith(s3Prefix)) {
         cleanFilename = cleanFilename.replace(s3Prefix, '');
     } else if (cleanFilename.startsWith(azPrefix)) {
         cleanFilename = cleanFilename.replace(azPrefix, '');
+    } else if (cleanFilename.startsWith(gdPrefix)) {
+        cleanFilename = cleanFilename.replace(gdPrefix, '');
     } else if (cleanFilename.startsWith(`${target.bucket}/`)) {
         cleanFilename = cleanFilename.replace(`${target.bucket}/`, '');
     }
+    // Remove leading slash if any
     if (cleanFilename.startsWith('/')) {
         cleanFilename = cleanFilename.substring(1);
     }
 
-    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2') {
+    if (target.provider_type === 'minio' || target.provider_type === 's3') {
         const { GetObjectCommand } = require('@aws-sdk/client-s3');
         const s3 = getS3Client(target);
         const cmd = new GetObjectCommand({ Bucket: target.bucket, Key: cleanFilename });
@@ -363,6 +379,10 @@ async function downloadFile(targetId, filename, destPath) {
         return;
     }
 
+    if (target.provider_type === 'gdrive' || target.provider_type === 'googledrive') {
+        return await gdrive.downloadFile(target, cleanFilename, destPath);
+    }
+
     throw new Error(`Download not implemented for ${target.provider_type}`);
 }
 
@@ -372,5 +392,6 @@ module.exports = {
     uploadStream,
     downloadFile,
     getTarget,
-    testConnection
+    testConnection,
+    gdrive
 };
