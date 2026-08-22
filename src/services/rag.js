@@ -3,14 +3,22 @@ const path = require('path');
 const fs = require('fs');
 
 function getPythonPath() {
-    if (process.env.PYTHON_PATH && fs.existsSync(process.env.PYTHON_PATH)) {
+    if (process.env.PYTHON_PATH && (fs.existsSync(process.env.PYTHON_PATH) || process.env.PYTHON_PATH === 'python3' || process.env.PYTHON_PATH === 'python')) {
         return process.env.PYTHON_PATH;
     }
-    const defaultUserPath = 'C:\\Users\\tadim\\AppData\\Local\\Programs\\Python\\Python311\\python.exe';
-    if (fs.existsSync(defaultUserPath)) {
-        return defaultUserPath;
+    if (process.platform === 'win32') {
+        const defaultUserPath = 'C:\\Users\\tadim\\AppData\\Local\\Programs\\Python\\Python311\\python.exe';
+        if (fs.existsSync(defaultUserPath)) {
+            return defaultUserPath;
+        }
+        return 'python';
     }
-    return 'python';
+    // On Linux / Docker / Render
+    if (fs.existsSync('/usr/bin/python3')) return '/usr/bin/python3';
+    if (fs.existsSync('/usr/bin/python')) return '/usr/bin/python';
+    if (fs.existsSync('/usr/local/bin/python3')) return '/usr/local/bin/python3';
+    if (fs.existsSync('/usr/local/bin/python')) return '/usr/local/bin/python';
+    return 'python3';
 }
 
 function runRagEngine(action, payload, mode = 'hybrid', sourceName = null, password = null) {
