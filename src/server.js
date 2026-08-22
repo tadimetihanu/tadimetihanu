@@ -247,13 +247,15 @@ function getAzurePrefix(target) {
     const type = (target.provider_type || '').trim().toLowerCase();
     const isAzure = (type === 'azure' || type === 'adls');
     const isGDrive = (type === 'gdrive' || type === 'googledrive');
+    const isR2 = (type === 'r2' || type === 'cloudflare');
 
     let prefix;
     if (isAzure) {
-        // Broad scope prefix: az://CONTAINER/
         prefix = `az://${target.bucket}/`;
     } else if (isGDrive) {
         prefix = `gdrive://${target.bucket || 'root'}/`;
+    } else if (isR2) {
+        prefix = `r2://${target.bucket}/`;
     } else {
         prefix = `s3://${target.bucket}/`;
     }

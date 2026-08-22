@@ -1001,10 +1001,11 @@ function renderTargets() {
         li.className = 'browser-item';
         li.style.listStyle = 'none';
 
-        // Use orange for MinIO and Azure, Google branding for Google Drive
+        // Use orange for MinIO and Azure, Google branding for Google Drive, R2 for Cloudflare
         const type = (t.provider_type || '').toLowerCase();
         const isOrange = ['minio', 'azure', 'adls', 'blob'].includes(type);
         const isGDrive = ['gdrive', 'googledrive', 'drive'].includes(type);
+        const isR2 = ['r2', 'cloudflare'].includes(type);
 
         let bgStyle = isOrange ? 'background:var(--orange);' : 'background:var(--primary);';
         let badgeContent = (t.provider_type || 'S')[0].toUpperCase();
@@ -1012,6 +1013,9 @@ function renderTargets() {
         if (isGDrive) {
             bgStyle = 'background: linear-gradient(135deg, #4285F4 0%, #34A853 45%, #FBBC05 75%, #EA4335 100%); box-shadow: 0 2px 8px rgba(66, 133, 244, 0.4);';
             badgeContent = '📁';
+        } else if (isR2) {
+            bgStyle = 'background: #F38020; box-shadow: 0 2px 8px rgba(243, 128, 32, 0.4);';
+            badgeContent = 'R2';
         }
 
         li.innerHTML = `
@@ -1513,6 +1517,7 @@ window.openTargetEditor = async (targetId = null) => {
                 <div><label class="cfg-lbl">Provider</label>
                     <select id="tgt-type" class="cfg-input" style="height:44px; width:104%" onchange="window.handleTargetTypeChange(this.value)">
                         <option value="gdrive" ${target.provider_type === 'gdrive' || target.provider_type === 'googledrive' ? 'selected':''}>📁 Google Drive</option>
+                        <option value="r2" ${target.provider_type === 'r2' || target.provider_type === 'cloudflare' ? 'selected':''}>🟠 Cloudflare R2</option>
                         <option value="minio" ${target.provider_type === 'minio'?'selected':''}>MinIO</option>
                         <option value="s3" ${target.provider_type === 's3'?'selected':''}>S3 / MinIO</option>
                         <option value="azure" ${target.provider_type === 'azure'?'selected':''}>Azure Blob</option>
@@ -1522,15 +1527,15 @@ window.openTargetEditor = async (targetId = null) => {
                         <option value="databricks" ${target.provider_type === 'databricks'?'selected':''}>Databricks (DBFS)</option>
                     </select>
                 </div>
-                <div><label class="cfg-lbl" id="lbl-endpoint">Endpoint URL</label><input id="tgt-endpoint" class="cfg-input" value="${target.endpoint || ''}"></div>
+                <div><label class="cfg-lbl" id="lbl-endpoint">Endpoint URL</label><input id="tgt-endpoint" class="cfg-input" placeholder="https://<ACCOUNT_ID>.r2.cloudflarestorage.com" value="${target.endpoint || ''}"></div>
                 <div id="krb-fields-edit" style="display:${target.provider_type==='hdfs'?'block':'none'}; border-top:1px solid var(--border); padding-top:10px; margin-top:10px;">
                      <div><label class="cfg-lbl" style="color:#fbbf24;">Kerberos Principal</label><input id="tgt-principal" class="cfg-input" value="${target.krb_principal || ''}"></div>
                      <div><label class="cfg-lbl" style="color:#fbbf24;">Kerberos Keytab Path</label><input id="tgt-keytab" class="cfg-input" value="${target.krb_keytab || ''}"></div>
                 </div>
-                <div><label class="cfg-lbl" id="lbl-bucket">Bucket / Folder ID</label><input id="tgt-bucket" class="cfg-input" value="${target.bucket || ''}"></div>
-                <div><label class="cfg-lbl" id="lbl-access">Access Key / Service Account Email</label><input id="tgt-access" class="cfg-input" value="${target.access_key || ''}"></div>
-                <div><label class="cfg-lbl" id="lbl-secret">Secret Key / Private Key JSON (Optional)</label><input id="tgt-secret" class="cfg-input" type="password" value="${target.secret_key || ''}"></div>
-                <div><label class="cfg-lbl">Region</label><input id="tgt-region" class="cfg-input" value="${target.region || ''}"></div>
+                <div><label class="cfg-lbl" id="lbl-bucket">Bucket / Folder ID</label><input id="tgt-bucket" class="cfg-input" placeholder="bucket-name" value="${target.bucket || ''}"></div>
+                <div><label class="cfg-lbl" id="lbl-access">Access Key ID / Account Email</label><input id="tgt-access" class="cfg-input" value="${target.access_key || ''}"></div>
+                <div><label class="cfg-lbl" id="lbl-secret">Secret Access Key / Private Key (Optional)</label><input id="tgt-secret" class="cfg-input" type="password" value="${target.secret_key || ''}"></div>
+                <div><label class="cfg-lbl">Region</label><input id="tgt-region" class="cfg-input" placeholder="auto" value="${target.region || ''}"></div>
             </div>
             <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
                 <button class="btn btn-secondary" onclick="window.showAdminTab('targets')">Cancel</button>
@@ -1546,10 +1551,16 @@ window.handleTargetTypeChange = (type) => {
     const endpointInput = document.getElementById('tgt-endpoint');
     const bucketLabel = document.getElementById('lbl-bucket');
     const bucketInput = document.getElementById('tgt-bucket');
+    const regionInput = document.getElementById('tgt-region');
+
     if (type === 'gdrive') {
         if (endpointInput && !endpointInput.value) endpointInput.value = 'https://www.googleapis.com/drive/v3';
         if (bucketLabel) bucketLabel.innerText = 'Folder ID (or root)';
         if (bucketInput && !bucketInput.value) bucketInput.value = 'root';
+    } else if (type === 'r2' || type === 'cloudflare') {
+        if (endpointInput) endpointInput.placeholder = 'https://<ACCOUNT_ID>.r2.cloudflarestorage.com';
+        if (bucketLabel) bucketLabel.innerText = 'R2 Bucket Name';
+        if (regionInput && !regionInput.value) regionInput.value = 'auto';
     } else {
         if (bucketLabel) bucketLabel.innerText = 'Bucket / Container';
     }

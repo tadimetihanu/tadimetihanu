@@ -106,16 +106,17 @@ function calculateCost(sql, rows) {
 async function initSecret(target) {
     const type = target.provider_type;
 
-    if (type === 'minio' || type === 's3') {
+    if (type === 'minio' || type === 's3' || type === 'r2' || type === 'cloudflare') {
         const rawEp = target.endpoint || '';
         const ep = rawEp.replace(/^https?:\/\//, '').replace(/\/$/, '');
-        const ssl = rawEp.startsWith('https');
-        const region = target.region || 'us-east-1';
+        const ssl = !rawEp.startsWith('http://');
+        const region = target.region || (type === 'r2' || type === 'cloudflare' ? 'auto' : 'us-east-1');
+        const secretName = `s3_${target.target_id || target.bucket}`.replace(/[^a-z0-9_]/gi, '_');
 
         const cmds = [
             `SET s3_url_style='path'`,
             `SET s3_use_ssl=${ssl}`,
-            `CREATE OR REPLACE SECRET minio_secret (
+            `CREATE OR REPLACE SECRET ${secretName} (
                 TYPE S3,
                 KEY_ID '${target.access_key}',
                 SECRET '${target.secret_key}',
@@ -176,6 +177,11 @@ async function runQuery(userId, sql, targetId) {
             await initSecret(target);
 
             let executableSql = sql;
+
+            // Handle R2 path prefix (translate r2:// to s3:// for DuckDB)
+            if (target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
+                executableSql = executableSql.replace(/r2:\/\//gi, 's3://');
+            }
 
             // Handle Google Drive file caching and path transformation
             if (target.provider_type === 'gdrive' || target.provider_type === 'googledrive') {

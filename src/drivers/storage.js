@@ -86,11 +86,11 @@ async function testConnection(config) {
     try {
         if (config.type === 'gdrive' || config.type === 'googledrive') {
             return await gdrive.testConnection(config);
-        } else if (config.type === 's3') {
+        } else if (config.type === 's3' || config.type === 'r2' || config.type === 'cloudflare') {
             const S3 = require('@aws-sdk/client-s3');
             const ep = _ensureProtocol(config.endpoint);
             const client = new S3.S3Client({
-                endpoint: ep, region: 'us-east-1', forcePathStyle: true,
+                endpoint: ep, region: (config.type === 'r2' || config.type === 'cloudflare' ? 'auto' : 'us-east-1'), forcePathStyle: true,
                 credentials: { accessKeyId: config.credentials.split(':')[0], secretAccessKey: config.credentials.split(':')[1] }
             });
             await client.send(new S3.HeadBucketCommand({ Bucket: config.bucket }));
@@ -117,7 +117,7 @@ async function listFiles(targetId) {
 
     try {
         let results = [];
-        if (target.provider_type === 'minio' || target.provider_type === 's3') {
+        if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
             const s3 = getS3Client(target);
             const cmd = new ListObjectsV2Command({ Bucket: target.bucket });
             const res = await s3.send(cmd);
@@ -240,7 +240,7 @@ async function listFiles(targetId) {
 async function uploadFile(targetId, filename, buffer, mimetype) {
     const target = getTarget(targetId);
 
-    if (target.provider_type === 'minio' || target.provider_type === 's3') {
+    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
         const s3 = getS3Client(target);
         const cmd = new PutObjectCommand({
             Bucket: target.bucket, Key: filename,
@@ -297,7 +297,7 @@ async function uploadFile(targetId, filename, buffer, mimetype) {
 async function uploadStream(targetId, filename, stream, mimetype, sizeHint) {
     const target = getTarget(targetId);
 
-    if (target.provider_type === 'minio' || target.provider_type === 's3') {
+    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
         const { Upload } = require('@aws-sdk/lib-storage');
         const s3 = getS3Client(target);
         
@@ -343,11 +343,14 @@ async function downloadFile(targetId, filename, destPath) {
     // Auto-strip prefixes to prevent NoSuchKey errors
     let cleanFilename = filename;
     const s3Prefix = `s3://${target.bucket}/`;
+    const r2Prefix = `r2://${target.bucket}/`;
     const azPrefix = `az://${target.bucket}/`;
     const gdPrefix = `gdrive://${target.bucket}/`;
     
     if (cleanFilename.startsWith(s3Prefix)) {
         cleanFilename = cleanFilename.replace(s3Prefix, '');
+    } else if (cleanFilename.startsWith(r2Prefix)) {
+        cleanFilename = cleanFilename.replace(r2Prefix, '');
     } else if (cleanFilename.startsWith(azPrefix)) {
         cleanFilename = cleanFilename.replace(azPrefix, '');
     } else if (cleanFilename.startsWith(gdPrefix)) {
@@ -360,7 +363,7 @@ async function downloadFile(targetId, filename, destPath) {
         cleanFilename = cleanFilename.substring(1);
     }
 
-    if (target.provider_type === 'minio' || target.provider_type === 's3') {
+    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
         const { GetObjectCommand } = require('@aws-sdk/client-s3');
         const s3 = getS3Client(target);
         const cmd = new GetObjectCommand({ Bucket: target.bucket, Key: cleanFilename });
