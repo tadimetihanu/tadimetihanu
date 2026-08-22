@@ -24,6 +24,21 @@ async function boot() {
             `SET s3_url_style='path'`,
             `SET s3_region='us-east-1'`
         ];
+
+        // Auto-configure SSL CA certificate bundle for Linux / Docker environments
+        const possibleCaPaths = [
+            '/etc/ssl/certs/ca-certificates.crt',
+            '/etc/pki/tls/certs/ca-bundle.crt',
+            '/etc/ssl/ca-bundle.pem',
+            '/etc/ssl/cert.pem'
+        ];
+        for (const caPath of possibleCaPaths) {
+            if (fs.existsSync(caPath)) {
+                exts.push(`SET ca_cert_file='${caPath}'`);
+                console.log(`🔒 [DuckDB] Configured CA Cert file: ${caPath}`);
+                break;
+            }
+        }
         for (const cmd of exts) {
             await new Promise((res, rej) => conn.run(cmd, (e) => e ? rej(e) : res()));
         }
@@ -109,7 +124,23 @@ async function initSecret(target) {
         }
 
     } else if (type === 'azure' || type === 'adls') {
-        const connStr = target.endpoint || '';
+        let connStr = target.endpoint || '';
+        
+        // Auto-build connection string if only AccountName and keys were provided
+        if (connStr && !connStr.includes('AccountKey=')) {
+            let accountName = target.access_key || '';
+            let accountKey = target.secret_key || '';
+            if (!accountName && connStr.includes('.blob.core.windows.net')) {
+                const m = connStr.match(/https?:\/\/([^.]+)\.blob\.core\.windows\.net/);
+                if (m) accountName = m[1];
+            } else if (!accountName && !connStr.includes('.')) {
+                accountName = connStr;
+            }
+            if (accountName && accountKey) {
+                connStr = `DefaultEndpointsProtocol=https;AccountName=${accountName};AccountKey=${accountKey};EndpointSuffix=core.windows.net`;
+            }
+        }
+
         const accMatch = connStr.match(/AccountName=([^;]+)/i);
         const accName = accMatch ? accMatch[1] : 'azure';
         const scope = `az://${target.bucket}/`;
