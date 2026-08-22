@@ -351,6 +351,24 @@ def list_sources():
             
     print(json.dumps({"success": True, "sources": list(sources)}))
 
+def extract_search_tokens(question):
+    import re
+    safe_question = question.replace('"', '').replace("'", "")
+    stop_words = {"list", "show", "what", "how", "the", "for", "and", "all", "me", "of", "count", "many", "is", "are", "tell", "about", "items", "item", "with", "in", "from", "does", "have", "contains", "containing", "give"}
+    raw_tokens = [t.strip(",.?!;:()[]{}") for t in safe_question.split()]
+    tokens = set()
+    for t in raw_tokens:
+        if len(t) > 1 and t.lower() not in stop_words:
+            tokens.add(t)
+            tokens.add(t.lower())
+            m = re.match(r'^(\d+)([a-zA-Z]+)$', t)
+            if m:
+                num, unit = m.group(1), m.group(2)
+                tokens.add(f"{num} {unit}")
+                tokens.add(f"{num}{unit}")
+                tokens.add(f"{num}-{unit}")
+    return [t for t in tokens if t]
+
 def query_rag(question, mode="hybrid"):
     print(f"Querying: {question}", file=sys.stderr)
     client = init_milvus()
@@ -373,17 +391,11 @@ def query_rag(question, mode="hybrid"):
         
         if cache_res and len(cache_res[0]) > 0:
             best_match = cache_res[0][0]
-            # Threshold check: Milvus default is usually COSINE (higher is better similarity, or lower distance)
-            # We'll use a conservative threshold check since metric might be COSINE or L2.
-            # If exact match or highly similar:
             is_match = False
             dist = best_match.get('distance', 0)
-            # If L2: distance < 0.2 is very close. If COSINE: distance > 0.9 or distance < 0.1 depending on if it returns similarity or distance.
-            # A safe way is to check if it's very close to 0 or 1.
             if dist < 0.1 or dist > 0.9: 
                 is_match = True
             
-            # Or just check string equality to be absolutely safe on first launch:
             if best_match['entity']['question'].strip().lower() == question.strip().lower():
                 is_match = True
 
@@ -405,17 +417,15 @@ def query_rag(question, mode="hybrid"):
     
     contexts = []
     sources = set()
+    tokens = extract_search_tokens(question)
     
     if mode == "keyword":
-        # Full-text Keyword Search using LIKE filter
-        safe_question = question.replace('"', '').replace("'", "")
-        tokens = [t.replace('mg', '').replace('MG', '') if t.lower().endswith('mg') else t for t in safe_question.split() if len(t) > 1 and t.lower() not in {"list", "show", "what", "how", "the", "for", "and", "all", "me", "of"}]
-        kw_filter = " OR ".join([f'text LIKE "%{t}%"' for t in tokens]) if tokens else f'text LIKE "%{safe_question}%"'
+        kw_filter = " OR ".join([f'text LIKE "%{t}%"' for t in tokens]) if tokens else f'text LIKE "%{question}%"'
         search_res = client.query(
             collection_name=COLLECTION_NAME,
             filter=kw_filter,
             output_fields=["text", "source", "page"],
-            limit=5
+            limit=50
         )
         for hit in search_res:
             text = hit['text']
@@ -431,47 +441,45 @@ def query_rag(question, mode="hybrid"):
         sem_res = client.search(
             collection_name=COLLECTION_NAME,
             data=[query_vector],
-            limit=30,
+            limit=40,
             output_fields=["text", "source", "page"]
         )
         
         # 2. Keyword Search
-        safe_question = question.replace('"', '').replace("'", "")
-        tokens = [t.replace('mg', '').replace('MG', '') if t.lower().endswith('mg') else t for t in safe_question.split() if len(t) > 1 and t.lower() not in {"list", "show", "what", "how", "the", "for", "and", "all", "me", "of"}]
-        kw_filter = " OR ".join([f'text LIKE "%{t}%"' for t in tokens]) if tokens else f'text LIKE "%{safe_question}%"'
+        kw_filter = " OR ".join([f'text LIKE "%{t}%"' for t in tokens]) if tokens else f'text LIKE "%{question}%"'
         kw_res = client.query(
             collection_name=COLLECTION_NAME,
             filter=kw_filter,
             output_fields=["text", "source", "page"],
-            limit=30
+            limit=40
         )
         
         # 3. RRF Scoring
         rrf_scores = {}
         snippets_data = {}
         
-        for rank, hit in enumerate(sem_res[0]):
-            text = hit['entity']['text']
-            snippets_data[text] = hit['entity']
-            rrf_scores[text] = rrf_scores.get(text, 0) + 1.0 / (60 + rank)
+        if sem_res and len(sem_res) > 0:
+            for rank, hit in enumerate(sem_res[0]):
+                text = hit['entity']['text']
+                snippets_data[text] = hit['entity']
+                rrf_scores[text] = rrf_scores.get(text, 0) + 1.0 / (60 + rank)
             
         for rank, hit in enumerate(kw_res):
             text = hit['text']
             snippets_data[text] = hit
-            rrf_scores[text] = rrf_scores.get(text, 0) + 1.0 / (60 + rank)
+            # Give higher weight to direct keyword/token matches
+            rrf_scores[text] = rrf_scores.get(text, 0) + 1.5 / (60 + rank)
             
         sorted_snippets = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
         
-        for text, score in sorted_snippets[:30]:
+        for text, score in sorted_snippets[:40]:
             hit = snippets_data[text]
             source = hit.get('source', 'Unknown')
             page = hit.get('page', 'Unknown')
             contexts.append(f"[Source: {source}, Page: {page}]\n{text}")
             sources.add(source)
     elif mode == "exhaustive":
-        safe_question = question.replace('"', '').replace("'", "")
-        tokens = [t.replace('mg', '').replace('MG', '') if t.lower().endswith('mg') else t for t in safe_question.split() if len(t) > 1 and t.lower() not in {"list", "show", "what", "how", "the", "for", "and", "all", "me", "of", "count", "many"}]
-        kw_filter = " OR ".join([f'text LIKE "%{t}%"' for t in tokens]) if tokens else f'text LIKE "%{safe_question}%"'
+        kw_filter = " OR ".join([f'text LIKE "%{t}%"' for t in tokens]) if tokens else f'text LIKE "%{question}%"'
         search_res = client.query(
             collection_name=COLLECTION_NAME,
             filter=kw_filter,
