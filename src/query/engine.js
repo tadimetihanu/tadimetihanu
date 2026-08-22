@@ -2,8 +2,14 @@ const duckdb = require('duckdb');
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const crypto = require('crypto');
 const gdrive = require('../drivers/gdrive');
+
+// SSL CA Certificate Paths for libcurl / OpenSSL / DuckDB
+if (!process.env.CURL_CA_BUNDLE) process.env.CURL_CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
+if (!process.env.SSL_CERT_FILE) process.env.SSL_CERT_FILE = '/etc/ssl/certs/ca-certificates.crt';
+if (!process.env.SSL_CERT_DIR) process.env.SSL_CERT_DIR = '/etc/ssl/certs';
 
 // ── Global Connections ────────────────────────────────────────
 const metaDb = new Database('./data/metadata.db');
@@ -196,12 +202,52 @@ async function runQuery(userId, sql, targetId) {
 
             console.log(`🔍 [Query] Executing: ${executableSql.substring(0, 80)}...`);
 
-            const rows = await new Promise((res, rej) => {
-                conn.all(executableSql, (err, rows) => {
-                    if (err) rej(err);
-                    else res(rows);
+            let rows;
+            try {
+                rows = await new Promise((res, rej) => {
+                    conn.all(executableSql, (err, rows) => {
+                        if (err) rej(err);
+                        else res(rows);
+                    });
                 });
-            });
+            } catch (queryErr) {
+                // If Azure direct connection failed (e.g. SSL CA error or Azure C++ driver issue),
+                // fall back to downloading via Node.js Azure SDK and running query locally!
+                if ((target.provider_type === 'azure' || target.provider_type === 'adls') &&
+                    (queryErr.message.includes('SSL CA cert') || queryErr.message.includes('Fail to get a new connection') || queryErr.message.includes('AzureStorageFileSystem'))) {
+                    
+                    console.log('🔄 [Engine Fallback] Direct Azure DuckDB query failed with SSL/connection error. Falling back to Azure Blob SDK...');
+                    const { downloadFile } = require('../drivers/storage');
+                    const fileRefMatches = sql.match(/['"](az:\/\/[^'"]+|[^'"]+\.(?:parquet|csv|json|orc|tsv|txt))['"]/gi) || [];
+                    
+                    let fallbackSql = sql;
+                    for (const matchStr of fileRefMatches) {
+                        const rawPath = matchStr.replace(/^['"]|['"]$/g, '');
+                        const filename = path.basename(rawPath);
+                        const localCached = path.join(os.tmpdir(), `az-cache-${filename}`);
+                        
+                        try {
+                            if (!fs.existsSync(localCached)) {
+                                await downloadFile(targetId, rawPath, localCached);
+                            }
+                            const normalizedPath = localCached.replace(/\\/g, '/');
+                            fallbackSql = fallbackSql.split(rawPath).join(normalizedPath);
+                        } catch (dlErr) {
+                            console.error(`[Azure Fallback] Download failed for ${rawPath}:`, dlErr.message);
+                        }
+                    }
+
+                    console.log(`🔍 [Engine Fallback] Executing fallback query: ${fallbackSql.substring(0, 80)}...`);
+                    rows = await new Promise((res, rej) => {
+                        conn.all(fallbackSql, (err, rows) => {
+                            if (err) rej(err);
+                            else res(rows);
+                        });
+                    });
+                } else {
+                    throw queryErr;
+                }
+            }
 
             const duration = Date.now() - startTime;
             const { estimatedScan, estimatedCost } = calculateCost(sql, rows);
