@@ -84,7 +84,7 @@ function getTarget(targetId) {
  */
 function calculateCost(sql, rows) {
     let fileFactor = 1.0;
-    const pathMatch = sql.match(/(?:from|read_[a-z_]+)\s*\(['"]?([^'"]+)['"]?\)/i);
+    const pathMatch = sql.match(/(?:from\s+|read_[a-z_]+\s*\(\s*)['\"]([^'\"]+)['\"]/i);
     if (pathMatch) {
         let hash = 0;
         for (let i = 0; i < pathMatch[1].length; i++) {
@@ -174,6 +174,40 @@ async function runQuery(userId, sql, targetId) {
 
     return enqueue(async () => {
         try {
+
+            
+        // [NEW] Metadata Catalog Verification
+        // Block raw URIs
+        if (sql.match(/s3:\/\//i) || sql.match(/az:\/\//i)) {
+            throw new Error('Direct cloud storage URIs are disabled. Please use the filename registered in the Metadata Catalog.');
+        }
+
+        const pathMatch = sql.match(/(?:from\s+|read_[a-z_]+\s*\(\s*)['"]([^'"]+)['"]/i);
+        if (pathMatch) {
+            let logicalName = pathMatch[1];
+            
+            // Look up in metadata catalog
+            const row = metaDb.prepare('SELECT file_path FROM metadata_catalog WHERE target_id = ? AND file_name = ?').get(targetId, logicalName);
+            if (!row) {
+                // Check if they queried by exact file_path instead of file_name just in case
+                const rowPath = metaDb.prepare('SELECT file_path FROM metadata_catalog WHERE target_id = ? AND file_path = ?').get(targetId, logicalName);
+                if (!rowPath) {
+                    throw new Error('Access Denied: The requested file is not indexed in the metadata catalog. Please run a catalog scan first.');
+                }
+                logicalName = rowPath.file_path;
+            } else {
+                logicalName = row.file_path;
+            }
+
+            // Construct physical URI
+            const prefix = target.provider_type === 'azure' || target.provider_type === 'adls' ? 'az://' : 's3://';
+            const physicalUri = prefix + target.bucket + '/' + logicalName;
+
+            // Rewrite the SQL
+            sql = sql.replace(pathMatch[1], physicalUri);
+        }
+    
+
             await initSecret(target);
 
             let executableSql = sql;

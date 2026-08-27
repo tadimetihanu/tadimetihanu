@@ -467,8 +467,8 @@ app.get('/api/schema/:targetId', authenticate, checkAccess('read'), async (req, 
         }
 
         // 1. Get Column Details & Row Count (Sequentially for stability)
-        const descRows = await runQuery(userId, `DESCRIBE SELECT * FROM '${fullPath}'`, targetId);
-        const countRows = await runQuery(userId, `SELECT COUNT(*) AS row_count FROM '${fullPath}'`, targetId);
+        const descRows = await runQuery(userId, `DESCRIBE SELECT * FROM '${fileName}'`, targetId);
+        const countRows = await runQuery(userId, `SELECT COUNT(*) AS row_count FROM '${fileName}'`, targetId);
 
         const columns = descRows.map(r => ({
             name:     r.column_name,
@@ -807,6 +807,53 @@ app.get('/api/admin/catalog', authenticate, (req, res) => {
             LEFT JOIN targets t ON m.target_id = t.target_id
         `).all();
         res.json({ success: true, catalog });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+app.post('/api/admin/catalog/scan-all', authenticate, async (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+    
+    try {
+        const targets = db.prepare('SELECT target_id, target_name FROM targets').all();
+        let totalFiles = 0;
+        let errors = [];
+
+        const deleteStmt = db.prepare('DELETE FROM metadata_catalog WHERE target_id = ?');
+        const insertStmt = db.prepare(`
+            INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `);
+
+        for (const target of targets) {
+            try {
+                const files = await listFiles(target.target_id);
+                
+                const transaction = db.transaction((filesList) => {
+                    deleteStmt.run(target.target_id);
+                    for (const file of filesList) {
+                        const id = require('crypto').randomUUID();
+                        const ext = file.name.split('.').pop().toLowerCase();
+                        insertStmt.run(id, target.target_id, file.name, file.name, file.size, ext);
+                    }
+                });
+                
+                transaction(files);
+                totalFiles += files.length;
+            } catch (err) {
+                console.error(`Failed to scan ${target.target_name}:`, err);
+                errors.push({ target: target.target_name, error: err.message });
+            }
+        }
+        
+        let message = `Global scan completed. Indexed ${totalFiles} objects across ${targets.length} storages.`;
+        if (errors.length > 0) {
+            message += ` However, ${errors.length} target(s) failed to scan. Check server logs for details.`;
+        }
+
+        res.json({ success: true, message, errors });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

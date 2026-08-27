@@ -309,7 +309,7 @@ window.showAdminTab = async function(tab) {
                         <h3 style="margin:0;">Metadata Catalog</h3>
                         <div style="display:flex; gap:10px;">
                             <select id="catalog-target-scan" class="ghost-btn" style="background:rgba(255,255,255,0.05); padding:8px 12px; border-radius:8px;">
-                                <option value="">Select Target to Scan</option>
+                                <option value="">Select Target to Scan</option>\n                                <option value="all" style="font-weight:bold; color:var(--primary);">-- Scan All Object Storages --</option>
                                 ${_targets.map(t => `<option value="${t.target_id}">${t.target_name}</option>`).join('')}
                             </select>
                             <button class="btn btn-primary" onclick="window.startMetadataScan()" id="scan-btn" style="font-size:0.75rem;">🔍 Start Deep Scan</button>
@@ -1132,13 +1132,13 @@ window.selectFileForQuery = (name) => {
     const target = _targets.find(t => t.target_id === _activeTargetId);
     const prefix = target ? (target.base_uri || '') : '';
     const ext = name.split('.').pop().toLowerCase();
-    let sql = `SELECT * FROM '${prefix}${name}' LIMIT 100;`;
-    if (ext === 'parquet') sql = `SELECT * FROM read_parquet('${prefix}${name}') LIMIT 100;`;
-    else if (ext === 'csv') sql = `SELECT * FROM read_csv_auto('${prefix}${name}') LIMIT 100;`;
-    else if (ext === 'json') sql = `SELECT * FROM read_json_auto('${prefix}${name}') LIMIT 100;`;
+    let sql = `SELECT * FROM '${name}' LIMIT 100;`;
+    if (ext === 'parquet') sql = `SELECT * FROM read_parquet('${name}') LIMIT 100;`;
+    else if (ext === 'csv') sql = `SELECT * FROM read_csv_auto('${name}') LIMIT 100;`;
+    else if (ext === 'json') sql = `SELECT * FROM read_json_auto('${name}') LIMIT 100;`;
     else if (ext === 'orc') {
         showStatus('ORC direct SQL requires extra engine components. Use Spark Jobs for ORC processing.', 'info');
-        sql = `SELECT * FROM read_orc('${prefix}${name}') LIMIT 100;`;
+        sql = `SELECT * FROM read_orc('${name}') LIMIT 100;`;
     }
     document.getElementById('query-editor').value = sql;
     window.inspectFile(name, _activeTargetId);
@@ -1688,14 +1688,13 @@ window.deleteUser = async (userId) => {
 };
 window.startMetadataScan = async () => {
     const targetId = document.getElementById('catalog-target-scan').value;
-    if (!targetId) return showStatus('Please select a target to scan', 'error');
-
+    if (!targetId) return alert('Select a target first');
     const btn = document.getElementById('scan-btn');
+    btn.innerHTML = targetId === 'all' ? '?? Scanning All...' : '?? Scanning...';
     btn.disabled = true;
-    btn.innerText = '⌛ Scanning Storage...';
-    
     try {
-        const data = await apiFetch(`/api/admin/catalog/scan/${targetId}`, { method: 'POST' });
+        const endpoint = targetId === 'all' ? '/api/admin/catalog/scan-all' : `/api/admin/catalog/scan/${targetId}`;
+        const data = await apiFetch(endpoint, { method: 'POST' });
         if (data.success) {
             showStatus(data.message, 'success');
             window.showAdminTab('catalog');
