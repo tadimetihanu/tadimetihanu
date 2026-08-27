@@ -53,7 +53,7 @@ let _user = null;
 let _targets = [];
 let _activeTargetId = null;
 let _allFiles = [];
-let _activeTypeFilter = 'all';
+let _activeTypeFilter = null;
 let _currentSchema = [];
 let chartInstance = null;
 let _pinnedItems = [];
@@ -1055,12 +1055,18 @@ function renderFileList(files) {
     
     // Apply extension filter
     let filtered = files;
-    if (_activeTypeFilter !== 'all') {
+    if (!_activeTypeFilter) {
+        filtered = []; // Hide all if no filter
+    } else if (_activeTypeFilter !== 'all') {
         filtered = files.filter(f => f.name.toLowerCase().endsWith('.' + _activeTypeFilter));
     }
 
     if (filtered.length === 0) {
-        list.innerHTML = `<li style="padding:15px; color:var(--text-muted); font-size:0.75rem; text-align:center;">No ${_activeTypeFilter.toUpperCase()} files found</li>`;
+        if (!_activeTypeFilter) {
+            list.innerHTML = `<li style="padding:15px; color:var(--text-muted); font-size:0.75rem; text-align:center;">No files to display. Select a filter to view files.</li>`;
+        } else {
+            list.innerHTML = `<li style="padding:15px; color:var(--text-muted); font-size:0.75rem; text-align:center;">No ${_activeTypeFilter.toUpperCase()} files found</li>`;
+        }
         return;
     }
 
@@ -1115,14 +1121,22 @@ window.downloadFile = function(e, fileName) {
 };
 
 window.filterByType = function(type) {
-    _activeTypeFilter = type;
+    if (_activeTypeFilter === type) {
+        _activeTypeFilter = null;
+    } else {
+        _activeTypeFilter = type;
+    }
     
     // Update UI chips
     const chips = document.querySelectorAll('.type-chip');
     chips.forEach(c => {
-        if (c.innerText.toLowerCase().includes(type)) c.classList.add('active');
-        else if (type === 'all' && c.innerText === 'All') c.classList.add('active');
-        else c.classList.remove('active');
+        if (_activeTypeFilter && c.innerText.toLowerCase().includes(_activeTypeFilter)) {
+            c.classList.add('active');
+        } else if (_activeTypeFilter === 'all' && c.innerText.trim() === 'All') {
+            c.classList.add('active');
+        } else {
+            c.classList.remove('active');
+        }
     });
 
     renderFileList(_allFiles);
@@ -1327,7 +1341,7 @@ window.filterSavedQueries = (query) => {
     });
 };
 
-window.filterByType = (type) => { renderFileList(type === 'all' ? _allFiles : _allFiles.filter(f => f.name.toLowerCase().endsWith('.' + type))); };
+// duplicate filterByType removed
 
 // ── Settings & Connection Management ──
 window.openSettings = () => {

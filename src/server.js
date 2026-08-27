@@ -60,13 +60,13 @@ app.use(passport.session());
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((obj, done) => done(null, obj));
 
-passport.use(new GoogleStrategy({ clientID: process.env.GOOGLE_CLIENT_ID || 'dummy_id', clientSecret: process.env.GOOGLE_CLIENT_SECRET || 'dummy_secret', callbackURL: "http://localhost:4000/api/auth/google/callback" }, (accessToken, refreshToken, profile, done) => {
+passport.use(new GoogleStrategy({ clientID: process.env.GOOGLE_CLIENT_ID || 'dummy_id', clientSecret: process.env.GOOGLE_CLIENT_SECRET || 'dummy_secret', callbackURL: (process.env.APP_URL || 'http://localhost:4000') + "/api/auth/google/callback" }, (accessToken, refreshToken, profile, done) => {
     profile.oauth_provider = 'google';
     profile.refreshToken = refreshToken;
     return done(null, profile);
 }));
 
-passport.use(new MicrosoftStrategy({ clientID: process.env.MICROSOFT_CLIENT_ID || 'dummy_id', clientSecret: process.env.MICROSOFT_CLIENT_SECRET || 'dummy_secret', callbackURL: "http://localhost:4000/api/auth/microsoft/callback", scope: ['user.read', 'offline_access'] }, (accessToken, refreshToken, profile, done) => {
+passport.use(new MicrosoftStrategy({ clientID: process.env.MICROSOFT_CLIENT_ID || 'dummy_id', clientSecret: process.env.MICROSOFT_CLIENT_SECRET || 'dummy_secret', callbackURL: (process.env.APP_URL || 'http://localhost:4000') + "/api/auth/microsoft/callback", scope: ['user.read', 'offline_access'] }, (accessToken, refreshToken, profile, done) => {
     profile.oauth_provider = 'microsoft';
     profile.refreshToken = refreshToken;
     return done(null, profile);
