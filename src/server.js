@@ -27,7 +27,11 @@ const { suggestQuery } = require('./query/ai');
 const { handleNl2Sql } = require('./nl2sql');
 const { authenticate, isAdmin, loginLimiter, SECRET_KEY } = require('./middleware/auth');
 const { checkAccess } = require('./middleware/checkAccess');
+const fs = require('fs');
 
+if (!fs.existsSync('./data')) {
+    fs.mkdirSync('./data', { recursive: true });
+}
 const db = new Database('./data/metadata.db');
 
 // Ensure OAuth columns exist in users table
