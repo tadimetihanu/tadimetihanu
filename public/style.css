@@ -305,7 +305,7 @@ main { display: flex; padding: 30px; gap: 30px; }
     border-radius: 2px;
 }
 
-.action-bar { display: flex; align-items: center; gap: 15px; margin-top: 20px; }
+.action-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 15px; margin-top: 20px; }
 
 .btn {
     padding: 10px 20px;
@@ -315,6 +315,11 @@ main { display: flex; padding: 30px; gap: 30px; }
     cursor: pointer;
     transition: all 0.2s;
     border: none;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
 }
 .btn-primary { 
     background: var(--primary); 
@@ -338,6 +343,11 @@ main { display: flex; padding: 30px; gap: 30px; }
     cursor: pointer;
     transition: all 0.2s;
     font-family: inherit;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
 }
 .ghost-btn:hover {
     background: rgba(0, 0, 0, 0.05);
