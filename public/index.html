@@ -312,7 +312,10 @@
             </div>
 
             <div class="file-browser" style="margin-top: 20px;">
-                <p class="section-title" style="margin-bottom:10px;">Object Explorer</p>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <p class="section-title" style="margin:0;">Object Explorer</p>
+                    <button onclick="window.openCreateIcebergModal()" style="font-size:0.68rem; padding:3px 8px; border:1px solid #0284c7; color:#0284c7; background:rgba(2,132,199,0.08); font-weight:700; border-radius:6px; cursor:pointer;" title="Create a new Apache Iceberg Table">+ 🧊 New Iceberg</button>
+                </div>
                 <!-- High-Visibility Type Filters -->
                 <div id="file-type-chips" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; padding-bottom:5px;">
                     <button class="type-chip" onclick="window.filterByType('all')">All</button>
@@ -657,7 +660,8 @@
                         <button id="view-tab-table" class="view-tab active" onclick="switchView('table')">📋 Table View</button>
                         <button id="view-tab-chart" class="view-tab" onclick="switchView('chart')">📊 Chart View</button>
                     </div>
-                    <div id="export-btns" style="display:none; gap:8px;">
+                    <div id="export-btns" style="display:none; gap:8px; align-items:center;">
+                        <button class="btn btn-secondary" onclick="window.openCreateIcebergModal()" style="font-size:0.72rem; padding:5px 12px; background:rgba(2,132,199,0.1); border-color:#0284c7; color:#0284c7; font-weight:700;" title="Create/Export as an Apache Iceberg table">🧊 Save as Iceberg</button>
                         <button class="btn btn-secondary" onclick="pinCurrentTable()" style="font-size:0.72rem; padding:5px 12px; background:rgba(0,0,0,0.05); border-color:var(--accent); color:var(--accent);">📌 Pin to Dashboard</button>
                         <button class="btn btn-secondary" onclick="exportResults('csv')"  style="font-size:0.72rem; padding:5px 12px;">↓ CSV</button>
                         <button class="btn btn-secondary" onclick="exportResults('pdf')"  style="font-size:0.72rem; padding:5px 12px; background:rgba(0,0,0,0.08); border-color:#333333; color:#333333;">📄 Download Report (PDF)</button>
@@ -929,6 +933,71 @@
             <div style="display: flex; justify-content: flex-end; gap: 10px;">
                 <button class="btn btn-secondary" onclick="document.getElementById('delete-rag-modal').style.display='none'">Cancel</button>
                 <button class="btn btn-primary" style="background: #000000; border-color: #000000; color: white;" onclick="window.confirmDeleteRagDocument()">Delete Permanently</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Create Iceberg Table Modal ──────────────────────────── -->
+    <div class="modal-overlay" id="create-iceberg-modal" onclick="if(event.target.id==='create-iceberg-modal') closeCreateIcebergModal()" style="display:none;">
+        <div class="modal" style="width: 520px; display: flex; flex-direction: column; gap: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 1.4rem;">🧊</span>
+                    <div>
+                        <h2 style="margin: 0; font-size: 1.05rem; font-weight: 700;">Create Apache Iceberg Table</h2>
+                        <p style="margin: 2px 0 0 0; font-size: 0.75rem; color: var(--text-muted);">Generate and write a production-ready Iceberg v2 table with full metadata</p>
+                    </div>
+                </div>
+                <button onclick="closeCreateIcebergModal()" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem;">✕</button>
+            </div>
+
+            <!-- Table Name -->
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+                <label style="font-size: 0.78rem; font-weight: 600; color: var(--text);">Table Name</label>
+                <input id="iceberg-table-name" type="text" placeholder="e.g. customer_orders_2026.iceberg" class="cfg-input" style="width: 100%; box-sizing: border-box;">
+                <span style="font-size: 0.7rem; color: var(--text-muted);">Name of the Iceberg table folder (will end with <code>.iceberg</code>)</span>
+            </div>
+
+            <!-- Target Destination -->
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+                <label style="font-size: 0.78rem; font-weight: 600; color: var(--text);">Destination Storage Lake</label>
+                <select id="iceberg-target-select" class="cfg-input" style="width: 100%; box-sizing: border-box;"></select>
+            </div>
+
+            <!-- Source Data Selector -->
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+                <label style="font-size: 0.78rem; font-weight: 600; color: var(--text);">Source Dataset</label>
+                <div style="display: flex; gap: 14px; margin-bottom: 6px;">
+                    <label style="font-size: 0.78rem; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="radio" name="iceberg-source-type" value="results" id="iceberg-src-results" checked onchange="toggleIcebergSourceMode()">
+                        <span>From Query Results (<span id="iceberg-results-count">0</span> rows)</span>
+                    </label>
+                    <label style="font-size: 0.78rem; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="radio" name="iceberg-source-type" value="sql" id="iceberg-src-sql" onchange="toggleIcebergSourceMode()">
+                        <span>From Custom SQL</span>
+                    </label>
+                </div>
+                <div id="iceberg-sql-container" style="display: none;">
+                    <textarea id="iceberg-custom-sql" rows="3" placeholder="SELECT * FROM 'sales_data.parquet' WHERE category = 'Electronics'" class="cfg-input" style="width: 100%; box-sizing: border-box; font-family: monospace; font-size: 0.78rem;"></textarea>
+                </div>
+            </div>
+
+            <!-- Description / Comment -->
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+                <label style="font-size: 0.78rem; font-weight: 600; color: var(--text);">Table Description (Optional)</label>
+                <input id="iceberg-table-desc" type="text" placeholder="e.g. Aggregated revenue and order volume by region" class="cfg-input" style="width: 100%; box-sizing: border-box;">
+            </div>
+
+            <!-- Status Banner -->
+            <div id="iceberg-create-status" style="display: none; padding: 10px 14px; border-radius: 8px; font-size: 0.8rem;"></div>
+
+            <!-- Modal Actions -->
+            <div style="display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--border); padding-top: 14px;">
+                <button class="btn btn-secondary" onclick="closeCreateIcebergModal()">Cancel</button>
+                <button id="btn-submit-create-iceberg" class="btn btn-primary" style="background: linear-gradient(135deg, #0284c7, #0369a1); border-color: #0284c7; color: white; display: flex; align-items: center; gap: 6px;" onclick="submitCreateIcebergTable()">
+                    <span>🧊</span>
+                    <span>Create Iceberg Table</span>
+                </button>
             </div>
         </div>
     </div>

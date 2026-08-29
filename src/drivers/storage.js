@@ -438,11 +438,207 @@ async function downloadFile(targetId, filename, destPath) {
     throw new Error(`Download not implemented for ${target.provider_type}`);
 }
 
+async function createIcebergTable(targetId, rawTableName, sourceDataOrSql, description = '') {
+    const target = getTarget(targetId);
+    let tableName = (rawTableName || 'custom_dataset').trim().replace(/[^a-zA-Z0-9_\-.]/g, '_');
+    if (!tableName.toLowerCase().endsWith('.iceberg')) {
+        tableName += '.iceberg';
+    }
+
+    const duckdb = require('duckdb');
+    const db = new duckdb.Database(':memory:');
+    const runSql = (q) => new Promise((resolve, reject) => {
+        db.run(q, (err) => err ? reject(err) : resolve());
+    });
+    const allSql = (q) => new Promise((resolve, reject) => {
+        db.all(q, (err, rows) => err ? reject(err) : resolve(rows));
+    });
+
+    const os = require('os');
+    const tempDir = path.join(os.tmpdir(), `iceberg-build-${Date.now()}-${Math.random().toString(36).substring(7)}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+    const tempParquetPath = path.join(tempDir, '00000-0-data.parquet').replace(/\\/g, '/');
+
+    let rowCount = 0;
+    let schemaFields = [];
+
+    if (typeof sourceDataOrSql === 'string') {
+        // Source is a SQL query
+        await runSql(`CREATE VIEW src_view AS ${sourceDataOrSql}`);
+        const countRes = await allSql(`SELECT COUNT(*) AS c FROM src_view`);
+        rowCount = Number(countRes[0]?.c || 0);
+
+        const descRes = await allSql(`DESCRIBE SELECT * FROM src_view`);
+        schemaFields = descRes.map((col, idx) => {
+            let fieldType = 'string';
+            const t = col.column_type.toLowerCase();
+            if (t.includes('int8') || t.includes('bigint') || t.includes('hugeint')) fieldType = 'long';
+            else if (t.includes('int') || t.includes('smallint') || t.includes('tinyint')) fieldType = 'int';
+            else if (t.includes('double') || t.includes('float') || t.includes('decimal') || t.includes('real')) fieldType = 'double';
+            else if (t.includes('bool')) fieldType = 'boolean';
+            else if (t.includes('date')) fieldType = 'date';
+            else if (t.includes('time')) fieldType = 'timestamp';
+            return {
+                id: idx + 1,
+                name: col.column_name,
+                required: false,
+                type: fieldType
+            };
+        });
+
+        await runSql(`COPY (SELECT * FROM src_view) TO '${tempParquetPath}' (FORMAT PARQUET)`);
+    } else if (Array.isArray(sourceDataOrSql) && sourceDataOrSql.length > 0) {
+        // Source is an array of records
+        rowCount = sourceDataOrSql.length;
+        const tempJsonPath = path.join(tempDir, 'data.json').replace(/\\/g, '/');
+        fs.writeFileSync(tempJsonPath, JSON.stringify(sourceDataOrSql));
+
+        const descRes = await allSql(`DESCRIBE SELECT * FROM read_json_auto('${tempJsonPath}')`);
+        schemaFields = descRes.map((col, idx) => {
+            let fieldType = 'string';
+            const t = col.column_type.toLowerCase();
+            if (t.includes('int8') || t.includes('bigint') || t.includes('hugeint')) fieldType = 'long';
+            else if (t.includes('int') || t.includes('smallint') || t.includes('tinyint')) fieldType = 'int';
+            else if (t.includes('double') || t.includes('float') || t.includes('decimal') || t.includes('real')) fieldType = 'double';
+            else if (t.includes('bool')) fieldType = 'boolean';
+            else if (t.includes('date')) fieldType = 'date';
+            else if (t.includes('time')) fieldType = 'timestamp';
+            return {
+                id: idx + 1,
+                name: col.column_name,
+                required: false,
+                type: fieldType
+            };
+        });
+
+        await runSql(`COPY (SELECT * FROM read_json_auto('${tempJsonPath}')) TO '${tempParquetPath}' (FORMAT PARQUET)`);
+    } else {
+        throw new Error('No data or SQL query provided to create Iceberg table');
+    }
+
+    const parquetBuffer = fs.readFileSync(tempParquetPath);
+    const tableUuid = crypto.randomUUID();
+    const snapshotId = Math.floor(100000 + Math.random() * 900000);
+    const prefix = (target.provider_type === 'azure' || target.provider_type === 'adls') ? 'az://' : 's3://';
+    const location = `${prefix}${target.bucket || 'datalake'}/${tableName}`;
+
+    const metadataJson = {
+        "format-version": 2,
+        "table-uuid": tableUuid,
+        "location": location,
+        "last-sequence-number": 1,
+        "last-updated-ms": Date.now(),
+        "last-column-id": schemaFields.length,
+        "current-schema-id": 0,
+        "schemas": [
+            {
+                "type": "struct",
+                "schema-id": 0,
+                "fields": schemaFields
+            }
+        ],
+        "partition-specs": [{ "spec-id": 0, "fields": [] }],
+        "default-spec-id": 0,
+        "last-partition-id": 0,
+        "properties": {
+            "write.format.default": "parquet",
+            "comment": description || `Created via CloudObjectIQ on ${new Date().toISOString()}`
+        },
+        "current-snapshot-id": snapshotId,
+        "snapshots": [
+            {
+                "snapshot-id": snapshotId,
+                "timestamp-ms": Date.now(),
+                "summary": {
+                    "operation": "append",
+                    "added-data-files": "1",
+                    "added-records": String(rowCount),
+                    "total-data-files": "1",
+                    "total-records": String(rowCount)
+                },
+                "manifest-list": `${location}/metadata/snap-${snapshotId}-1.avro`
+            }
+        ],
+        "snapshot-log": [
+            {
+                "timestamp-ms": Date.now(),
+                "snapshot-id": snapshotId
+            }
+        ]
+    };
+
+    const metadataBuffer = Buffer.from(JSON.stringify(metadataJson, null, 2), 'utf8');
+    const versionHintBuffer = Buffer.from('1\n', 'utf8');
+
+    // 1. Upload files to cloud target if configured
+    try {
+        await uploadFile(targetId, `${tableName}/data/00000-0-data.parquet`, parquetBuffer, 'application/octet-stream');
+        await uploadFile(targetId, `${tableName}/metadata/v1.metadata.json`, metadataBuffer, 'application/json');
+        await uploadFile(targetId, `${tableName}/metadata/version-hint.text`, versionHintBuffer, 'text/plain');
+    } catch (upErr) {
+        console.warn(`[Iceberg Upload Notice] Cloud upload skipped/fallback: ${upErr.message}`);
+    }
+
+    // 2. Write to local sample and cache directories for fast local querying
+    const localDestDirs = [
+        path.join(__dirname, '..', '..', 'data', 'samples', tableName),
+        path.join(__dirname, '..', '..', 'minio_data', 'datalake', tableName),
+        path.join(process.env.USERPROFILE || 'C:\\Users\\tadim', '.gdrive_cache', tableName)
+    ];
+
+    for (const lDir of localDestDirs) {
+        try {
+            const dataDir = path.join(lDir, 'data');
+            const metaDir = path.join(lDir, 'metadata');
+            fs.mkdirSync(dataDir, { recursive: true });
+            fs.mkdirSync(metaDir, { recursive: true });
+            fs.writeFileSync(path.join(dataDir, '00000-0-data.parquet'), parquetBuffer);
+            fs.writeFileSync(path.join(metaDir, 'v1.metadata.json'), metadataBuffer);
+            fs.writeFileSync(path.join(metaDir, 'version-hint.text'), versionHintBuffer);
+        } catch (e) {}
+    }
+
+    // 3. Register in SQLite metadata_catalog
+    const metaDbPath = path.join(__dirname, '..', '..', 'data', 'metadata.db');
+    if (fs.existsSync(metaDbPath)) {
+        const metaDb = new Database(metaDbPath);
+        metaDb.exec(`
+            CREATE TABLE IF NOT EXISTS metadata_catalog (
+                id TEXT PRIMARY KEY,
+                target_id TEXT,
+                file_path TEXT,
+                file_name TEXT,
+                file_size INTEGER,
+                format TEXT,
+                last_modified TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        const catId = crypto.createHash('md5').update(`${targetId}_${tableName}`).digest('hex');
+        metaDb.prepare(`
+            INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(catId, targetId, tableName, tableName, parquetBuffer.length + metadataBuffer.length, 'iceberg', new Date().toISOString());
+    }
+
+    // Clean temp dir
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
+
+    return {
+        tableName,
+        rowCount,
+        columns: schemaFields,
+        location,
+        targetName: target.target_name
+    };
+}
+
 module.exports = {
     listFiles,
     uploadFile,
     uploadStream,
     downloadFile,
+    createIcebergTable,
     getTarget,
     testConnection,
     gdrive

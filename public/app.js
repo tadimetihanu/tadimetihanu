@@ -1313,6 +1313,157 @@ window.exportResults = (format) => {
     }
 };
 
+// ── Iceberg Table Creation ──
+window.openCreateIcebergModal = () => {
+    const targetSelect = document.getElementById('iceberg-target-select');
+    if (targetSelect && _targets) {
+        targetSelect.innerHTML = _targets.map(t => `<option value="${t.target_id}" ${t.target_id === _activeTargetId ? 'selected' : ''}>${t.target_name} (${t.provider_type})</option>`).join('');
+    }
+
+    const hasResults = _filteredData && _filteredData.length > 0;
+    const resCountEl = document.getElementById('iceberg-results-count');
+    if (resCountEl) resCountEl.innerText = hasResults ? _filteredData.length.toLocaleString() : '0';
+
+    const defaultName = `analytics_${new Date().toISOString().slice(0,10).replace(/-/g,'')}_${Math.floor(1000 + Math.random()*9000)}.iceberg`;
+    const tableNameInput = document.getElementById('iceberg-table-name');
+    if (tableNameInput) tableNameInput.value = defaultName;
+
+    const editorSql = window.editor ? window.editor.getValue() : '';
+    const sqlTextarea = document.getElementById('iceberg-custom-sql');
+    if (sqlTextarea && editorSql) sqlTextarea.value = editorSql;
+
+    const srcResultsRadio = document.getElementById('iceberg-src-results');
+    const srcSqlRadio = document.getElementById('iceberg-src-sql');
+    if (hasResults) {
+        if (srcResultsRadio) srcResultsRadio.checked = true;
+    } else {
+        if (srcSqlRadio) srcSqlRadio.checked = true;
+    }
+    window.toggleIcebergSourceMode();
+
+    const statusEl = document.getElementById('iceberg-create-status');
+    if (statusEl) statusEl.style.display = 'none';
+
+    const modal = document.getElementById('create-iceberg-modal');
+    if (modal) modal.style.display = 'flex';
+};
+
+window.closeCreateIcebergModal = () => {
+    const modal = document.getElementById('create-iceberg-modal');
+    if (modal) modal.style.display = 'none';
+};
+
+window.toggleIcebergSourceMode = () => {
+    const isSql = document.getElementById('iceberg-src-sql')?.checked;
+    const sqlContainer = document.getElementById('iceberg-sql-container');
+    if (sqlContainer) sqlContainer.style.display = isSql ? 'block' : 'none';
+};
+
+window.submitCreateIcebergTable = async () => {
+    const targetId = document.getElementById('iceberg-target-select')?.value;
+    let tableName = document.getElementById('iceberg-table-name')?.value?.trim();
+    const description = document.getElementById('iceberg-table-desc')?.value?.trim();
+    const isSql = document.getElementById('iceberg-src-sql')?.checked;
+    const customSql = document.getElementById('iceberg-custom-sql')?.value?.trim();
+    const statusEl = document.getElementById('iceberg-create-status');
+    const submitBtn = document.getElementById('btn-submit-create-iceberg');
+
+    if (!tableName) {
+        alert('Please specify a table name.');
+        return;
+    }
+    if (!tableName.toLowerCase().endsWith('.iceberg')) {
+        tableName += '.iceberg';
+    }
+
+    if (!targetId) {
+        alert('Please select a destination storage lake.');
+        return;
+    }
+
+    let payload = {
+        targetId,
+        tableName,
+        description
+    };
+
+    if (isSql) {
+        if (!customSql) {
+            alert('Please provide a valid SQL query to generate the Iceberg table.');
+            return;
+        }
+        payload.sql = customSql;
+    } else {
+        if (!_filteredData || _filteredData.length === 0) {
+            alert('No query results available to export. Please choose Custom SQL or run a query first.');
+            return;
+        }
+        payload.data = _filteredData;
+    }
+
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `<span>⏳</span><span>Writing Iceberg Table...</span>`;
+    }
+    if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.style.background = 'rgba(2, 132, 199, 0.1)';
+        statusEl.style.color = '#0284c7';
+        statusEl.style.border = '1px solid #0284c7';
+        statusEl.innerHTML = `Building Parquet data and Iceberg v2 metadata catalog entries...`;
+    }
+
+    try {
+        const res = await apiFetch('/api/iceberg/create', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        });
+
+        if (res.success) {
+            if (statusEl) {
+                statusEl.style.background = 'rgba(16, 185, 129, 0.1)';
+                statusEl.style.color = '#10b981';
+                statusEl.style.border = '1px solid #10b981';
+                statusEl.innerHTML = `
+                    <div style="font-weight:700; margin-bottom:4px;">✅ Iceberg Table Created Successfully!</div>
+                    <div style="font-size:0.75rem; margin-bottom:8px;">Table <code>${res.tableName}</code> written with ${res.rowCount} records across ${res.columns?.length || 0} columns.</div>
+                    <button class="btn btn-primary" style="font-size:0.72rem; padding:4px 10px; background:#0284c7; border-color:#0284c7;" onclick="window.queryCreatedIceberg('${res.tableName}')">🔍 Query This Table Now</button>
+                `;
+            }
+            // Refresh object explorer
+            if (typeof fetchFileList === 'function') {
+                await fetchFileList(_activeTargetId);
+            }
+        } else {
+            throw new Error(res.error || 'Creation failed');
+        }
+    } catch (err) {
+        if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.style.background = 'rgba(239, 68, 68, 0.1)';
+            statusEl.style.color = '#ef4444';
+            statusEl.style.border = '1px solid #ef4444';
+            statusEl.innerHTML = `❌ Failed to create Iceberg table: ${err.message}`;
+        }
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = `<span>🧊</span><span>Create Iceberg Table</span>`;
+        }
+    }
+};
+
+window.queryCreatedIceberg = (tableName) => {
+    window.closeCreateIcebergModal();
+    const query = `SELECT * FROM iceberg_scan('${tableName}') LIMIT 100;`;
+    if (window.editor) {
+        window.editor.setValue(query);
+    }
+    if (typeof runCurrentQuery === 'function') {
+        runCurrentQuery();
+    }
+};
+
 // ── Auth & Helpers ──
 async function login() {
     const email = document.getElementById('login-email').value;

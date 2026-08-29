@@ -550,6 +550,24 @@ app.post('/api/upload/:targetId', authenticate, checkAccess('write'), upload.arr
     }
 });
 
+app.post('/api/iceberg/create', authenticate, checkAccess('write'), async (req, res) => {
+    try {
+        const { targetId, tableName, sql, data, description } = req.body;
+        if (!targetId) return res.status(400).json({ error: 'Target destination is required' });
+        if (!tableName) return res.status(400).json({ error: 'Table name is required' });
+        if (!sql && (!data || !Array.isArray(data) || data.length === 0)) {
+            return res.status(400).json({ error: 'Either a SQL query or dataset records must be provided' });
+        }
+
+        const { createIcebergTable } = require('./drivers/storage');
+        const result = await createIcebergTable(targetId, tableName, sql || data, description);
+        res.json({ success: true, ...result });
+    } catch (err) {
+        console.error('❌ [Iceberg Create] Error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ── QUERY & AI ROUTES ─────────────────────────────────────────
 
 app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, res) => {
