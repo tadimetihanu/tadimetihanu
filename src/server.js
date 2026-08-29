@@ -56,10 +56,16 @@ try {
             file_name TEXT,
             file_size INTEGER,
             format TEXT,
-            last_modified TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     `);
+
+    try {
+        const cols = db.prepare("PRAGMA table_info(metadata_catalog)").all().map(c => c.name);
+        if (!cols.includes('last_modified')) {
+            db.prepare("ALTER TABLE metadata_catalog ADD COLUMN last_modified TEXT").run();
+        }
+    } catch (e) {}
 
     // Auto-seed default sample datasets across all registered targets
     const allTargets = db.prepare('SELECT target_id FROM targets').all();
@@ -72,15 +78,21 @@ try {
         { name: 'financial_transactions.iceberg', size: 65536, format: 'iceberg' },
         { name: 'cloud_telemetry.iceberg', size: 65536, format: 'iceberg' }
     ];
-    const insertCatStmt = db.prepare(`
-        INSERT OR IGNORE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
     const cryptoLib = require('crypto');
     for (const t of allTargets) {
         for (const f of defaultSampleFiles) {
             const cid = cryptoLib.createHash('md5').update(`${t.target_id}_${f.name}`).digest('hex');
-            insertCatStmt.run(cid, t.target_id, f.name, f.name, f.size, f.format, new Date().toISOString());
+            try {
+                db.prepare(`
+                    INSERT OR IGNORE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                `).run(cid, t.target_id, f.name, f.name, f.size, f.format, new Date().toISOString());
+            } catch (e) {
+                db.prepare(`
+                    INSERT OR IGNORE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                `).run(cid, t.target_id, f.name, f.name, f.size, f.format);
+            }
         }
     }
 

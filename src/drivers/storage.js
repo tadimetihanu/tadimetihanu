@@ -597,15 +597,28 @@ async function createIcebergTable(targetId, rawTableName, sourceDataOrSql, descr
                 file_name TEXT,
                 file_size INTEGER,
                 format TEXT,
-                last_modified TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
+        try {
+            const cols = metaDb.prepare("PRAGMA table_info(metadata_catalog)").all().map(c => c.name);
+            if (!cols.includes('last_modified')) {
+                metaDb.prepare("ALTER TABLE metadata_catalog ADD COLUMN last_modified TEXT").run();
+            }
+        } catch (e) {}
+
         const catId = crypto.createHash('md5').update(`${targetId}_${tableName}`).digest('hex');
-        metaDb.prepare(`
-            INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(catId, targetId, tableName, tableName, parquetBuffer.length + metadataBuffer.length, 'iceberg', new Date().toISOString());
+        try {
+            metaDb.prepare(`
+                INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).run(catId, targetId, tableName, tableName, parquetBuffer.length + metadataBuffer.length, 'iceberg', new Date().toISOString());
+        } catch (insErr) {
+            metaDb.prepare(`
+                INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `).run(catId, targetId, tableName, tableName, parquetBuffer.length + metadataBuffer.length, 'iceberg');
+        }
     }
 
     // Clean temp dir
