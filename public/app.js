@@ -1328,9 +1328,11 @@ window.openCreateIcebergModal = () => {
     const tableNameInput = document.getElementById('iceberg-table-name');
     if (tableNameInput) tableNameInput.value = defaultName;
 
-    const editorSql = window.editor ? window.editor.getValue() : '';
+    const editorSql = window.editor ? window.editor.getValue().trim() : '';
     const sqlTextarea = document.getElementById('iceberg-custom-sql');
-    if (sqlTextarea && editorSql) sqlTextarea.value = editorSql;
+    if (sqlTextarea) {
+        sqlTextarea.value = editorSql || "SELECT * FROM 'sales_data.parquet' WHERE category = 'Electronics'";
+    }
 
     const srcResultsRadio = document.getElementById('iceberg-src-results');
     const srcSqlRadio = document.getElementById('iceberg-src-sql');
@@ -1364,7 +1366,10 @@ window.submitCreateIcebergTable = async () => {
     let tableName = document.getElementById('iceberg-table-name')?.value?.trim();
     const description = document.getElementById('iceberg-table-desc')?.value?.trim();
     const isSql = document.getElementById('iceberg-src-sql')?.checked;
-    const customSql = document.getElementById('iceberg-custom-sql')?.value?.trim();
+    let customSql = document.getElementById('iceberg-custom-sql')?.value?.trim();
+    if (!customSql && isSql) {
+        customSql = document.getElementById('iceberg-custom-sql')?.placeholder || "SELECT * FROM 'sales_data.parquet' WHERE category = 'Electronics'";
+    }
     const statusEl = document.getElementById('iceberg-create-status');
     const submitBtn = document.getElementById('btn-submit-create-iceberg');
 
@@ -1388,10 +1393,6 @@ window.submitCreateIcebergTable = async () => {
     };
 
     if (isSql) {
-        if (!customSql) {
-            alert('Please provide a valid SQL query to generate the Iceberg table.');
-            return;
-        }
         payload.sql = customSql;
     } else {
         if (!_filteredData || _filteredData.length === 0) {
