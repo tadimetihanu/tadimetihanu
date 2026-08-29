@@ -618,3 +618,17 @@ td { padding: 12px 15px; border-bottom: 1px solid var(--border); }
     box-shadow: 0 2px 8px rgba(56, 189, 248, 0.3);
 }
 
+.action-bar {
+    display: flex !important;
+    align-items: center !important;
+    flex-wrap: nowrap !important;
+    gap: 8px !important;
+    overflow-x: auto;
+    white-space: nowrap;
+}
+
+#live-burn-meter {
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+}
+
