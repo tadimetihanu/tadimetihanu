@@ -72,11 +72,14 @@ function getAzureClient(target) {
 const MOCKS = {
     minio: [
         { name: 'iris.parquet', size: 17408, lastModified: '2025-03-15T06:00:00Z' },
-        { name: 'census_data.parquet', size: 22016, lastModified: '2025-03-15T07:30:00Z' }
+        { name: 'census_data.parquet', size: 22016, lastModified: '2025-03-15T07:30:00Z' },
+        { name: 'ecommerce_orders.iceberg', size: 52428, lastModified: '2026-03-29T10:00:00Z', format: 'iceberg', isIceberg: true },
+        { name: 'cloud_telemetry.iceberg', size: 45056, lastModified: '2026-03-29T11:00:00Z', format: 'iceberg', isIceberg: true }
     ],
     azure: [
         { name: 'marketing_trends.parquet', size: 18432, lastModified: '2025-03-14T10:00:00Z' },
-        { name: 'telemetry.json', size: 2048, lastModified: '2025-03-14T11:00:00Z' }
+        { name: 'telemetry.json', size: 2048, lastModified: '2025-03-14T11:00:00Z' },
+        { name: 'financial_transactions.iceberg', size: 65536, lastModified: '2026-03-29T12:00:00Z', format: 'iceberg', isIceberg: true }
     ]
 };
 

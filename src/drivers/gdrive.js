@@ -43,6 +43,16 @@ const SAMPLE_GDRIVE_FILES = [
         size: 45056,
         lastModified: '2026-03-15T16:45:00.000Z',
         webViewLink: 'https://drive.google.com/file/d/sample-briefing-pdf/view'
+    },
+    {
+        id: 'gdrive-file-005',
+        name: 'ecommerce_orders.iceberg',
+        mimeType: 'application/octet-stream',
+        size: 52428,
+        format: 'iceberg',
+        isIceberg: true,
+        lastModified: '2026-03-29T10:00:00.000Z',
+        webViewLink: 'https://drive.google.com/file/d/sample-iceberg-table/view'
     }
 ];
 

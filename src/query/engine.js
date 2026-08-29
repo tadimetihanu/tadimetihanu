@@ -45,7 +45,8 @@ async function boot() {
             'INSTALL fts', 'LOAD fts', 
             'INSTALL iceberg', 'LOAD iceberg',
             `SET s3_url_style='path'`,
-            `SET s3_region='us-east-1'`
+            `SET s3_region='us-east-1'`,
+            `SET unsafe_enable_version_guessing = true`
         ];
 
         // Auto-configure SSL CA certificate bundle for Linux / Docker environments
@@ -271,6 +272,33 @@ async function runQuery(userId, sql, targetId) {
                 }
             }
 
+            // Handle Iceberg path mapping for local/demo sample tables
+            if (executableSql.includes('iceberg_scan')) {
+                const icebergMatches = executableSql.match(/iceberg_scan\s*\(\s*['"]([^'"]+)['"]\s*\)/gi) || [];
+                for (const matchStr of icebergMatches) {
+                    const m = matchStr.match(/iceberg_scan\s*\(\s*['"]([^'"]+)['"]\s*\)/i);
+                    if (m && m[1]) {
+                        const rawPath = m[1];
+                        const tableName = path.basename(rawPath);
+                        const possibleLocalDirs = [
+                            path.join(__dirname, '..', '..', 'data', 'samples', tableName),
+                            path.join(__dirname, '..', '..', 'minio_data', 'datalake', tableName),
+                            path.join(process.env.USERPROFILE || 'C:\\Users\\tadim', '.gdrive_cache', tableName)
+                        ];
+                        if (target.endpoint && target.endpoint.includes('localhost')) {
+                            for (const dir of possibleLocalDirs) {
+                                const dataDir = path.join(dir, 'data');
+                                if (fs.existsSync(dataDir)) {
+                                    const normPath = path.join(dataDir, '*.parquet').replace(/\\/g, '/');
+                                    executableSql = executableSql.replace(m[0], `read_parquet('${normPath}')`);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             console.log(`🔍 [Query] Executing: ${executableSql.substring(0, 80)}...`);
 
             let rows;
@@ -282,6 +310,9 @@ async function runQuery(userId, sql, targetId) {
                     });
                 });
             } catch (queryErr) {
+                // Reset transaction state on failure before attempting any fallback query
+                await new Promise(r => conn.run('ROLLBACK', () => r()));
+
                 // If Azure direct connection failed (e.g. SSL CA error or Azure C++ driver issue),
                 // fall back to downloading via Node.js Azure SDK and running query locally!
                 if ((target.provider_type === 'azure' || target.provider_type === 'adls') &&
@@ -315,6 +346,48 @@ async function runQuery(userId, sql, targetId) {
                             else res(rows);
                         });
                     });
+                } else if (/iceberg_scan/i.test(executableSql) || /iceberg/i.test(queryErr.message) || /Failed to read iceberg table/i.test(queryErr.message)) {
+                    // Iceberg direct parquet data fallback if MinIO/S3 version-hint is missing or offline
+                    const m = executableSql.match(/iceberg_scan\s*\(\s*['"]([^'"]+)['"]\s*\)/i);
+                    if (m && m[1]) {
+                        const rawPath = m[1];
+                        const tableName = path.basename(rawPath);
+                        const possibleLocalDirs = [
+                            path.join(__dirname, '..', '..', 'minio_data', 'datalake', tableName),
+                            path.join(__dirname, '..', '..', 'data', 'samples', tableName),
+                            path.join(process.env.USERPROFILE || 'C:\\Users\\tadim', '.gdrive_cache', tableName)
+                        ];
+                        let found = false;
+                        for (const dir of possibleLocalDirs) {
+                            const dataDir = path.join(dir, 'data');
+                            if (fs.existsSync(dataDir)) {
+                                const normPath = path.join(dataDir, '*.parquet').replace(/\\/g, '/');
+                                const fallbackSql = executableSql.replace(m[0], `read_parquet('${normPath}')`);
+                                console.log(`🔄 [Iceberg Fallback] Querying local table data: ${fallbackSql.substring(0, 80)}...`);
+                                rows = await new Promise((res, rej) => {
+                                    conn.all(fallbackSql, (err, rows) => {
+                                        if (err) rej(err);
+                                        else res(rows);
+                                    });
+                                });
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            // Try scanning S3 data parquet directly
+                            const dataFallbackSql = executableSql.replace(m[0], `read_parquet('${rawPath}/data/*.parquet')`);
+                            console.log(`🔄 [Iceberg Remote Fallback] Scanning remote data directory: ${dataFallbackSql.substring(0, 80)}...`);
+                            rows = await new Promise((res, rej) => {
+                                conn.all(dataFallbackSql, (err, rows) => {
+                                    if (err) rej(err);
+                                    else res(rows);
+                                });
+                            });
+                        }
+                    } else {
+                        throw queryErr;
+                    }
                 } else {
                     throw queryErr;
                 }
