@@ -83,6 +83,9 @@ try {
             insertCatStmt.run(cid, t.target_id, f.name, f.name, f.size, f.format, new Date().toISOString());
         }
     }
+
+    const { ensureAllSampleData } = require('./utils/sample_data');
+    ensureAllSampleData();
 } catch (e) {
     console.warn('[DB Init] Warning initializing metadata_catalog:', e.message);
 }

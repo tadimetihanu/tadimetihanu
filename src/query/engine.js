@@ -234,6 +234,20 @@ async function runQuery(userId, sql, targetId) {
             }
 
             if (!row && !localSamplePath) {
+                try {
+                    const { ensureAllSampleData } = require('../utils/sample_data');
+                    ensureAllSampleData();
+                    for (const sp of sampleCandidates) {
+                        if (fs.existsSync(sp)) {
+                            localSamplePath = sp.replace(/\\/g, '/');
+                            break;
+                        }
+                    }
+                    row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?').get(logicalName, `${logicalName}.iceberg`, logicalName.replace(/\.iceberg$/i, ''), logicalName);
+                } catch (e) {}
+            }
+
+            if (!row && !localSamplePath) {
                 throw new Error('Access Denied: The requested file or Iceberg table is not indexed in the metadata catalog. Please run a catalog scan first.');
             }
 
