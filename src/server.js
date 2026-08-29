@@ -60,6 +60,29 @@ try {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     `);
+
+    // Auto-seed default sample datasets across all registered targets
+    const allTargets = db.prepare('SELECT target_id FROM targets').all();
+    const defaultSampleFiles = [
+        { name: 'sales_data.parquet', size: 125000, format: 'parquet' },
+        { name: 'customers.csv', size: 45000, format: 'csv' },
+        { name: 'logistics.parquet', size: 85000, format: 'parquet' },
+        { name: 'iris.parquet', size: 17408, format: 'parquet' },
+        { name: 'ecommerce_orders.iceberg', size: 65536, format: 'iceberg' },
+        { name: 'financial_transactions.iceberg', size: 65536, format: 'iceberg' },
+        { name: 'cloud_telemetry.iceberg', size: 65536, format: 'iceberg' }
+    ];
+    const insertCatStmt = db.prepare(`
+        INSERT OR IGNORE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const cryptoLib = require('crypto');
+    for (const t of allTargets) {
+        for (const f of defaultSampleFiles) {
+            const cid = cryptoLib.createHash('md5').update(`${t.target_id}_${f.name}`).digest('hex');
+            insertCatStmt.run(cid, t.target_id, f.name, f.name, f.size, f.format, new Date().toISOString());
+        }
+    }
 } catch (e) {
     console.warn('[DB Init] Warning initializing metadata_catalog:', e.message);
 }

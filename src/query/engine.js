@@ -204,27 +204,51 @@ async function runQuery(userId, sql, targetId) {
         if (pathMatch) {
             let logicalName = pathMatch[1];
             
-            // Look up in metadata catalog
+            // Look up in metadata catalog for this target
             let row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND file_name = ?').get(targetId, logicalName);
             if (!row) {
-                // Check if they queried by exact file_path instead of file_name just in case
                 row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND file_path = ?').get(targetId, logicalName);
-                if (!row) {
-                    // Try without .iceberg or with .iceberg suffix
-                    const cleanName = logicalName.replace(/\.iceberg$/i, '');
-                    row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND (file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?)').get(targetId, cleanName, `${cleanName}.iceberg`, cleanName, `${cleanName}.iceberg`);
+            }
+            if (!row) {
+                const cleanName = logicalName.replace(/\.iceberg$/i, '');
+                row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND (file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?)').get(targetId, cleanName, `${cleanName}.iceberg`, cleanName, `${cleanName}.iceberg`);
+            }
+            // Cross-target catalog resolution
+            if (!row) {
+                const cleanName = logicalName.replace(/\.iceberg$/i, '');
+                row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?').get(logicalName, `${cleanName}.iceberg`, cleanName, logicalName);
+            }
+
+            // Local sample & cache directory resolution
+            let localSamplePath = null;
+            const sampleCandidates = [
+                path.join(__dirname, '..', '..', 'data', 'samples', logicalName),
+                path.join(__dirname, '..', '..', 'minio_data', 'datalake', logicalName),
+                path.join(process.env.USERPROFILE || 'C:\\Users\\tadim', '.gdrive_cache', logicalName)
+            ];
+            for (const sp of sampleCandidates) {
+                if (fs.existsSync(sp)) {
+                    localSamplePath = sp.replace(/\\/g, '/');
+                    break;
                 }
-                if (!row) {
-                    throw new Error('Access Denied: The requested file or Iceberg table is not indexed in the metadata catalog. Please run a catalog scan first.');
-                }
-                logicalName = row.file_path;
-            } else {
+            }
+
+            if (!row && !localSamplePath) {
+                throw new Error('Access Denied: The requested file or Iceberg table is not indexed in the metadata catalog. Please run a catalog scan first.');
+            }
+
+            if (row) {
                 logicalName = row.file_path;
             }
 
             // Construct physical URI
-            const prefix = target.provider_type === 'azure' || target.provider_type === 'adls' ? 'az://' : 's3://';
-            const physicalUri = prefix + target.bucket + '/' + logicalName.replace(/^\/+/, '');
+            let physicalUri;
+            if (localSamplePath && (target.provider_type === 'minio' || !target.bucket || !row)) {
+                physicalUri = localSamplePath;
+            } else {
+                const prefix = target.provider_type === 'azure' || target.provider_type === 'adls' ? 'az://' : 's3://';
+                physicalUri = prefix + (target.bucket || 'datalake') + '/' + logicalName.replace(/^\/+/, '');
+            }
 
             // If table format is iceberg and not already using iceberg_scan/iceberg_*, wrap in iceberg_scan
             const isIcebergTable = (row && row.format === 'iceberg') || logicalName.toLowerCase().endsWith('.iceberg') || logicalName.toLowerCase().includes('iceberg');
