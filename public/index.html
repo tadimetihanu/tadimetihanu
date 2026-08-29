@@ -606,29 +606,30 @@
                         <textarea id="query-editor" style="background:transparent; color:var(--text-muted); font-family:'Menlo', monospace; font-size:1.05rem; line-height:1.6;" placeholder="-- Execute standard SQL against S3 / Azure Blob storage..."></textarea>
                     </div>
 
-                <div class="action-bar">
-                    <button class="btn btn-primary" id="run-btn" onclick="executeQuery()">Execute Query</button>
-                    <button class="btn btn-secondary" onclick="clearEditor()">Clear</button>
-                    <button class="btn btn-secondary" onclick="switchView('chart'); document.querySelector('.results-card').scrollIntoView({behavior:'smooth'})" id="chart-toggle-btn" style="display:none;">📊 Chart View</button>
+                <div class="action-bar" style="padding:14px 20px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; border-top:1px solid rgba(0,0,0,0.06);">
+                    <button class="btn btn-primary" id="run-btn" onclick="executeQuery()" style="white-space:nowrap; flex-shrink:0;">Execute Query</button>
+                    <button class="btn btn-secondary" onclick="clearEditor()" style="white-space:nowrap; flex-shrink:0;">Clear</button>
+                    <button class="btn btn-secondary" onclick="switchView('chart'); document.querySelector('.results-card').scrollIntoView({behavior:'smooth'})" id="chart-toggle-btn" style="display:none; white-space:nowrap; flex-shrink:0;">📊 Chart View</button>
                     <button class="btn btn-secondary" onclick="openSaveDialog()" id="save-query-btn"
-                        style="background:rgba(249,115,22,0.12);border-color:rgba(249,115,22,0.4);color:#f97316;"
+                        style="background:rgba(249,115,22,0.12);border-color:rgba(249,115,22,0.4);color:#f97316; white-space:nowrap; flex-shrink:0;"
                         title="Save this query">
                         💾 Save Query
                     </button>
                     <button class="btn btn-secondary" onclick="openSavedQueries()"
-                        style="background:rgba(251,191,36,0.1);border-color:rgba(0,0,0,0.1);color:#666666;"
+                        style="background:rgba(251,191,36,0.1);border-color:rgba(0,0,0,0.1);color:#666666; white-space:nowrap; flex-shrink:0;"
                         title="View saved queries">
                         📚 Saved
                     </button>
-                    <div id="live-burn-meter" style="display:none; align-items:center; gap:12px; background:rgba(239, 68, 68, 0.08); border:1px solid rgba(239, 68, 68, 0.2); padding:6px 14px; border-radius:30px; margin-left:15px;">
-                        <div style="width:8px; height:8px; background:#000000; border-radius:10px; box-shadow:0 0 10px #000000;"></div>
-                        <div style="font-size:0.65rem; font-weight:700; color:rgba(239, 68, 68, 0.8); text-transform:uppercase; letter-spacing:0.04em;">Live Burn</div>
-                        <div style="font-size:0.8rem; font-weight:800; color:var(--text);">$<span id="current-burn-val">0.000000</span></div>
-                        <div style="width:1px; height:12px; background:rgba(255,255,255,0.1);"></div>
-                        <div style="font-size:0.65rem; color:var(--text-muted);">Scanned: <span id="current-scan-val" style="color:var(--text); font-weight:700;">0.0</span> MB</div>
+                    <!-- Live Burn Badge placed directly next to Saved button -->
+                    <div id="live-burn-meter" style="display:none; align-items:center; gap:8px; background:rgba(239, 68, 68, 0.08); border:1px solid rgba(239, 68, 68, 0.25); padding:6px 14px; border-radius:999px; white-space:nowrap; flex-shrink:0;">
+                        <div style="width:8px; height:8px; background:#ef4444; border-radius:50%; box-shadow:0 0 8px rgba(239, 68, 68, 0.6); animation: burn-pulse 1.8s infinite;"></div>
+                        <div style="font-size:0.68rem; font-weight:800; color:#dc2626; text-transform:uppercase; letter-spacing:0.05em;">Live Burn</div>
+                        <div style="font-size:0.82rem; font-weight:800; color:var(--text);">$<span id="current-burn-val">0.000000</span></div>
+                        <div style="width:1px; height:12px; background:rgba(0,0,0,0.15);"></div>
+                        <div style="font-size:0.68rem; color:var(--text-muted);">Scanned: <span id="current-scan-val" style="color:var(--text); font-weight:700;">0.0</span> MB</div>
                     </div>
-                    <div style="flex: 1;"></div>
-                    <span id="exec-status" style="font-size: 0.8rem; color: var(--text-muted);"></span>
+                    <div style="flex: 1; min-width: 10px;"></div>
+                    <span id="exec-status" style="font-size: 0.82rem; color: var(--text-muted); white-space:nowrap; flex-shrink:0;"></span>
                 </div>
 
                 <!-- Inline save-name input (hidden by default) -->

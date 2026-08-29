@@ -938,7 +938,7 @@ window.executeQuery = async function() {
             const burnVal = document.getElementById('current-burn-val');
             const scanVal = document.getElementById('current-scan-val');
             if (meter && burnVal && scanVal) {
-                meter.style.display = 'flex';
+                meter.style.display = 'inline-flex';
                 burnVal.innerText = (data.meta.estimatedCost || 0).toFixed(6);
                 scanVal.innerText = ((data.meta.estimatedScan || 0) / (1024 * 1024)).toFixed(1);
             }

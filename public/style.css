@@ -305,7 +305,7 @@ main { display: flex; padding: 30px; gap: 30px; }
     border-radius: 2px;
 }
 
-.action-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 15px; margin-top: 20px; }
+.action-bar { display: flex; align-items: center; gap: 10px; margin-top: 0; padding: 14px 20px; flex-wrap: wrap; }
 
 .btn {
     padding: 10px 20px;
@@ -539,8 +539,8 @@ td { padding: 12px 15px; border-bottom: 1px solid var(--border); }
 
 /* ── Live Burn Pulsing ── */
 @keyframes burn-pulse {
-    0% { box-shadow: 0 0 0 0 rgba(0, 0, 0, 0.2); }
-    70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+    0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
+    70% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
     100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
 }
 
