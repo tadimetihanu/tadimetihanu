@@ -1057,6 +1057,8 @@ function renderFileList(files) {
     let filtered = files;
     if (!_activeTypeFilter) {
         filtered = []; // Hide all if no filter
+    } else if (_activeTypeFilter === 'iceberg') {
+        filtered = files.filter(f => f.name.toLowerCase().endsWith('.iceberg') || f.name.toLowerCase().includes('iceberg') || (f.format && f.format.toLowerCase() === 'iceberg'));
     } else if (_activeTypeFilter !== 'all') {
         filtered = files.filter(f => f.name.toLowerCase().endsWith('.' + _activeTypeFilter));
     }
@@ -1073,10 +1075,11 @@ function renderFileList(files) {
     list.innerHTML = filtered.map(f => {
         const ext = f.name.split('.').pop().toLowerCase();
         let icon = '📄';
-        if (ext === 'parquet') icon = '✨';
-        if (ext === 'orc') icon = '🐘';
-        if (ext === 'csv') icon = '📊';
-        if (ext === 'json') icon = '📦';
+        if (ext === 'iceberg' || f.name.toLowerCase().includes('iceberg') || (f.format && f.format.toLowerCase() === 'iceberg')) icon = '🧊';
+        else if (ext === 'parquet') icon = '✨';
+        else if (ext === 'orc') icon = '🐘';
+        else if (ext === 'csv') icon = '📊';
+        else if (ext === 'json') icon = '📦';
         
         return `<li style="padding:10px 12px; font-size:0.8rem; border-radius:8px; display:flex; gap:10px; align-items:center; justify-content: space-between; border-bottom:1px solid var(--border);">
             <div onclick="window.selectFileForQuery('${f.name}')" style="display:flex; gap:10px; align-items:center; cursor:pointer; flex-grow: 1;">
@@ -1147,7 +1150,9 @@ window.selectFileForQuery = (name) => {
     const prefix = target ? (target.base_uri || '') : '';
     const ext = name.split('.').pop().toLowerCase();
     let sql = `SELECT * FROM '${name}' LIMIT 100;`;
-    if (ext === 'parquet') sql = `SELECT * FROM read_parquet('${name}') LIMIT 100;`;
+    if (ext === 'iceberg' || name.toLowerCase().includes('iceberg')) {
+        sql = `SELECT * FROM iceberg_scan('${name}') LIMIT 100;`;
+    } else if (ext === 'parquet') sql = `SELECT * FROM read_parquet('${name}') LIMIT 100;`;
     else if (ext === 'csv') sql = `SELECT * FROM read_csv_auto('${name}') LIMIT 100;`;
     else if (ext === 'json') sql = `SELECT * FROM read_json_auto('${name}') LIMIT 100;`;
     else if (ext === 'orc') {

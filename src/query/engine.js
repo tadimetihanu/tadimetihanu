@@ -13,6 +13,22 @@ if (!process.env.SSL_CERT_DIR) process.env.SSL_CERT_DIR = '/etc/ssl/certs';
 
 // ── Global Connections ────────────────────────────────────────
 const metaDb = new Database('./data/metadata.db');
+try {
+    metaDb.exec(`
+        CREATE TABLE IF NOT EXISTS metadata_catalog (
+            id TEXT PRIMARY KEY,
+            target_id TEXT,
+            file_path TEXT,
+            file_name TEXT,
+            file_size INTEGER,
+            format TEXT,
+            last_modified TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
+} catch (e) {
+    console.warn('[Engine DB] Warning initializing metadata_catalog:', e.message);
+}
 const engineDb = new duckdb.Database(':memory:');
 const conn = engineDb.connect();
 
@@ -27,6 +43,7 @@ async function boot() {
             'INSTALL httpfs', 'LOAD httpfs', 
             'INSTALL azure', 'LOAD azure', 
             'INSTALL fts', 'LOAD fts', 
+            'INSTALL iceberg', 'LOAD iceberg',
             `SET s3_url_style='path'`,
             `SET s3_region='us-east-1'`
         ];
@@ -182,29 +199,43 @@ async function runQuery(userId, sql, targetId) {
             throw new Error('Direct cloud storage URIs are disabled. Please use the filename registered in the Metadata Catalog.');
         }
 
-        const pathMatch = sql.match(/(?:from\s+|read_[a-z_]+\s*\(\s*)['"]([^'"]+)['"]/i);
+        const pathMatch = sql.match(/(?:from\s+|read_[a-z_]+\s*\(\s*|iceberg_[a-z_]+\s*\(\s*)['"]([^'"]+)['"]/i);
         if (pathMatch) {
             let logicalName = pathMatch[1];
             
             // Look up in metadata catalog
-            const row = metaDb.prepare('SELECT file_path FROM metadata_catalog WHERE target_id = ? AND file_name = ?').get(targetId, logicalName);
+            let row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND file_name = ?').get(targetId, logicalName);
             if (!row) {
                 // Check if they queried by exact file_path instead of file_name just in case
-                const rowPath = metaDb.prepare('SELECT file_path FROM metadata_catalog WHERE target_id = ? AND file_path = ?').get(targetId, logicalName);
-                if (!rowPath) {
-                    throw new Error('Access Denied: The requested file is not indexed in the metadata catalog. Please run a catalog scan first.');
+                row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND file_path = ?').get(targetId, logicalName);
+                if (!row) {
+                    // Try without .iceberg or with .iceberg suffix
+                    const cleanName = logicalName.replace(/\.iceberg$/i, '');
+                    row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND (file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?)').get(targetId, cleanName, `${cleanName}.iceberg`, cleanName, `${cleanName}.iceberg`);
                 }
-                logicalName = rowPath.file_path;
+                if (!row) {
+                    throw new Error('Access Denied: The requested file or Iceberg table is not indexed in the metadata catalog. Please run a catalog scan first.');
+                }
+                logicalName = row.file_path;
             } else {
                 logicalName = row.file_path;
             }
 
             // Construct physical URI
             const prefix = target.provider_type === 'azure' || target.provider_type === 'adls' ? 'az://' : 's3://';
-            const physicalUri = prefix + target.bucket + '/' + logicalName;
+            const physicalUri = prefix + target.bucket + '/' + logicalName.replace(/^\/+/, '');
 
-            // Rewrite the SQL
-            sql = sql.replace(pathMatch[1], physicalUri);
+            // If table format is iceberg and not already using iceberg_scan/iceberg_*, wrap in iceberg_scan
+            const isIcebergTable = (row && row.format === 'iceberg') || logicalName.toLowerCase().endsWith('.iceberg') || logicalName.toLowerCase().includes('iceberg');
+            const hasIcebergFunction = /iceberg_[a-z_]+\s*\(/i.test(sql);
+
+            if (isIcebergTable && !hasIcebergFunction && !/read_[a-z_]+\s*\(/i.test(sql)) {
+                // Rewrite `FROM 'logicalName'` -> `FROM iceberg_scan('physicalUri')`
+                sql = sql.replace(new RegExp(`FROM\\s+['"]${pathMatch[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]`, 'i'), `FROM iceberg_scan('${physicalUri}')`);
+            } else {
+                // Standard rewrite
+                sql = sql.replace(pathMatch[1], physicalUri);
+            }
         }
     
 

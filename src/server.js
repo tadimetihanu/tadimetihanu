@@ -43,7 +43,25 @@ try {
     if (!colNames.includes('display_name')) db.prepare('ALTER TABLE users ADD COLUMN display_name TEXT').run();
     if (!colNames.includes('refresh_token')) db.prepare('ALTER TABLE users ADD COLUMN refresh_token TEXT').run();
 } catch (e) {
-    console.warn('[DB] OAuth schema verification warning:', e.message);
+    console.warn('[DB Init] Warning checking users table:', e.message);
+}
+
+// Ensure metadata_catalog table exists
+try {
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS metadata_catalog (
+            id TEXT PRIMARY KEY,
+            target_id TEXT,
+            file_path TEXT,
+            file_name TEXT,
+            file_size INTEGER,
+            format TEXT,
+            last_modified TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
+} catch (e) {
+    console.warn('[DB Init] Warning initializing metadata_catalog:', e.message);
 }
 
 const app = express();
@@ -470,9 +488,13 @@ app.get('/api/schema/:targetId', authenticate, checkAccess('read'), async (req, 
             });
         }
 
+        // Support Iceberg table schema inspection
+        const isIceberg = fileName.toLowerCase().endsWith('.iceberg') || fileName.toLowerCase().includes('iceberg');
+        const queryTarget = isIceberg ? `iceberg_scan('${fileName}')` : `'${fileName}'`;
+
         // 1. Get Column Details & Row Count (Sequentially for stability)
-        const descRows = await runQuery(userId, `DESCRIBE SELECT * FROM '${fileName}'`, targetId);
-        const countRows = await runQuery(userId, `SELECT COUNT(*) AS row_count FROM '${fileName}'`, targetId);
+        const descRows = await runQuery(userId, `DESCRIBE SELECT * FROM ${queryTarget}`, targetId);
+        const countRows = await runQuery(userId, `SELECT COUNT(*) AS row_count FROM ${queryTarget}`, targetId);
 
         const columns = descRows.map(r => ({
             name:     r.column_name,
@@ -839,7 +861,7 @@ app.post('/api/admin/catalog/scan-all', authenticate, async (req, res) => {
                     deleteStmt.run(target.target_id);
                     for (const file of filesList) {
                         const id = require('crypto').randomUUID();
-                        const ext = file.name.split('.').pop().toLowerCase();
+                        const ext = file.format || (file.name.toLowerCase().endsWith('.iceberg') || file.name.toLowerCase().includes('iceberg') ? 'iceberg' : file.name.split('.').pop().toLowerCase());
                         insertStmt.run(id, target.target_id, file.name, file.name, file.size, ext);
                     }
                 });
@@ -878,7 +900,7 @@ app.post('/api/admin/catalog/scan/:targetId', authenticate, async (req, res) => 
             deleteStmt.run(targetId);
             for (const file of filesList) {
                 const id = require('crypto').randomUUID();
-                const ext = file.name.split('.').pop().toLowerCase();
+                const ext = file.format || (file.name.toLowerCase().endsWith('.iceberg') || file.name.toLowerCase().includes('iceberg') ? 'iceberg' : file.name.split('.').pop().toLowerCase());
                 insertStmt.run(id, targetId, file.name, file.name, file.size, ext);
             }
         });

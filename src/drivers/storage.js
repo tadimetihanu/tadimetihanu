@@ -188,14 +188,38 @@ async function listFiles(targetId) {
             throw new Error(`Provider ${target.provider_type} not implemented`);
         }
 
-        // Group Spark datasets (directories ending in .parquet, .orc, .csv, .json)
+        // Group Spark & Iceberg datasets (directories ending in .parquet, .orc, .csv, .json, .delta, .iceberg or containing /metadata/)
         const datasets = new Map();
         const rawResults = [];
 
         for (const f of results) {
-            // Check if this file is inside a dataset directory
+            // Check if this file is inside an Iceberg table directory (either ending in .iceberg/ or containing /metadata/ /data/)
+            let icebergMatch = f.name.match(/^(.*?)\.iceberg(?:\/|$)/i);
+            if (!icebergMatch) {
+                const parts = f.name.split('/');
+                if (parts.length >= 2 && (parts.includes('metadata') || parts.includes('data'))) {
+                    const tableRoot = parts[0];
+                    if (f.name.toLowerCase().includes('metadata') && (f.name.toLowerCase().endsWith('.json') || f.name.toLowerCase().endsWith('.avro') || f.name.toLowerCase().endsWith('.text'))) {
+                        icebergMatch = [f.name, tableRoot];
+                    }
+                }
+            }
+
             const match = f.name.match(/^(.*?\.(?:parquet|orc|csv|json|delta|iceberg))\//i);
-            if (match) {
+            if (icebergMatch) {
+                const rawTableName = icebergMatch[1];
+                const datasetName = rawTableName.endsWith('.iceberg') ? rawTableName : `${rawTableName}.iceberg`;
+                if (!datasets.has(datasetName)) {
+                    datasets.set(datasetName, {
+                        name: datasetName,
+                        size: 0,
+                        lastModified: f.lastModified,
+                        format: 'iceberg',
+                        isIceberg: true
+                    });
+                }
+                datasets.get(datasetName).size += f.size;
+            } else if (match) {
                 const datasetName = match[1];
                 if (!datasets.has(datasetName)) {
                     datasets.set(datasetName, {
