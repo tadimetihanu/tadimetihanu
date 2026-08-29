@@ -203,6 +203,29 @@ async function runQuery(userId, sql, targetId) {
             throw new Error('Direct cloud storage URIs are disabled. Please use the filename registered in the Metadata Catalog.');
         }
 
+        // Intercept INSERT INTO for Iceberg tables
+        const insertMatch = sql.match(/INSERT\s+INTO\s+(?:(?:iceberg_scan\s*\(\s*)?['"]?([a-zA-Z0-9_\-.]+\.iceberg)['"]?\s*\)?)\s+([\s\S]+)/i);
+        if (insertMatch) {
+            const icebergTable = insertMatch[1];
+            let sourceSql = insertMatch[2].trim();
+            if (sourceSql.toLowerCase().startsWith('values')) {
+                sourceSql = `SELECT * FROM (${sourceSql})`;
+            }
+            const { appendIcebergRecords } = require('../drivers/storage');
+            const appendRes = await appendIcebergRecords(targetId, icebergTable, sourceSql);
+            return [{
+                status: 'SUCCESS',
+                operation: 'ICEBERG_APPEND',
+                table_name: icebergTable,
+                added_rows: appendRes.addedRows,
+                total_rows: appendRes.totalRows,
+                snapshot_id: appendRes.snapshotId,
+                table_version: `v${appendRes.version}`,
+                data_file: appendRes.dataFile,
+                message: `✅ Successfully appended ${appendRes.addedRows} record(s) into Iceberg table '${icebergTable}' (Snapshot #${appendRes.snapshotId})`
+            }];
+        }
+
         const pathMatch = sql.match(/(?:from\s+|read_[a-z_]+\s*\(\s*|iceberg_[a-z_]+\s*\(\s*)['"]([^'"]+)['"]/i);
         if (pathMatch) {
             let logicalName = pathMatch[1];

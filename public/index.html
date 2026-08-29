@@ -314,7 +314,10 @@
             <div class="file-browser" style="margin-top: 20px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                     <p class="section-title" style="margin:0;">Object Explorer</p>
-                    <button onclick="window.openCreateIcebergModal()" style="font-size:0.68rem; padding:3px 8px; border:1px solid #0284c7; color:#0284c7; background:rgba(2,132,199,0.08); font-weight:700; border-radius:6px; cursor:pointer;" title="Create a new Apache Iceberg Table">+ 🧊 New Iceberg</button>
+                    <div style="display:flex; gap:6px;">
+                        <button onclick="window.openCreateIcebergModal()" style="font-size:0.68rem; padding:3px 8px; border:1px solid #0284c7; color:#0284c7; background:rgba(2,132,199,0.08); font-weight:700; border-radius:6px; cursor:pointer;" title="Create a new Apache Iceberg Table">+ 🧊 New</button>
+                        <button onclick="window.openInsertIcebergModal()" style="font-size:0.68rem; padding:3px 8px; border:1px solid #10b981; color:#10b981; background:rgba(16,185,129,0.08); font-weight:700; border-radius:6px; cursor:pointer;" title="Insert records into an existing Iceberg table">➕ 🧊 Insert</button>
+                    </div>
                 </div>
                 <!-- High-Visibility Type Filters -->
                 <div id="file-type-chips" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; padding-bottom:5px;">
@@ -1004,6 +1007,68 @@
         </div>
     </div>
 
-    <script src="app.js?v=2"></script>
+    <!-- ── Insert Records into Iceberg Table Modal ──────────────────────────── -->
+    <div class="modal-overlay" id="insert-iceberg-modal" onclick="if(event.target.id==='insert-iceberg-modal') closeInsertIcebergModal()" style="display:none;">
+        <div class="modal" style="width: 540px; display: flex; flex-direction: column; gap: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 1.4rem;">➕🧊</span>
+                    <div>
+                        <h2 style="margin: 0; font-size: 1.05rem; font-weight: 700;">Insert Records into Iceberg Table</h2>
+                        <p style="margin: 2px 0 0 0; font-size: 0.75rem; color: var(--text-muted);">Append new records, create a new snapshot, and commit to Iceberg metadata</p>
+                    </div>
+                </div>
+                <button onclick="closeInsertIcebergModal()" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem;">✕</button>
+            </div>
+
+            <!-- Target Destination -->
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+                <label style="font-size: 0.78rem; font-weight: 600; color: var(--text);">Destination Storage Lake</label>
+                <select id="iceberg-insert-target-select" class="cfg-input" style="width: 100%; box-sizing: border-box;"></select>
+            </div>
+
+            <!-- Table Name -->
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+                <label style="font-size: 0.78rem; font-weight: 600; color: var(--text);">Target Iceberg Table</label>
+                <input id="iceberg-insert-table-name" type="text" placeholder="e.g. analytics_20260829_8918.iceberg" class="cfg-input" style="width: 100%; box-sizing: border-box;">
+            </div>
+
+            <!-- Insert Mode -->
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+                <label style="font-size: 0.78rem; font-weight: 600; color: var(--text);">Record Source</label>
+                <div style="display: flex; gap: 14px; margin-bottom: 6px;">
+                    <label style="font-size: 0.78rem; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="radio" name="iceberg-insert-source-type" value="sql" id="iceberg-insert-src-sql" checked onchange="toggleIcebergInsertMode()">
+                        <span>From SQL Query / VALUES</span>
+                    </label>
+                    <label style="font-size: 0.78rem; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="radio" name="iceberg-insert-source-type" value="json" id="iceberg-insert-src-json" onchange="toggleIcebergInsertMode()">
+                        <span>From JSON Array</span>
+                    </label>
+                </div>
+                <div id="iceberg-insert-sql-container">
+                    <textarea id="iceberg-insert-custom-sql" rows="4" placeholder="SELECT 99991 AS order_id, 'Electronics' AS category, 450.00 AS amount, 102 AS customer_id, 'Credit Card' AS payment_method, DATE '2026-08-29' AS order_date" class="cfg-input" style="width: 100%; box-sizing: border-box; font-family: monospace; font-size: 0.78rem;"></textarea>
+                    <span style="font-size: 0.7rem; color: var(--text-muted);">You can write <code>SELECT ...</code>, <code>VALUES (...)</code>, or query existing files to append.</span>
+                </div>
+                <div id="iceberg-insert-json-container" style="display: none;">
+                    <textarea id="iceberg-insert-custom-json" rows="4" placeholder='[{"order_id": 99992, "category": "Electronics", "amount": 850.0, "customer_id": 103, "payment_method": "PayPal", "order_date": "2026-08-29"}]' class="cfg-input" style="width: 100%; box-sizing: border-box; font-family: monospace; font-size: 0.78rem;"></textarea>
+                </div>
+            </div>
+
+            <!-- Status Banner -->
+            <div id="iceberg-insert-status" style="display: none; padding: 10px 14px; border-radius: 8px; font-size: 0.8rem;"></div>
+
+            <!-- Modal Actions -->
+            <div style="display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--border); padding-top: 14px;">
+                <button class="btn btn-secondary" onclick="closeInsertIcebergModal()">Cancel</button>
+                <button id="btn-submit-insert-iceberg" class="btn btn-primary" style="background: linear-gradient(135deg, #10b981, #059669); border-color: #10b981; color: white; display: flex; align-items: center; gap: 6px;" onclick="submitInsertIcebergRecords()">
+                    <span>➕🧊</span>
+                    <span>Insert Records</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=3"></script>
 </body>
 </html>

@@ -650,12 +650,192 @@ async function createIcebergTable(targetId, rawTableName, sourceDataOrSql, descr
     };
 }
 
+async function appendIcebergRecords(targetId, rawTableName, sourceDataOrSql) {
+    const target = getTarget(targetId);
+    let tableName = (rawTableName || '').trim().replace(/[^a-zA-Z0-9_\-.]/g, '_');
+    if (!tableName.toLowerCase().endsWith('.iceberg')) {
+        tableName += '.iceberg';
+    }
+
+    const duckdb = require('duckdb');
+    const db = new duckdb.Database(':memory:');
+    const runSql = (q) => new Promise((resolve, reject) => {
+        db.run(q, (err) => err ? reject(err) : resolve());
+    });
+    const allSql = (q) => new Promise((resolve, reject) => {
+        db.all(q, (err, rows) => err ? reject(err) : resolve(rows));
+    });
+
+    const os = require('os');
+    const tempDir = path.join(os.tmpdir(), `iceberg-append-${Date.now()}-${Math.random().toString(36).substring(7)}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+
+    // Find previous data files to determine next file index
+    const localSampleDir = path.join(__dirname, '..', '..', 'data', 'samples', tableName);
+    const minioSampleDir = path.join(__dirname, '..', '..', 'minio_data', 'datalake', tableName);
+    let tableDir = fs.existsSync(localSampleDir) ? localSampleDir : minioSampleDir;
+    
+    let existingDataFiles = [];
+    let prevMetadata = null;
+    let nextVersionNum = 2;
+
+    if (fs.existsSync(tableDir)) {
+        const dDir = path.join(tableDir, 'data');
+        if (fs.existsSync(dDir)) {
+            existingDataFiles = fs.readdirSync(dDir).filter(f => f.endsWith('.parquet'));
+        }
+        const mDir = path.join(tableDir, 'metadata');
+        if (fs.existsSync(mDir)) {
+            const hintPath = path.join(mDir, 'version-hint.text');
+            if (fs.existsSync(hintPath)) {
+                const hint = parseInt(fs.readFileSync(hintPath, 'utf8').trim()) || 1;
+                nextVersionNum = hint + 1;
+                const vPath = path.join(mDir, `v${hint}.metadata.json`);
+                if (fs.existsSync(vPath)) {
+                    try { prevMetadata = JSON.parse(fs.readFileSync(vPath, 'utf8')); } catch (e) {}
+                }
+            }
+        }
+    }
+
+    const nextFileIndex = existingDataFiles.length || 1;
+    const newFileName = `0000${nextFileIndex}-0-data.parquet`;
+    const tempParquetPath = path.join(tempDir, newFileName).replace(/\\/g, '/');
+
+    let addedRows = 0;
+    if (typeof sourceDataOrSql === 'string') {
+        let sql = sourceDataOrSql.trim();
+        const pathMatch = sql.match(/(?:from\s+|read_[a-z_]+\s*\(\s*|iceberg_[a-z_]+\s*\(\s*)['"]([^'"]+)['"]/i);
+        if (pathMatch) {
+            const logicalName = pathMatch[1];
+            const sampleCandidates = [
+                path.join(__dirname, '..', '..', 'data', 'samples', logicalName),
+                path.join(__dirname, '..', '..', 'minio_data', 'datalake', logicalName),
+                path.join(process.env.USERPROFILE || 'C:\\Users\\tadim', '.gdrive_cache', logicalName)
+            ];
+            for (const sp of sampleCandidates) {
+                if (fs.existsSync(sp)) {
+                    sql = sql.replace(pathMatch[1], sp.replace(/\\/g, '/'));
+                    break;
+                }
+            }
+        }
+        await runSql(`COPY (${sql}) TO '${tempParquetPath}' (FORMAT PARQUET)`);
+        const rows = await allSql(`SELECT * FROM read_parquet('${tempParquetPath}')`);
+        addedRows = rows.length;
+        if (addedRows === 0) {
+            throw new Error('The SQL query returned 0 rows to insert.');
+        }
+    } else if (Array.isArray(sourceDataOrSql) && sourceDataOrSql.length > 0) {
+        addedRows = sourceDataOrSql.length;
+        const tempJsonPath = path.join(tempDir, 'data.json').replace(/\\/g, '/');
+        const jsonStr = JSON.stringify(sourceDataOrSql, (k, v) => typeof v === 'bigint' ? Number(v) : v);
+        fs.writeFileSync(tempJsonPath, jsonStr, 'utf8');
+        await runSql(`COPY (SELECT * FROM read_json_auto('${tempJsonPath}')) TO '${tempParquetPath}' (FORMAT PARQUET)`);
+    } else {
+        throw new Error('No records or SQL query provided to insert into Iceberg table.');
+    }
+
+    const newParquetBuffer = fs.readFileSync(tempParquetPath);
+
+    const snapshotId = Math.floor(100000 + Math.random() * 900000);
+    const prefix = (target.provider_type === 'azure' || target.provider_type === 'adls') ? 'az://' : 's3://';
+    const location = `${prefix}${target.bucket || 'datalake'}/${tableName}`;
+
+    const prevTotalRecords = prevMetadata?.snapshots?.[prevMetadata.snapshots.length - 1]?.summary?.['total-records'] 
+        ? parseInt(prevMetadata.snapshots[prevMetadata.snapshots.length - 1].summary['total-records']) 
+        : 0;
+    const totalRecords = prevTotalRecords + addedRows;
+
+    const newSnapshot = {
+        "snapshot-id": snapshotId,
+        "parent-snapshot-id": prevMetadata?.['current-snapshot-id'] || null,
+        "timestamp-ms": Date.now(),
+        "summary": {
+            "operation": "append",
+            "added-data-files": "1",
+            "added-records": String(addedRows),
+            "total-data-files": String(existingDataFiles.length + 1),
+            "total-records": String(totalRecords)
+        },
+        "manifest-list": `${location}/metadata/snap-${snapshotId}-${nextVersionNum}.avro`
+    };
+
+    const newMetadata = prevMetadata ? {
+        ...prevMetadata,
+        "last-sequence-number": (prevMetadata['last-sequence-number'] || 1) + 1,
+        "last-updated-ms": Date.now(),
+        "current-snapshot-id": snapshotId,
+        "snapshots": [...(prevMetadata.snapshots || []), newSnapshot],
+        "snapshot-log": [...(prevMetadata['snapshot-log'] || []), { "timestamp-ms": Date.now(), "snapshot-id": snapshotId }]
+    } : {
+        "format-version": 2,
+        "table-uuid": crypto.randomUUID(),
+        "location": location,
+        "last-sequence-number": 1,
+        "last-updated-ms": Date.now(),
+        "last-column-id": 10,
+        "current-schema-id": 0,
+        "schemas": [{ "type": "struct", "schema-id": 0, "fields": [] }],
+        "partition-specs": [{ "spec-id": 0, "fields": [] }],
+        "default-spec-id": 0,
+        "last-partition-id": 0,
+        "properties": { "write.format.default": "parquet" },
+        "current-snapshot-id": snapshotId,
+        "snapshots": [newSnapshot],
+        "snapshot-log": [{ "timestamp-ms": Date.now(), "snapshot-id": snapshotId }]
+    };
+
+    const metadataBuffer = Buffer.from(JSON.stringify(newMetadata, null, 2), 'utf8');
+    const versionHintBuffer = Buffer.from(`${nextVersionNum}\n`, 'utf8');
+
+    // 1. Upload to cloud storage target
+    try {
+        await uploadFile(targetId, `${tableName}/data/${newFileName}`, newParquetBuffer, 'application/octet-stream');
+        await uploadFile(targetId, `${tableName}/metadata/v${nextVersionNum}.metadata.json`, metadataBuffer, 'application/json');
+        await uploadFile(targetId, `${tableName}/metadata/version-hint.text`, versionHintBuffer, 'text/plain');
+    } catch (upErr) {
+        console.warn(`[Iceberg Append Cloud Upload Notice] ${upErr.message}`);
+    }
+
+    // 2. Write to local directories
+    const localDestDirs = [
+        path.join(__dirname, '..', '..', 'data', 'samples', tableName),
+        path.join(__dirname, '..', '..', 'minio_data', 'datalake', tableName),
+        path.join(process.env.USERPROFILE || 'C:\\Users\\tadim', '.gdrive_cache', tableName)
+    ];
+    for (const lDir of localDestDirs) {
+        try {
+            const dataDir = path.join(lDir, 'data');
+            const metaDir = path.join(lDir, 'metadata');
+            fs.mkdirSync(dataDir, { recursive: true });
+            fs.mkdirSync(metaDir, { recursive: true });
+            fs.writeFileSync(path.join(dataDir, newFileName), newParquetBuffer);
+            fs.writeFileSync(path.join(metaDir, `v${nextVersionNum}.metadata.json`), metadataBuffer);
+            fs.writeFileSync(path.join(metaDir, 'version-hint.text'), versionHintBuffer);
+        } catch (e) {}
+    }
+
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
+
+    return {
+        success: true,
+        tableName,
+        addedRows,
+        totalRows: totalRecords,
+        snapshotId,
+        version: nextVersionNum,
+        dataFile: newFileName
+    };
+}
+
 module.exports = {
     listFiles,
     uploadFile,
     uploadStream,
     downloadFile,
     createIcebergTable,
+    appendIcebergRecords,
     getTarget,
     testConnection,
     gdrive

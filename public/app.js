@@ -1465,6 +1465,123 @@ window.queryCreatedIceberg = (tableName) => {
     }
 };
 
+window.openInsertIcebergModal = (tableName, targetId) => {
+    const targetSelect = document.getElementById('iceberg-insert-target-select');
+    if (targetSelect && window._targets) {
+        targetSelect.innerHTML = window._targets.map(t => `<option value="${t.target_id}" ${t.target_id === (_activeTargetId || targetId) ? 'selected' : ''}>${t.target_name} (${t.provider_type})</option>`).join('');
+    }
+    const nameInput = document.getElementById('iceberg-insert-table-name');
+    if (nameInput) {
+        nameInput.value = tableName || 'analytics_20260829_8918.iceberg';
+    }
+    const statusEl = document.getElementById('iceberg-insert-status');
+    if (statusEl) statusEl.style.display = 'none';
+    const modal = document.getElementById('insert-iceberg-modal');
+    if (modal) modal.style.display = 'flex';
+};
+
+window.closeInsertIcebergModal = () => {
+    const modal = document.getElementById('insert-iceberg-modal');
+    if (modal) modal.style.display = 'none';
+};
+
+window.toggleIcebergInsertMode = () => {
+    const isJson = document.getElementById('iceberg-insert-src-json')?.checked;
+    const sqlContainer = document.getElementById('iceberg-insert-sql-container');
+    const jsonContainer = document.getElementById('iceberg-insert-json-container');
+    if (sqlContainer) sqlContainer.style.display = isJson ? 'none' : 'block';
+    if (jsonContainer) jsonContainer.style.display = isJson ? 'block' : 'none';
+};
+
+window.submitInsertIcebergRecords = async () => {
+    const targetId = document.getElementById('iceberg-insert-target-select')?.value;
+    let tableName = document.getElementById('iceberg-insert-table-name')?.value?.trim();
+    const isJson = document.getElementById('iceberg-insert-src-json')?.checked;
+    const customSql = document.getElementById('iceberg-insert-custom-sql')?.value?.trim();
+    const customJson = document.getElementById('iceberg-insert-custom-json')?.value?.trim();
+    const statusEl = document.getElementById('iceberg-insert-status');
+    const submitBtn = document.getElementById('btn-submit-insert-iceberg');
+
+    if (!tableName) {
+        alert('Please specify the Iceberg table name.');
+        return;
+    }
+    if (!tableName.toLowerCase().endsWith('.iceberg')) {
+        tableName += '.iceberg';
+    }
+    if (!targetId) {
+        alert('Please select a storage lake target.');
+        return;
+    }
+
+    let payload = {
+        targetId,
+        tableName
+    };
+
+    if (isJson) {
+        if (!customJson) {
+            alert('Please provide JSON array of records to insert.');
+            return;
+        }
+        try {
+            payload.records = JSON.parse(customJson);
+        } catch (e) {
+            alert('Invalid JSON: ' + e.message);
+            return;
+        }
+    } else {
+        payload.sql = customSql || document.getElementById('iceberg-insert-custom-sql')?.placeholder;
+    }
+
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `<span>⏳</span><span>Appending Records & Snapshot...</span>`;
+    }
+    if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.style.background = 'rgba(16, 185, 129, 0.1)';
+        statusEl.style.color = '#10b981';
+        statusEl.style.border = '1px solid #10b981';
+        statusEl.innerHTML = `Writing Parquet data file and committing new snapshot...`;
+    }
+
+    try {
+        const res = await apiFetch('/api/iceberg/insert', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        });
+
+        if (res.success) {
+            if (statusEl) {
+                statusEl.style.background = 'rgba(16, 185, 129, 0.1)';
+                statusEl.style.color = '#10b981';
+                statusEl.style.border = '1px solid #10b981';
+                statusEl.innerHTML = `
+                    <div style="font-weight:700; margin-bottom:4px;">✅ Records Inserted Successfully!</div>
+                    <div style="font-size:0.75rem; margin-bottom:8px;">Appended <b>${res.addedRows}</b> record(s) to <code>${res.tableName}</code> (Total: <b>${res.totalRows}</b> records, Snapshot #<b>${res.snapshotId}</b>, Version <b>v${res.version}</b>).</div>
+                    <button class="btn btn-primary" style="font-size:0.72rem; padding:4px 10px; background:#10b981; border-color:#10b981;" onclick="window.closeInsertIcebergModal(); window.queryCreatedIceberg('${res.tableName}')">🔍 Query Updated Table</button>
+                `;
+            }
+        } else {
+            throw new Error(res.error || 'Insertion failed');
+        }
+    } catch (err) {
+        if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.style.background = 'rgba(239, 68, 68, 0.1)';
+            statusEl.style.color = '#ef4444';
+            statusEl.style.border = '1px solid #ef4444';
+            statusEl.innerHTML = `❌ Failed to insert records: ${err.message}`;
+        }
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = `<span>➕🧊</span><span>Insert Records</span>`;
+        }
+    }
+};
+
 // ── Auth & Helpers ──
 async function login() {
     const email = document.getElementById('login-email').value;

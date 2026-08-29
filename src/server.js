@@ -606,6 +606,24 @@ app.post('/api/iceberg/create', authenticate, checkAccess('write'), async (req, 
     }
 });
 
+app.post('/api/iceberg/insert', authenticate, checkAccess('write'), async (req, res) => {
+    try {
+        const { targetId, tableName, sql, records } = req.body;
+        if (!targetId) return res.status(400).json({ error: 'Target destination is required' });
+        if (!tableName) return res.status(400).json({ error: 'Iceberg table name is required' });
+        if (!sql && (!records || !Array.isArray(records) || records.length === 0)) {
+            return res.status(400).json({ error: 'Either records array or SQL query is required to insert.' });
+        }
+
+        const { appendIcebergRecords } = require('./drivers/storage');
+        const result = await appendIcebergRecords(targetId, tableName, records || sql);
+        res.json(result);
+    } catch (err) {
+        console.error('❌ [Iceberg Insert] Error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ── QUERY & AI ROUTES ─────────────────────────────────────────
 
 app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, res) => {
