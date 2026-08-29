@@ -7,6 +7,23 @@ const crypto = require('crypto');
 const gdrive = require('./gdrive');
 
 const db = new Database('./data/metadata.db');
+try {
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS metadata_catalog (
+            id TEXT PRIMARY KEY,
+            target_id TEXT,
+            file_path TEXT,
+            file_name TEXT,
+            file_size INTEGER,
+            format TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
+    const cols = db.prepare("PRAGMA table_info(metadata_catalog)").all().map(c => c.name);
+    if (!cols.includes('last_modified')) {
+        db.prepare("ALTER TABLE metadata_catalog ADD COLUMN last_modified TEXT").run();
+    }
+} catch (e) {}
 
 // ── Target Resolver ───────────────────────────────────────────
 function getTarget(targetId) {

@@ -22,10 +22,13 @@ try {
             file_name TEXT,
             file_size INTEGER,
             format TEXT,
-            last_modified TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     `);
+    const cols = metaDb.prepare("PRAGMA table_info(metadata_catalog)").all().map(c => c.name);
+    if (!cols.includes('last_modified')) {
+        metaDb.prepare("ALTER TABLE metadata_catalog ADD COLUMN last_modified TEXT").run();
+    }
 } catch (e) {
     console.warn('[Engine DB] Warning initializing metadata_catalog:', e.message);
 }
