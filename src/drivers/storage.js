@@ -463,35 +463,22 @@ async function createIcebergTable(targetId, rawTableName, sourceDataOrSql, descr
     let schemaFields = [];
 
     if (typeof sourceDataOrSql === 'string') {
-        // Source is a SQL query
-        await runSql(`CREATE VIEW src_view AS ${sourceDataOrSql}`);
-        const countRes = await allSql(`SELECT COUNT(*) AS c FROM src_view`);
-        rowCount = Number(countRes[0]?.c || 0);
+        // Execute SQL via engine to leverage catalog mapping and cloud credentials
+        const { runQuery } = require('../query/engine');
+        const rows = await runQuery('admin', sourceDataOrSql, targetId);
+        if (!rows || rows.length === 0) {
+            throw new Error('The SQL query returned 0 rows. Cannot create an empty Iceberg table.');
+        }
+        sourceDataOrSql = rows;
+    }
 
-        const descRes = await allSql(`DESCRIBE SELECT * FROM src_view`);
-        schemaFields = descRes.map((col, idx) => {
-            let fieldType = 'string';
-            const t = col.column_type.toLowerCase();
-            if (t.includes('int8') || t.includes('bigint') || t.includes('hugeint')) fieldType = 'long';
-            else if (t.includes('int') || t.includes('smallint') || t.includes('tinyint')) fieldType = 'int';
-            else if (t.includes('double') || t.includes('float') || t.includes('decimal') || t.includes('real')) fieldType = 'double';
-            else if (t.includes('bool')) fieldType = 'boolean';
-            else if (t.includes('date')) fieldType = 'date';
-            else if (t.includes('time')) fieldType = 'timestamp';
-            return {
-                id: idx + 1,
-                name: col.column_name,
-                required: false,
-                type: fieldType
-            };
-        });
-
-        await runSql(`COPY (SELECT * FROM src_view) TO '${tempParquetPath}' (FORMAT PARQUET)`);
-    } else if (Array.isArray(sourceDataOrSql) && sourceDataOrSql.length > 0) {
+    if (Array.isArray(sourceDataOrSql) && sourceDataOrSql.length > 0) {
         // Source is an array of records
         rowCount = sourceDataOrSql.length;
         const tempJsonPath = path.join(tempDir, 'data.json').replace(/\\/g, '/');
-        fs.writeFileSync(tempJsonPath, JSON.stringify(sourceDataOrSql));
+        // Handle BigInt serialization safely
+        const jsonStr = JSON.stringify(sourceDataOrSql, (k, v) => typeof v === 'bigint' ? Number(v) : v);
+        fs.writeFileSync(tempJsonPath, jsonStr, 'utf8');
 
         const descRes = await allSql(`DESCRIBE SELECT * FROM read_json_auto('${tempJsonPath}')`);
         schemaFields = descRes.map((col, idx) => {
