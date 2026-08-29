@@ -247,17 +247,13 @@ async function runQuery(userId, sql, targetId) {
                 } catch (e) {}
             }
 
-            if (!row && !localSamplePath) {
-                throw new Error('Access Denied: The requested file or Iceberg table is not indexed in the metadata catalog. Please run a catalog scan first.');
-            }
-
             if (row) {
                 logicalName = row.file_path;
             }
 
             // Construct physical URI
             let physicalUri;
-            if (localSamplePath && (target.provider_type === 'minio' || !target.bucket || !row)) {
+            if (localSamplePath) {
                 physicalUri = localSamplePath;
             } else {
                 const prefix = target.provider_type === 'azure' || target.provider_type === 'adls' ? 'az://' : 's3://';
