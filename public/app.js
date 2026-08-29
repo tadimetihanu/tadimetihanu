@@ -1314,10 +1314,20 @@ window.exportResults = (format) => {
 };
 
 // ── Iceberg Table Creation ──
-window.openCreateIcebergModal = () => {
+window.openCreateIcebergModal = async () => {
+    if (!_targets || _targets.length === 0) {
+        try {
+            const data = await apiFetch('/api/targets');
+            if (data.success && data.targets) _targets = data.targets;
+        } catch (e) {}
+    }
     const targetSelect = document.getElementById('iceberg-target-select');
-    if (targetSelect && _targets) {
-        targetSelect.innerHTML = _targets.map(t => `<option value="${t.target_id}" ${t.target_id === _activeTargetId ? 'selected' : ''}>${t.target_name} (${t.provider_type})</option>`).join('');
+    if (targetSelect) {
+        if (_targets && _targets.length > 0) {
+            targetSelect.innerHTML = _targets.map(t => `<option value="${t.target_id}" ${t.target_id === _activeTargetId ? 'selected' : ''}>${t.target_name} (${t.provider_type})</option>`).join('');
+        } else {
+            targetSelect.innerHTML = '<option value="">No targets configured</option>';
+        }
     }
 
     const hasResults = _filteredData && _filteredData.length > 0;
@@ -1465,10 +1475,20 @@ window.queryCreatedIceberg = (tableName) => {
     }
 };
 
-window.openInsertIcebergModal = (tableName, targetId) => {
+window.openInsertIcebergModal = async (tableName, targetId) => {
+    if (!_targets || _targets.length === 0) {
+        try {
+            const data = await apiFetch('/api/targets');
+            if (data.success && data.targets) _targets = data.targets;
+        } catch (e) {}
+    }
     const targetSelect = document.getElementById('iceberg-insert-target-select');
-    if (targetSelect && window._targets) {
-        targetSelect.innerHTML = window._targets.map(t => `<option value="${t.target_id}" ${t.target_id === (_activeTargetId || targetId) ? 'selected' : ''}>${t.target_name} (${t.provider_type})</option>`).join('');
+    if (targetSelect) {
+        if (_targets && _targets.length > 0) {
+            targetSelect.innerHTML = _targets.map(t => `<option value="${t.target_id}" ${t.target_id === (_activeTargetId || targetId) ? 'selected' : ''}>${t.target_name} (${t.provider_type})</option>`).join('');
+        } else {
+            targetSelect.innerHTML = '<option value="">No targets configured</option>';
+        }
     }
     const nameInput = document.getElementById('iceberg-insert-table-name');
     if (nameInput) {
