@@ -428,9 +428,51 @@ async function runQuery(userId, sql, targetId) {
                             });
                         }
                     } else {
+                        if (queryErr.message.includes('404') || queryErr.message.includes('Not Found') || queryErr.message.includes('NoSuchKey')) {
+                            const fileMatch = sql.match(/['"]([^'"]+\.(?:parquet|csv|json|orc|iceberg))['"]/i);
+                            if (fileMatch) {
+                                const searchedFile = path.basename(fileMatch[1]);
+                                try {
+                                    const otherTarget = await db.get(`
+                                        SELECT m.*, t.target_name 
+                                        FROM metadata_catalog m
+                                        JOIN targets t ON m.target_id = t.target_id
+                                        WHERE (m.file_name = ? OR m.file_path LIKE ?) AND m.target_id != ?
+                                        LIMIT 1
+                                    `, [searchedFile, `%${searchedFile}%`, targetId]);
+
+                                    if (otherTarget) {
+                                        throw new Error(`File '${searchedFile}' does not exist in target '${target.target_name}'. It is located in target '${otherTarget.target_name}'. Please switch your Active Target to '${otherTarget.target_name}'.`);
+                                    }
+                                } catch (e) {
+                                    if (e.message.includes('does not exist in target')) throw e;
+                                }
+                            }
+                        }
                         throw queryErr;
                     }
                 } else {
+                    if (queryErr.message.includes('404') || queryErr.message.includes('Not Found') || queryErr.message.includes('NoSuchKey')) {
+                        const fileMatch = sql.match(/['"]([^'"]+\.(?:parquet|csv|json|orc|iceberg))['"]/i);
+                        if (fileMatch) {
+                            const searchedFile = path.basename(fileMatch[1]);
+                            try {
+                                const otherTarget = await db.get(`
+                                    SELECT m.*, t.target_name 
+                                    FROM metadata_catalog m
+                                    JOIN targets t ON m.target_id = t.target_id
+                                    WHERE (m.file_name = ? OR m.file_path LIKE ?) AND m.target_id != ?
+                                    LIMIT 1
+                                `, [searchedFile, `%${searchedFile}%`, targetId]);
+
+                                if (otherTarget) {
+                                    throw new Error(`File '${searchedFile}' does not exist in target '${target.target_name}'. It is located in target '${otherTarget.target_name}'. Please switch your Active Target to '${otherTarget.target_name}'.`);
+                                }
+                            } catch (e) {
+                                if (e.message.includes('does not exist in target')) throw e;
+                            }
+                        }
+                    }
                     throw queryErr;
                 }
             }

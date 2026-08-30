@@ -2150,6 +2150,9 @@ window.closeCatalogSchemaModal = () => {
 
 window.queryFromCatalogSchema = () => {
     if (!_currentCatalogSchemaFile) return;
+    const fileToQuery = _currentCatalogSchemaFile;
+    const targetToQuery = _currentCatalogSchemaTarget;
+
     window.closeCatalogSchemaModal();
     const overlay = document.getElementById('admin-overlay');
     if (overlay) overlay.style.display = 'none';
@@ -2157,9 +2160,17 @@ window.queryFromCatalogSchema = () => {
     // Switch to SQL mode
     if (window.switchMainMode) window.switchMainMode('sql');
 
+    // Automatically switch active storage target to the target where this file exists!
+    if (targetToQuery) {
+        _activeTargetId = targetToQuery;
+        if (window.selectTarget) {
+            window.selectTarget(targetToQuery);
+        }
+    }
+
     // Build SQL query
     let sql = '';
-    const fn = _currentCatalogSchemaFile;
+    const fn = fileToQuery;
     if (fn.toLowerCase().endsWith('.iceberg') || fn.toLowerCase().includes('iceberg')) {
         sql = `SELECT * FROM iceberg_scan('${fn}') LIMIT 100;`;
     } else if (fn.toLowerCase().endsWith('.parquet')) {
