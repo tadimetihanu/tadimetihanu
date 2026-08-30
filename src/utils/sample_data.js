@@ -100,6 +100,152 @@ function ensureAllSampleData() {
             `);
         }
 
+        // 4. Generate iris.parquet
+        if (!fs.existsSync(irisParquet) || fs.statSync(irisParquet).size === 0) {
+            memDb.run(`
+                COPY (
+                    SELECT 
+                        ROUND(4.3 + (random() * 3.6), 2) AS sepal_length,
+                        ROUND(2.0 + (random() * 2.4), 2) AS sepal_width,
+                        ROUND(1.0 + (random() * 5.9), 2) AS petal_length,
+                        ROUND(0.1 + (random() * 2.4), 2) AS petal_width,
+                        CASE (range % 3)
+                            WHEN 0 THEN 'Iris-setosa'
+                            WHEN 1 THEN 'Iris-versicolor'
+                            ELSE 'Iris-virginica'
+                        END AS species
+                    FROM range(150)
+                ) TO '${irisParquet}' (FORMAT PARQUET);
+            `);
+        }
+
+        // 5. Generate country_full.csv
+        const countryCsv = path.join(samplesDir, 'country_full.csv').replace(/\\/g, '/');
+        if (!fs.existsSync(countryCsv)) {
+            memDb.run(`
+                COPY (
+                    SELECT 
+                        range + 1 AS country_id,
+                        CASE (range % 8)
+                            WHEN 0 THEN 'United States'
+                            WHEN 1 THEN 'United Kingdom'
+                            WHEN 2 THEN 'Germany'
+                            WHEN 3 THEN 'Japan'
+                            WHEN 4 THEN 'India'
+                            WHEN 5 THEN 'Canada'
+                            WHEN 6 THEN 'Australia'
+                            ELSE 'France'
+                        END AS country_name,
+                        CASE (range % 8)
+                            WHEN 0 THEN 'US'
+                            WHEN 1 THEN 'GB'
+                            WHEN 2 THEN 'DE'
+                            WHEN 3 THEN 'JP'
+                            WHEN 4 THEN 'IN'
+                            WHEN 5 THEN 'CA'
+                            WHEN 6 THEN 'AU'
+                            ELSE 'FR'
+                        END AS country_code,
+                        CASE (range % 4)
+                            WHEN 0 THEN 'North America'
+                            WHEN 1 THEN 'Europe'
+                            WHEN 2 THEN 'Asia'
+                            ELSE 'Oceania'
+                        END AS continent,
+                        (1000000 + (random() * 500000000))::bigint AS population,
+                        ROUND(50000000.0 + (random() * 2000000000.0), 2) AS gdp_usd
+                    FROM range(250)
+                ) TO '${countryCsv}' (FORMAT CSV, HEADER);
+            `);
+        }
+
+        // 6. Generate county_uk.csv
+        const countyCsv = path.join(samplesDir, 'county_uk.csv').replace(/\\/g, '/');
+        if (!fs.existsSync(countyCsv)) {
+            memDb.run(`
+                COPY (
+                    SELECT 
+                        range + 1 AS county_id,
+                        CASE (range % 6)
+                            WHEN 0 THEN 'Greater London'
+                            WHEN 1 THEN 'West Midlands'
+                            WHEN 2 THEN 'Greater Manchester'
+                            WHEN 3 THEN 'West Yorkshire'
+                            WHEN 4 THEN 'Hampshire'
+                            ELSE 'Surrey'
+                        END AS county_name,
+                        'United Kingdom' AS country,
+                        (500 + (range % 4500))::int AS postcodes_count
+                    FROM range(100)
+                ) TO '${countyCsv}' (FORMAT CSV, HEADER);
+            `);
+        }
+
+        // 7. Generate currency.csv
+        const currencyCsv = path.join(samplesDir, 'currency.csv').replace(/\\/g, '/');
+        if (!fs.existsSync(currencyCsv)) {
+            memDb.run(`
+                COPY (
+                    SELECT 
+                        CASE (range % 5)
+                            WHEN 0 THEN 'USD'
+                            WHEN 1 THEN 'EUR'
+                            WHEN 2 THEN 'GBP'
+                            WHEN 3 THEN 'JPY'
+                            ELSE 'INR'
+                        END AS currency_code,
+                        CASE (range % 5)
+                            WHEN 0 THEN 'US Dollar'
+                            WHEN 1 THEN 'Euro'
+                            WHEN 2 THEN 'British Pound'
+                            WHEN 3 THEN 'Japanese Yen'
+                            ELSE 'Indian Rupee'
+                        END AS currency_name,
+                        CASE (range % 5)
+                            WHEN 0 THEN 1.0000
+                            WHEN 1 THEN 0.9200
+                            WHEN 2 THEN 0.7800
+                            WHEN 3 THEN 152.50
+                            ELSE 86.50
+                        END AS exchange_rate_usd,
+                        CASE (range % 5)
+                            WHEN 0 THEN '$'
+                            WHEN 1 THEN '€'
+                            WHEN 2 THEN '£'
+                            WHEN 3 THEN '¥'
+                            ELSE '₹'
+                        END AS symbol
+                    FROM range(5)
+                ) TO '${currencyCsv}' (FORMAT CSV, HEADER);
+            `);
+        }
+
+        // 8. Generate industry.csv
+        const industryCsv = path.join(samplesDir, 'industry.csv').replace(/\\/g, '/');
+        if (!fs.existsSync(industryCsv)) {
+            memDb.run(`
+                COPY (
+                    SELECT 
+                        range + 1 AS industry_id,
+                        CASE (range % 6)
+                            WHEN 0 THEN 'Artificial Intelligence'
+                            WHEN 1 THEN 'Cloud Infrastructure'
+                            WHEN 2 THEN 'Financial Technology'
+                            WHEN 3 THEN 'Biotechnology'
+                            WHEN 4 THEN 'Semiconductor Manufacturing'
+                            ELSE 'E-Commerce'
+                        END AS industry_name,
+                        CASE (range % 3)
+                            WHEN 0 THEN 'Technology'
+                            WHEN 1 THEN 'Finance'
+                            ELSE 'Healthcare'
+                        END AS sector,
+                        (100 + (range % 2500))::int AS active_companies
+                    FROM range(50)
+                ) TO '${industryCsv}' (FORMAT CSV, HEADER);
+            `);
+        }
+
         // 4. Generate sample Iceberg Tables on disk
         const sampleTables = [
             {
@@ -229,6 +375,10 @@ function ensureAllSampleData() {
             { name: 'customers.csv', size: 45000, format: 'csv' },
             { name: 'logistics.parquet', size: 85000, format: 'parquet' },
             { name: 'iris.parquet', size: 17408, format: 'parquet' },
+            { name: 'country_full.csv', size: 20300, format: 'csv' },
+            { name: 'county_uk.csv', size: 2048, format: 'csv' },
+            { name: 'currency.csv', size: 3800, format: 'csv' },
+            { name: 'industry.csv', size: 750, format: 'csv' },
             { name: 'ecommerce_orders.iceberg', size: 65536, format: 'iceberg' },
             { name: 'financial_transactions.iceberg', size: 65536, format: 'iceberg' },
             { name: 'cloud_telemetry.iceberg', size: 65536, format: 'iceberg' }

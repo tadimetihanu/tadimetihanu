@@ -148,20 +148,26 @@ async function initSecret(target) {
             }
         }
 
-        const accMatch = connStr.match(/AccountName=([^;]+)/i);
-        const accName = accMatch ? accMatch[1] : 'azure';
-        const scope = `az://${target.bucket}/`;
-        const secretName = `azure_${accName}_${target.bucket}`.replace(/[^a-z0-9_]/gi, '_');
+        if (connStr && (connStr.includes('AccountKey=') || connStr.includes('SharedAccessSignature='))) {
+            const accMatch = connStr.match(/AccountName=([^;]+)/i);
+            const accName = accMatch ? accMatch[1] : 'azure';
+            const scope = `az://${target.bucket || 'datalake'}/`;
+            const secretName = `azure_${accName}_${target.bucket || 'datalake'}`.replace(/[^a-z0-9_]/gi, '_');
 
-        await new Promise((res, rej) => {
-            conn.run(`
-                CREATE OR REPLACE SECRET ${secretName} (
-                    TYPE AZURE,
-                    CONNECTION_STRING '${connStr}',
-                    SCOPE '${scope}'
-                );
-            `, (e) => e ? rej(e) : res());
-        });
+            try {
+                await new Promise((res, rej) => {
+                    conn.run(`
+                        CREATE OR REPLACE SECRET ${secretName} (
+                            TYPE AZURE,
+                            CONNECTION_STRING '${connStr}',
+                            SCOPE '${scope}'
+                        );
+                    `, (e) => e ? rej(e) : res());
+                });
+            } catch (e) {
+                console.warn('[Azure Secret Notice]', e.message);
+            }
+        }
     }
 }
 
