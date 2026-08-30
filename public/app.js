@@ -1551,7 +1551,8 @@ window.submitInsertIcebergRecords = async () => {
             return;
         }
     } else {
-        payload.sql = customSql || document.getElementById('iceberg-insert-custom-sql')?.placeholder;
+        let rawSql = customSql || document.getElementById('iceberg-insert-custom-sql')?.placeholder;
+        payload.sql = (rawSql || '').replace(/;+\s*$/, '').trim();
     }
 
     if (submitBtn) {

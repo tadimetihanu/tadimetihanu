@@ -204,11 +204,14 @@ async function runQuery(userId, sql, targetId) {
         }
 
         // Intercept INSERT INTO for Iceberg tables
-        const insertMatch = sql.match(/INSERT\s+INTO\s+(?:(?:iceberg_scan\s*\(\s*)?['"]?([a-zA-Z0-9_\-.]+\.iceberg)['"]?\s*\)?)\s+([\s\S]+)/i);
+        const insertMatch = sql.match(/INSERT\s+INTO\s+(?:(?:iceberg_scan\s*\(\s*)?['"]?([a-zA-Z0-9_\-.]+(?:\.iceberg)?)['"]?\s*\)?)\s+([\s\S]+)/i);
         if (insertMatch) {
-            const icebergTable = insertMatch[1];
-            let sourceSql = insertMatch[2].trim();
-            if (sourceSql.toLowerCase().startsWith('values')) {
+            let icebergTable = insertMatch[1].trim();
+            if (!icebergTable.toLowerCase().endsWith('.iceberg')) {
+                icebergTable += '.iceberg';
+            }
+            let sourceSql = insertMatch[2].trim().replace(/;+\s*$/, '').trim();
+            if (/^VALUES\s*\(/i.test(sourceSql)) {
                 sourceSql = `SELECT * FROM (${sourceSql})`;
             }
             const { appendIcebergRecords } = require('../drivers/storage');

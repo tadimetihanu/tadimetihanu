@@ -704,7 +704,19 @@ async function appendIcebergRecords(targetId, rawTableName, sourceDataOrSql) {
 
     let addedRows = 0;
     if (typeof sourceDataOrSql === 'string') {
-        let sql = sourceDataOrSql.trim();
+        let sql = sourceDataOrSql.trim().replace(/;+\s*$/, '').trim();
+
+        // Automatically strip any leading `INSERT INTO ...` wrapper
+        const insertPrefixMatch = sql.match(/^INSERT\s+INTO\s+(?:(?:iceberg_scan\s*\(\s*)?['"]?[a-zA-Z0-9_\-.]+(?:\.iceberg)?['"]?\s*\)?)\s+([\s\S]+)/i);
+        if (insertPrefixMatch) {
+            sql = insertPrefixMatch[1].trim().replace(/;+\s*$/, '').trim();
+        }
+
+        // Handle `VALUES (...)` syntax
+        if (/^VALUES\s*\(/i.test(sql)) {
+            sql = `SELECT * FROM (${sql})`;
+        }
+
         const pathMatch = sql.match(/(?:from\s+|read_[a-z_]+\s*\(\s*|iceberg_[a-z_]+\s*\(\s*)['"]([^'"]+)['"]/i);
         if (pathMatch) {
             const logicalName = pathMatch[1];
