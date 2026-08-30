@@ -1,33 +1,17 @@
 const { S3Client, ListObjectsV2Command, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { BlobServiceClient } = require('@azure/storage-blob');
-const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const gdrive = require('./gdrive');
-
-const db = new Database('./data/metadata.db');
-try {
-    db.exec(`
-        CREATE TABLE IF NOT EXISTS metadata_catalog (
-            id TEXT PRIMARY KEY,
-            target_id TEXT,
-            file_path TEXT,
-            file_name TEXT,
-            file_size INTEGER,
-            format TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    `);
-    const cols = db.prepare("PRAGMA table_info(metadata_catalog)").all().map(c => c.name);
-    if (!cols.includes('last_modified')) {
-        db.prepare("ALTER TABLE metadata_catalog ADD COLUMN last_modified TEXT").run();
-    }
-} catch (e) {}
+const db = require('../db');
 
 // ── Target Resolver ───────────────────────────────────────────
-function getTarget(targetId) {
-    const target = db.prepare('SELECT * FROM targets WHERE target_id = ?').get(targetId);
+async function getTarget(targetId) {
+    let target = await db.get('SELECT * FROM targets WHERE target_id = ?', [targetId]);
+    if (!target && db.getSync) {
+        target = db.getSync('SELECT * FROM targets WHERE target_id = ?', [targetId]);
+    }
     if (!target) throw new Error(`Target ${targetId} not found`);
     return target;
 }
@@ -602,40 +586,20 @@ async function createIcebergTable(targetId, rawTableName, sourceDataOrSql, descr
         } catch (e) {}
     }
 
-    // 3. Register in SQLite metadata_catalog
-    const metaDbPath = path.join(__dirname, '..', '..', 'data', 'metadata.db');
-    if (fs.existsSync(metaDbPath)) {
-        const metaDb = new Database(metaDbPath);
-        metaDb.exec(`
-            CREATE TABLE IF NOT EXISTS metadata_catalog (
-                id TEXT PRIMARY KEY,
-                target_id TEXT,
-                file_path TEXT,
-                file_name TEXT,
-                file_size INTEGER,
-                format TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
+    // 3. Register in Control Plane metadata_catalog
+    const catId = crypto.createHash('md5').update(`${targetId}_${tableName}`).digest('hex');
+    try {
+        await db.run(`
+            INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [catId, targetId, tableName, tableName, parquetBuffer.length + metadataBuffer.length, 'iceberg', new Date().toISOString()]);
+    } catch (insErr) {
         try {
-            const cols = metaDb.prepare("PRAGMA table_info(metadata_catalog)").all().map(c => c.name);
-            if (!cols.includes('last_modified')) {
-                metaDb.prepare("ALTER TABLE metadata_catalog ADD COLUMN last_modified TEXT").run();
-            }
-        } catch (e) {}
-
-        const catId = crypto.createHash('md5').update(`${targetId}_${tableName}`).digest('hex');
-        try {
-            metaDb.prepare(`
-                INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            `).run(catId, targetId, tableName, tableName, parquetBuffer.length + metadataBuffer.length, 'iceberg', new Date().toISOString());
-        } catch (insErr) {
-            metaDb.prepare(`
+            await db.run(`
                 INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
                 VALUES (?, ?, ?, ?, ?, ?)
-            `).run(catId, targetId, tableName, tableName, parquetBuffer.length + metadataBuffer.length, 'iceberg');
-        }
+            `, [catId, targetId, tableName, tableName, parquetBuffer.length + metadataBuffer.length, 'iceberg']);
+        } catch (e) {}
     }
 
     // Clean temp dir

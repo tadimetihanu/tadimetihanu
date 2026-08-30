@@ -222,57 +222,39 @@ function ensureAllSampleData() {
             }
         }
 
-        // 5. Populate SQLite metadata_catalog
-        const dbPath = path.join(__dirname, '..', '..', 'data', 'metadata.db');
-        if (fs.existsSync(dbPath)) {
-            const db = new Database(dbPath);
-            db.exec(`
-                CREATE TABLE IF NOT EXISTS metadata_catalog (
-                    id TEXT PRIMARY KEY,
-                    target_id TEXT,
-                    file_path TEXT,
-                    file_name TEXT,
-                    file_size INTEGER,
-                    format TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-            `);
+        // 5. Populate metadata_catalog in Control Plane Database
+        const db = require('../db');
+        const defaultFiles = [
+            { name: 'sales_data.parquet', size: 125000, format: 'parquet' },
+            { name: 'customers.csv', size: 45000, format: 'csv' },
+            { name: 'logistics.parquet', size: 85000, format: 'parquet' },
+            { name: 'iris.parquet', size: 17408, format: 'parquet' },
+            { name: 'ecommerce_orders.iceberg', size: 65536, format: 'iceberg' },
+            { name: 'financial_transactions.iceberg', size: 65536, format: 'iceberg' },
+            { name: 'cloud_telemetry.iceberg', size: 65536, format: 'iceberg' }
+        ];
 
+        (async () => {
             try {
-                const cols = db.prepare("PRAGMA table_info(metadata_catalog)").all().map(c => c.name);
-                if (!cols.includes('last_modified')) {
-                    db.prepare("ALTER TABLE metadata_catalog ADD COLUMN last_modified TEXT").run();
-                }
-            } catch (e) {}
-
-            const allTargets = db.prepare('SELECT target_id FROM targets').all();
-            const defaultFiles = [
-                { name: 'sales_data.parquet', size: 125000, format: 'parquet' },
-                { name: 'customers.csv', size: 45000, format: 'csv' },
-                { name: 'logistics.parquet', size: 85000, format: 'parquet' },
-                { name: 'iris.parquet', size: 17408, format: 'parquet' },
-                { name: 'ecommerce_orders.iceberg', size: 65536, format: 'iceberg' },
-                { name: 'financial_transactions.iceberg', size: 65536, format: 'iceberg' },
-                { name: 'cloud_telemetry.iceberg', size: 65536, format: 'iceberg' }
-            ];
-
-            for (const t of allTargets) {
-                for (const f of defaultFiles) {
-                    const cid = crypto.createHash('md5').update(`${t.target_id}_${f.name}`).digest('hex');
-                    try {
-                        db.prepare(`
-                            INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        `).run(cid, t.target_id, f.name, f.name, f.size, f.format, new Date().toISOString());
-                    } catch (insErr) {
-                        db.prepare(`
-                            INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        `).run(cid, t.target_id, f.name, f.name, f.size, f.format);
+                const allTargets = await db.all('SELECT target_id FROM targets');
+                for (const t of allTargets) {
+                    for (const f of defaultFiles) {
+                        const cid = crypto.createHash('md5').update(`${t.target_id}_${f.name}`).digest('hex');
+                        try {
+                            await db.run(`
+                                INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            `, [cid, t.target_id, f.name, f.name, f.size, f.format, new Date().toISOString()]);
+                        } catch (insErr) {
+                            await db.run(`
+                                INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                            `, [cid, t.target_id, f.name, f.name, f.size, f.format]);
+                        }
                     }
                 }
-            }
-        }
+            } catch (e) {}
+        })();
     } catch (err) {
         console.warn('[Sample Data] Initialization notice:', err.message);
     }

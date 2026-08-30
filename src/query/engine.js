@@ -1,37 +1,16 @@
 const duckdb = require('duckdb');
-const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 const gdrive = require('../drivers/gdrive');
+const db = require('../db');
 
 // SSL CA Certificate Paths for libcurl / OpenSSL / DuckDB
 if (!process.env.CURL_CA_BUNDLE) process.env.CURL_CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
 if (!process.env.SSL_CERT_FILE) process.env.SSL_CERT_FILE = '/etc/ssl/certs/ca-certificates.crt';
 if (!process.env.SSL_CERT_DIR) process.env.SSL_CERT_DIR = '/etc/ssl/certs';
 
-// ── Global Connections ────────────────────────────────────────
-const metaDb = new Database('./data/metadata.db');
-try {
-    metaDb.exec(`
-        CREATE TABLE IF NOT EXISTS metadata_catalog (
-            id TEXT PRIMARY KEY,
-            target_id TEXT,
-            file_path TEXT,
-            file_name TEXT,
-            file_size INTEGER,
-            format TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    `);
-    const cols = metaDb.prepare("PRAGMA table_info(metadata_catalog)").all().map(c => c.name);
-    if (!cols.includes('last_modified')) {
-        metaDb.prepare("ALTER TABLE metadata_catalog ADD COLUMN last_modified TEXT").run();
-    }
-} catch (e) {
-    console.warn('[Engine DB] Warning initializing metadata_catalog:', e.message);
-}
 const engineDb = new duckdb.Database(':memory:');
 const conn = engineDb.connect();
 
@@ -94,8 +73,8 @@ function enqueue(fn) {
     return p;
 }
 
-function getTarget(targetId) {
-    const target = metaDb.prepare('SELECT * FROM targets WHERE target_id = ?').get(targetId);
+async function getTarget(targetId) {
+    const target = await db.get('SELECT * FROM targets WHERE target_id = ?', [targetId]);
     if (!target) throw new Error(`Target ${targetId} not found`);
     return target;
 }
@@ -190,7 +169,7 @@ async function initSecret(target) {
 async function runQuery(userId, sql, targetId) {
     await _bootPromise;
 
-    const target = getTarget(targetId);
+    const target = await getTarget(targetId);
     const startTime = Date.now();
 
     return enqueue(async () => {
@@ -234,18 +213,18 @@ async function runQuery(userId, sql, targetId) {
             let logicalName = pathMatch[1];
             
             // Look up in metadata catalog for this target
-            let row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND file_name = ?').get(targetId, logicalName);
+            let row = await db.get('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND file_name = ?', [targetId, logicalName]);
             if (!row) {
-                row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND file_path = ?').get(targetId, logicalName);
+                row = await db.get('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND file_path = ?', [targetId, logicalName]);
             }
             if (!row) {
                 const cleanName = logicalName.replace(/\.iceberg$/i, '');
-                row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND (file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?)').get(targetId, cleanName, `${cleanName}.iceberg`, cleanName, `${cleanName}.iceberg`);
+                row = await db.get('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND (file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?)', [targetId, cleanName, `${cleanName}.iceberg`, cleanName, `${cleanName}.iceberg`]);
             }
             // Cross-target catalog resolution
             if (!row) {
                 const cleanName = logicalName.replace(/\.iceberg$/i, '');
-                row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?').get(logicalName, `${cleanName}.iceberg`, cleanName, logicalName);
+                row = await db.get('SELECT file_path, format FROM metadata_catalog WHERE file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?', [logicalName, `${cleanName}.iceberg`, cleanName, logicalName]);
             }
 
             // Local sample & cache directory resolution
@@ -272,7 +251,7 @@ async function runQuery(userId, sql, targetId) {
                             break;
                         }
                     }
-                    row = metaDb.prepare('SELECT file_path, format FROM metadata_catalog WHERE file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?').get(logicalName, `${logicalName}.iceberg`, logicalName.replace(/\.iceberg$/i, ''), logicalName);
+                    row = await db.get('SELECT file_path, format FROM metadata_catalog WHERE file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?', [logicalName, `${logicalName}.iceberg`, logicalName.replace(/\.iceberg$/i, ''), logicalName]);
                 } catch (e) {}
             }
 
@@ -471,14 +450,20 @@ async function runQuery(userId, sql, targetId) {
 }
 
 // ── Audit Logging ─────────────────────────────────────────────
-function logQuery(userId, targetId, sql, rowCount, duration, status, scannedBytes = 0, costUsd = 0) {
+async function logQuery(userId, targetId, sql, rowCount, duration, status, scannedBytes = 0, costUsd = 0) {
     try {
-        metaDb.prepare(`
-            INSERT INTO query_logs (user_id, target_id, query_text, row_count, execution_time_ms, status, data_scanned_bytes, calculated_cost_usd)
+        const queryId = crypto.randomUUID();
+        await db.run(`
+            INSERT INTO query_history (id, user_id, target_id, sql_query, duration_ms, row_count, cost_usd, scan_bytes)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(userId, targetId, sql, rowCount, duration, status, scannedBytes, costUsd);
+        `, [queryId, userId, targetId, sql, duration, rowCount, costUsd, scannedBytes]);
     } catch (err) {
-        console.error('Failed to log query:', err.message);
+        try {
+            await db.run(`
+                INSERT INTO query_logs (user_id, target_id, query_text, row_count, execution_time_ms, status, data_scanned_bytes, calculated_cost_usd)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `, [userId, targetId, sql, rowCount, duration, status, scannedBytes, costUsd]);
+        } catch (e) {}
     }
 }
 

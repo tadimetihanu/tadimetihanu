@@ -2,14 +2,13 @@
 require('dotenv').config();
 const { OpenAI } = require('openai');
 const { Parser } = require('node-sql-parser');
-const Database = require('better-sqlite3');
+const db = require('../db');
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const parser = new Parser();
-const metaDb = new Database('./data/metadata.db');
 
 async function suggestQuery(userId, userPrompt, targetId, fileName) {
-    const target = metaDb.prepare('SELECT * FROM targets WHERE target_id = ?').get(targetId);
+    const target = await db.get('SELECT * FROM targets WHERE target_id = ?', [targetId]);
     if (!target) throw new Error('Invalid Target');
 
     let allowedPrefix;

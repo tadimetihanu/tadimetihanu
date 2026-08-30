@@ -14,12 +14,12 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
-const Database = require('better-sqlite3');
 const multer = require('multer');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const MicrosoftStrategy = require('passport-microsoft').Strategy;
 const session = require('express-session');
+const db = require('./db');
 const { listFiles, uploadFile } = require('./drivers/storage');
 const { encrypt, decrypt } = require('./utils/crypto');
 const { initDuckDB, runQuery, calculateCost } = require('./query/engine');
@@ -29,78 +29,17 @@ const { authenticate, isAdmin, loginLimiter, SECRET_KEY } = require('./middlewar
 const { checkAccess } = require('./middleware/checkAccess');
 const fs = require('fs');
 
-if (!fs.existsSync('./data')) {
-    fs.mkdirSync('./data', { recursive: true });
-}
-const db = new Database('./data/metadata.db');
-
-// Ensure OAuth columns exist in users table
-try {
-    const tableInfo = db.prepare("PRAGMA table_info(users)").all();
-    const colNames = tableInfo.map(c => c.name);
-    if (!colNames.includes('oauth_provider')) db.prepare('ALTER TABLE users ADD COLUMN oauth_provider TEXT').run();
-    if (!colNames.includes('oauth_id')) db.prepare('ALTER TABLE users ADD COLUMN oauth_id TEXT').run();
-    if (!colNames.includes('display_name')) db.prepare('ALTER TABLE users ADD COLUMN display_name TEXT').run();
-    if (!colNames.includes('refresh_token')) db.prepare('ALTER TABLE users ADD COLUMN refresh_token TEXT').run();
-} catch (e) {
-    console.warn('[DB Init] Warning checking users table:', e.message);
-}
-
-// Ensure metadata_catalog table exists
-try {
-    db.exec(`
-        CREATE TABLE IF NOT EXISTS metadata_catalog (
-            id TEXT PRIMARY KEY,
-            target_id TEXT,
-            file_path TEXT,
-            file_name TEXT,
-            file_size INTEGER,
-            format TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    `);
-
+// Initialize Control Plane Database (PostgreSQL / SQLite)
+db.initDatabase().then(async () => {
     try {
-        const cols = db.prepare("PRAGMA table_info(metadata_catalog)").all().map(c => c.name);
-        if (!cols.includes('last_modified')) {
-            db.prepare("ALTER TABLE metadata_catalog ADD COLUMN last_modified TEXT").run();
-        }
-    } catch (e) {}
-
-    // Auto-seed default sample datasets across all registered targets
-    const allTargets = db.prepare('SELECT target_id FROM targets').all();
-    const defaultSampleFiles = [
-        { name: 'sales_data.parquet', size: 125000, format: 'parquet' },
-        { name: 'customers.csv', size: 45000, format: 'csv' },
-        { name: 'logistics.parquet', size: 85000, format: 'parquet' },
-        { name: 'iris.parquet', size: 17408, format: 'parquet' },
-        { name: 'ecommerce_orders.iceberg', size: 65536, format: 'iceberg' },
-        { name: 'financial_transactions.iceberg', size: 65536, format: 'iceberg' },
-        { name: 'cloud_telemetry.iceberg', size: 65536, format: 'iceberg' }
-    ];
-    const cryptoLib = require('crypto');
-    for (const t of allTargets) {
-        for (const f of defaultSampleFiles) {
-            const cid = cryptoLib.createHash('md5').update(`${t.target_id}_${f.name}`).digest('hex');
-            try {
-                db.prepare(`
-                    INSERT OR IGNORE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `).run(cid, t.target_id, f.name, f.name, f.size, f.format, new Date().toISOString());
-            } catch (e) {
-                db.prepare(`
-                    INSERT OR IGNORE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                `).run(cid, t.target_id, f.name, f.name, f.size, f.format);
-            }
-        }
+        const { ensureAllSampleData } = require('./utils/sample_data');
+        ensureAllSampleData();
+    } catch (e) {
+        console.warn('[DB Init] Sample data warning:', e.message);
     }
-
-    const { ensureAllSampleData } = require('./utils/sample_data');
-    ensureAllSampleData();
-} catch (e) {
-    console.warn('[DB Init] Warning initializing metadata_catalog:', e.message);
-}
+}).catch(err => {
+    console.error('❌ [Control Plane DB] Failed to initialize database:', err);
+});
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
@@ -175,21 +114,21 @@ function sanitizeBigInt(obj) {
     return obj;
 }
 
-function handleOAuthLogin(profile, res) {
+async function handleOAuthLogin(profile, res) {
     try {
         const email = profile.emails && profile.emails[0] ? profile.emails[0].value : (profile.userPrincipalName || null);
         if (!email) return res.redirect('/?error=no_email_provided');
-        let user = db.prepare('SELECT * FROM users WHERE oauth_id = ? OR email = ?').get(profile.id, email);
+        let user = await db.get('SELECT * FROM users WHERE oauth_id = ? OR email = ?', [profile.id, email]);
         if (!user) {
             const defaultPassword = bcrypt.hashSync(Math.random().toString(36).slice(-8), 10);
             const encToken = profile.refreshToken ? encrypt(profile.refreshToken) : null;
-            db.prepare('INSERT INTO users (user_id, email, password_hash, role, oauth_provider, oauth_id, display_name, refresh_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-              .run(profile.id, email, defaultPassword, 'user', profile.oauth_provider, profile.id, profile.displayName || email, encToken);
+            await db.run('INSERT INTO users (user_id, email, password_hash, role, oauth_provider, oauth_id, display_name, refresh_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+              [profile.id, email, defaultPassword, 'user', profile.oauth_provider, profile.id, profile.displayName || email, encToken]);
             user = { user_id: profile.id, email, role: 'user' };
         } else {
             const encToken = profile.refreshToken ? encrypt(profile.refreshToken) : (user.refresh_token || null);
-            db.prepare('UPDATE users SET refresh_token = ?, oauth_id = ?, oauth_provider = ?, display_name = ? WHERE email = ?')
-              .run(encToken, profile.id || user.oauth_id, profile.oauth_provider || user.oauth_provider, profile.displayName || user.display_name || email, email);
+            await db.run('UPDATE users SET refresh_token = ?, oauth_id = ?, oauth_provider = ?, display_name = ? WHERE email = ?',
+              [encToken, profile.id || user.oauth_id, profile.oauth_provider || user.oauth_provider, profile.displayName || user.display_name || email, email]);
             user.role = user.role || 'user';
         }
         const token = jwt.sign({ user_id: user.user_id, email: user.email, role: user.role }, SECRET_KEY, { expiresIn: '2h' });
@@ -221,7 +160,7 @@ app.get('/api/auth/microsoft/callback', passport.authenticate('microsoft', { fai
 // ── Health Check ─────────────────────────────────────────────
 app.get('/health', (req, res) => res.status(200).send('Enterprise OK'));
 
-app.post('/api/auth/login', loginLimiter, (req, res) => {
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
     const { email, password } = req.body;
     
     console.log(`[Auth] Attempt: ${email}`);
@@ -232,7 +171,7 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
     }
 
     try {
-        const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+        const user = await db.get('SELECT * FROM users WHERE email = ?', [email]);
         if (!user || !bcrypt.compareSync(password, user.password_hash)) {
             console.log(`[Auth] Failed: Invalid user or password for ${email}`);
             return res.status(401).json({ error: 'Invalid credentials' });
@@ -257,30 +196,33 @@ app.get('/api/auth/me', authenticate, (req, res) => {
 });
 
 // ── USER PROFILE & HISTORY ────────────────────────────────────
-app.get('/api/user/profile', authenticate, (req, res) => {
+app.get('/api/user/profile', authenticate, async (req, res) => {
     try {
         const userId = req.user.user_id;
 
         // Fetch Query History
-        const history = db.prepare(`
-            SELECT query_text AS sql_query, row_count, execution_time_ms AS duration, status, timestamp, target_id 
-            FROM query_logs 
-            WHERE user_id = ? 
-            ORDER BY timestamp DESC 
-            LIMIT 25
-        `).all(userId);
+        let history = [];
+        let stats = {};
+        try {
+            history = await db.all(`
+                SELECT query_text AS sql_query, row_count, execution_time_ms AS duration, status, timestamp, target_id 
+                FROM query_logs 
+                WHERE user_id = ? 
+                ORDER BY timestamp DESC 
+                LIMIT 25
+            `, [userId]);
 
-        // Calculate Stats
-        const stats = db.prepare(`
-            SELECT 
-                COUNT(*) as total_queries,
-                SUM(execution_time_ms) as total_compute_time,
-                MAX(timestamp) as last_active,
-                SUM(data_scanned_bytes) as total_scanned_bytes,
-                SUM(calculated_cost_usd) as total_burn_usd
-            FROM query_logs 
-            WHERE user_id = ?
-        `).get(userId);
+            stats = (await db.get(`
+                SELECT 
+                    COUNT(*) as total_queries,
+                    SUM(execution_time_ms) as total_compute_time,
+                    MAX(timestamp) as last_active,
+                    SUM(data_scanned_bytes) as total_scanned_bytes,
+                    SUM(calculated_cost_usd) as total_burn_usd
+                FROM query_logs 
+                WHERE user_id = ?
+            `, [userId])) || {};
+        } catch (e) {}
 
         res.json({ 
             success: true, 
@@ -295,7 +237,7 @@ app.get('/api/user/profile', authenticate, (req, res) => {
                 lastActive: stats.last_active || 'Never',
                 totalScannedMB: ((stats.total_scanned_bytes || 0) / (1024 * 1024)).toFixed(2),
                 totalBurnUsd: (stats.total_burn_usd || 0).toFixed(6)
-            },
+            }, 
             history 
         });
     } catch (err) {
@@ -325,7 +267,7 @@ function getAzurePrefix(target) {
 }
 
 // ── STORAGE & TARGET ROUTES ───────────────────────────────────
-app.get('/api/targets', authenticate, (req, res) => {
+app.get('/api/targets', authenticate, async (req, res) => {
     const userId = req.user.user_id;
     const role   = req.user.role;
 
@@ -334,13 +276,13 @@ app.get('/api/targets', authenticate, (req, res) => {
     try {
         let targets;
         if (role === 'admin') {
-            targets = db.prepare('SELECT * FROM targets').all();
+            targets = await db.all('SELECT * FROM targets');
         } else {
-            targets = db.prepare(`
+            targets = await db.all(`
                 SELECT t.* FROM targets t
                 JOIN permissions p ON t.target_id = p.target_id
                 WHERE p.subject_id = ? AND p.subject_type = 'user'
-            `).all(userId);
+            `, [userId]);
         }
         
         console.log(`[TargetFetch] Found ${targets.length} targets for ${req.user.email}`);
@@ -422,9 +364,9 @@ app.post('/api/ingestion/start', authenticate, async (req, res) => {
         
         // Ensure user has write access to target
         const { getTarget } = require('./drivers/storage');
-        const target = getTarget(targetId);
+        const target = await getTarget(targetId);
         if (req.user.role !== 'admin') {
-            const hasAccess = db.prepare('SELECT 1 FROM permissions WHERE subject_id=? AND target_id=? AND access_level IN ("write", "admin")').get(req.user.user_id, targetId);
+            const hasAccess = await db.get('SELECT 1 FROM permissions WHERE subject_id=? AND target_id=? AND (can_write=1 OR can_delete=1)', [req.user.user_id, targetId]);
             if (!hasAccess) return res.status(403).json({ error: 'Write permission required for target' });
         }
 
@@ -748,7 +690,9 @@ app.post('/api/nl2sql', authenticate, async (req, res) => {
   try {
     const { sql, result } = await handleNl2Sql(question);
     const summary = JSON.stringify(result).substring(0, 200);
-    db.prepare('INSERT INTO nl2sql_log (question, sql, result_summary) VALUES (?, ?, ?)').run(question, sql, summary);
+    try {
+      await db.run('INSERT INTO nl2sql_log (question, sql, result_summary) VALUES (?, ?, ?)', [question, sql, summary]);
+    } catch (e) {}
     res.json({ success: true, sql, result });
   } catch (err) {
     console.error('[NL2SQL] Error:', err.message);
@@ -759,35 +703,35 @@ app.post('/api/nl2sql', authenticate, async (req, res) => {
 // ── ADMIN CONTROL CENTER ROUTES ───────────────────────────────
 
 // 1. User Management
-app.get('/api/admin/users', authenticate, (req, res) => {
+app.get('/api/admin/users', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     try {
-        const users = db.prepare('SELECT user_id, email, role FROM users').all();
+        const users = await db.all('SELECT user_id, email, role FROM users');
         res.json({ success: true, users });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-app.put('/api/admin/users/:userId', authenticate, (req, res) => {
+app.put('/api/admin/users/:userId', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const { userId } = req.params;
     const { role } = req.body;
     try {
-        db.prepare('UPDATE users SET role = ? WHERE user_id = ?').run(role, userId);
+        await db.run('UPDATE users SET role = ? WHERE user_id = ?', [role, userId]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/api/admin/users', authenticate, (req, res) => {
+app.post('/api/admin/users', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const { email, password, role } = req.body;
     try {
         const userId = require('crypto').randomUUID();
-        const hash = bcrypt.hashSync(password, 10);
-        db.prepare('INSERT INTO users (user_id, email, password_hash, role) VALUES (?, ?, ?, ?)').run(userId, email, hash, role || 'user');
+        const hash = await bcrypt.hash(password, 10);
+        await db.run('INSERT INTO users (user_id, email, password_hash, role) VALUES (?, ?, ?, ?)', [userId, email, hash, role || 'user']);
         res.json({ success: true, userId });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -795,29 +739,30 @@ app.post('/api/admin/users', authenticate, (req, res) => {
 });
 
 // 2. Permission Management
-app.get('/api/admin/permissions', authenticate, (req, res) => {
+app.get('/api/admin/permissions', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     try {
-        const perms = db.prepare(`
+        const perms = await db.all(`
             SELECT p.*, u.email, t.target_name 
             FROM permissions p
             LEFT JOIN users u ON p.subject_id = u.user_id AND p.subject_type = 'user'
             LEFT JOIN targets t ON p.target_id = t.target_id
-        `).all();
+        `);
         res.json({ success: true, permissions: perms });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/api/admin/permissions', authenticate, (req, res) => {
+app.post('/api/admin/permissions', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const { subject_id, subject_type, target_id, can_read, can_write, can_delete } = req.body;
     try {
-        db.prepare(`
-            INSERT OR REPLACE INTO permissions (subject_id, subject_type, target_id, can_read, can_write, can_delete)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `).run(subject_id, subject_type, target_id, can_read || 0, can_write || 0, can_delete || 0);
+        const permId = `${subject_id}_${target_id}`;
+        await db.run(`
+            INSERT OR REPLACE INTO permissions (id, subject_id, subject_type, target_id, can_read, can_write, can_delete)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [permId, subject_id, subject_type, target_id, can_read ? 1 : 0, can_write ? 1 : 0, can_delete ? 1 : 0]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -825,45 +770,41 @@ app.post('/api/admin/permissions', authenticate, (req, res) => {
 });
 
 // 3. Target Management
-app.get('/api/admin/targets', authenticate, (req, res) => {
+app.get('/api/admin/targets', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     try {
-        const targets = db.prepare('SELECT * FROM targets').all();
+        const targets = await db.all('SELECT * FROM targets');
         res.json({ success: true, targets });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/api/admin/targets', authenticate, (req, res) => {
+app.post('/api/admin/targets', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const { target_name, provider_type, endpoint, bucket, credentials, region } = req.body;
-    let [access_key, secret_key] = (credentials || "").split(':');
-    if (!secret_key) secret_key = access_key; // Fallback
 
     try {
         const targetId = require('crypto').randomUUID();
-        db.prepare(`
-            INSERT INTO targets (target_id, target_name, provider_type, endpoint, bucket, access_key, secret_key, region, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-        `).run(targetId, target_name, provider_type, endpoint, bucket, access_key, secret_key, region);
+        await db.run(`
+            INSERT INTO targets (target_id, target_name, provider_type, endpoint, bucket, credentials, region, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+        `, [targetId, target_name, provider_type, endpoint, bucket, credentials, region]);
         res.json({ success: true, targetId });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-app.put('/api/admin/targets/:targetId', authenticate, (req, res) => {
+app.put('/api/admin/targets/:targetId', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const { targetId } = req.params;
     const { target_name, endpoint, bucket, credentials, region } = req.body;
     console.log(`[Admin] Updating target ${targetId}: ${target_name}`);
-    let [access_key, secret_key] = (credentials || "").split(':');
-    if (!secret_key) secret_key = access_key;
 
     try {
-        db.prepare('UPDATE targets SET target_name = ?, endpoint = ?, bucket = ?, access_key = ?, secret_key = ?, region = ? WHERE target_id = ?')
-          .run(target_name, endpoint, bucket, access_key, secret_key, region, targetId);
+        await db.run('UPDATE targets SET target_name = ?, endpoint = ?, bucket = ?, credentials = ?, region = ? WHERE target_id = ?',
+          [target_name, endpoint, bucket, credentials, region, targetId]);
         res.json({ success: true });
     } catch (err) {
         console.error(`[Admin] Update failed: ${err.message}`);
@@ -871,76 +812,70 @@ app.put('/api/admin/targets/:targetId', authenticate, (req, res) => {
     }
 });
 
-app.delete('/api/admin/targets/:targetId', authenticate, (req, res) => {
+app.delete('/api/admin/targets/:targetId', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const { targetId } = req.params;
     try {
-        db.prepare('DELETE FROM targets WHERE target_id = ?').run(targetId);
+        await db.run('DELETE FROM targets WHERE target_id = ?', [targetId]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-app.get('/api/admin/logs', authenticate, (req, res) => {
+app.get('/api/admin/logs', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     try {
-        const logs = db.prepare(`
-            SELECT q.timestamp, u.email, t.target_name, q.status, q.execution_time_ms AS duration, q.calculated_cost_usd, q.query_text
-            FROM query_logs q
-            LEFT JOIN users u ON q.user_id = u.user_id
-            LEFT JOIN targets t ON q.target_id = t.target_id
-            ORDER BY q.timestamp DESC
-        `).all();
+        let logs = [];
+        try {
+            logs = await db.all(`
+                SELECT q.timestamp, u.email, t.target_name, q.status, q.execution_time_ms AS duration, q.calculated_cost_usd, q.query_text
+                FROM query_logs q
+                LEFT JOIN users u ON q.user_id = u.user_id
+                LEFT JOIN targets t ON q.target_id = t.target_id
+                ORDER BY q.timestamp DESC
+            `);
+        } catch (e) {}
         res.json({ success: true, logs });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-app.get('/api/admin/catalog', authenticate, (req, res) => {
+app.get('/api/admin/catalog', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     try {
-        const catalog = db.prepare(`
+        const catalog = await db.all(`
             SELECT m.*, t.target_name 
             FROM metadata_catalog m
             LEFT JOIN targets t ON m.target_id = t.target_id
-        `).all();
+        `);
         res.json({ success: true, catalog });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-
 app.post('/api/admin/catalog/scan-all', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     
     try {
-        const targets = db.prepare('SELECT target_id, target_name FROM targets').all();
+        const targets = await db.all('SELECT target_id, target_name FROM targets');
         let totalFiles = 0;
         let errors = [];
-
-        const deleteStmt = db.prepare('DELETE FROM metadata_catalog WHERE target_id = ?');
-        const insertStmt = db.prepare(`
-            INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `);
 
         for (const target of targets) {
             try {
                 const files = await listFiles(target.target_id);
-                
-                const transaction = db.transaction((filesList) => {
-                    deleteStmt.run(target.target_id);
-                    for (const file of filesList) {
-                        const id = require('crypto').randomUUID();
-                        const ext = file.format || (file.name.toLowerCase().endsWith('.iceberg') || file.name.toLowerCase().includes('iceberg') ? 'iceberg' : file.name.split('.').pop().toLowerCase());
-                        insertStmt.run(id, target.target_id, file.name, file.name, file.size, ext);
-                    }
-                });
-                
-                transaction(files);
+                await db.run('DELETE FROM metadata_catalog WHERE target_id = ?', [target.target_id]);
+                for (const file of files) {
+                    const id = require('crypto').randomUUID();
+                    const ext = file.format || (file.name.toLowerCase().endsWith('.iceberg') || file.name.toLowerCase().includes('iceberg') ? 'iceberg' : file.name.split('.').pop().toLowerCase());
+                    await db.run(`
+                        INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    `, [id, target.target_id, file.name, file.name, file.size, ext]);
+                }
                 totalFiles += files.length;
             } catch (err) {
                 console.error(`Failed to scan ${target.target_name}:`, err);
@@ -964,22 +899,16 @@ app.post('/api/admin/catalog/scan/:targetId', authenticate, async (req, res) => 
     const { targetId } = req.params;
     try {
         const files = await listFiles(targetId);
-        const deleteStmt = db.prepare('DELETE FROM metadata_catalog WHERE target_id = ?');
-        const insertStmt = db.prepare(`
-            INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `);
-
-        const transaction = db.transaction((filesList) => {
-            deleteStmt.run(targetId);
-            for (const file of filesList) {
-                const id = require('crypto').randomUUID();
-                const ext = file.format || (file.name.toLowerCase().endsWith('.iceberg') || file.name.toLowerCase().includes('iceberg') ? 'iceberg' : file.name.split('.').pop().toLowerCase());
-                insertStmt.run(id, targetId, file.name, file.name, file.size, ext);
-            }
-        });
+        await db.run('DELETE FROM metadata_catalog WHERE target_id = ?', [targetId]);
+        for (const file of files) {
+            const id = require('crypto').randomUUID();
+            const ext = file.format || (file.name.toLowerCase().endsWith('.iceberg') || file.name.toLowerCase().includes('iceberg') ? 'iceberg' : file.name.split('.').pop().toLowerCase());
+            await db.run(`
+                INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `, [id, targetId, file.name, file.name, file.size, ext]);
+        }
         
-        transaction(files);
         res.json({ success: true, message: `Scan completed successfully. Indexed ${files.length} objects.` });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -994,7 +923,7 @@ app.post('/api/admin/spark/submit', authenticate, async (req, res) => {
         const { submitSparkJob } = require('./services/spark');
         let conf = {};
         if (targetId) {
-            const target = db.prepare('SELECT * FROM targets WHERE target_id = ?').get(targetId);
+            const target = await db.get('SELECT * FROM targets WHERE target_id = ?', [targetId]);
             if (target && (target.provider_type === 'azure' || target.provider_type === 'adls')) {
                 const connStr = target.endpoint || '';
                 const accMatch = connStr.match(/AccountName=([^;]+)/i);
@@ -1091,7 +1020,7 @@ app.post('/api/rag/bulk_index/start', authenticate, async (req, res) => {
             const fs = require('fs');
             const path = require('path');
             
-            const targets = db.prepare('SELECT * FROM targets').all();
+            const targets = await db.all('SELECT * FROM targets');
             const validExtensions = ['.pdf', '.txt', '.md', '.csv', '.json', '.parquet', '.orc', '.dxf'];
             
             let allFiles = [];
