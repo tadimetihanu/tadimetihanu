@@ -325,11 +325,7 @@ window.showAdminTab = async function(tab) {
                                 <td style="font-family:monospace; font-size:0.8rem; font-weight:600;">${c.file_path}</td>
                                 <td><span style="background:rgba(255,255,255,0.05); padding:2px 8px; border-radius:4px; font-size:0.65rem; text-transform:uppercase; font-weight:600; color:#a5b4fc;">${c.format}</span></td>
                                 <td>${(c.file_size / 1024).toFixed(1)} KB</td>
-                                <td>
-                                    <button class="ghost-btn" onclick="window.viewCatalogSchema('${c.target_id}', '${c.file_path}', '${c.format}', '${(c.target_name || '').replace(/'/g, "\\'")}')" style="font-size:0.72rem; padding:4px 10px; border-radius:6px; background:rgba(99,102,241,0.15); color:#818cf8; border:1px solid rgba(99,102,241,0.35); cursor:pointer; display:inline-flex; align-items:center; gap:4px; font-weight:600;">
-                                        <span>🔍</span><span>Inspect Schema</span>
-                                    </button>
-                                </td>
+                                <td>${c.schema_json ? '✅ Ready' : '<span style="opacity:0.5;">-</span>'}</td>
                             </tr>`).join('')}
                         </tbody>
                     </table>`;
@@ -2097,124 +2093,5 @@ window.submitSparkJob = async () => {
         btn.disabled = false;
         btn.innerText = '🚀 Submit Spark Job';
         logs.scrollTop = logs.scrollHeight;
-    }
-};
-
-// ── Catalog Schema Modal Handlers ──
-let _currentCatalogSchemaFile = null;
-let _currentCatalogSchemaTarget = null;
-
-window.viewCatalogSchema = async (targetId, filePath, format, targetName) => {
-    let resolvedTargetId = targetId;
-    if (!resolvedTargetId || resolvedTargetId === 'undefined' || resolvedTargetId === 'null' || resolvedTargetId === '') {
-        resolvedTargetId = _activeTargetId || (_targets && _targets[0] ? _targets[0].target_id : null);
-    }
-
-    _currentCatalogSchemaFile = filePath;
-    _currentCatalogSchemaTarget = resolvedTargetId;
-
-    const modal = document.getElementById('catalog-schema-modal');
-    if (!modal) {
-        alert(`Schema for ${filePath}: Please refresh the page to load the latest Schema Inspector.`);
-        return;
-    }
-
-    modal.style.zIndex = '100000';
-    modal.style.display = 'flex';
-
-    document.getElementById('catalog-schema-title').innerText = `Schema: ${filePath}`;
-    document.getElementById('catalog-schema-target').innerText = `Storage Target: ${targetName || 'Primary Storage'} | Format: ${(format || 'parquet').toUpperCase()}`;
-    document.getElementById('catalog-schema-rows').innerText = '—';
-    document.getElementById('catalog-schema-cols').innerText = '—';
-    document.getElementById('catalog-schema-fmt').innerText = (format || 'parquet').toUpperCase();
-
-    const loading = document.getElementById('catalog-schema-loading');
-    const errorEl = document.getElementById('catalog-schema-error');
-    const listEl = document.getElementById('catalog-schema-list');
-
-    loading.style.display = 'block';
-    errorEl.style.display = 'none';
-    listEl.style.display = 'none';
-    listEl.innerHTML = '';
-
-    try {
-        const queryUrl = resolvedTargetId 
-            ? `/api/schema/${resolvedTargetId}?fileName=${encodeURIComponent(filePath)}`
-            : `/api/schema?fileName=${encodeURIComponent(filePath)}`;
-        const data = await apiFetch(queryUrl);
-        loading.style.display = 'none';
-
-        if (data.success && Array.isArray(data.columns) && data.columns.length > 0) {
-            document.getElementById('catalog-schema-rows').innerText = (data.rowCount !== undefined && data.rowCount !== null) ? Number(data.rowCount).toLocaleString() : '—';
-            document.getElementById('catalog-schema-cols').innerText = data.columns.length;
-            listEl.style.display = 'flex';
-            listEl.innerHTML = data.columns.map(c => `
-                <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:rgba(255,255,255,0.03); border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <span style="color:#818cf8; font-size:0.8rem;">🏷️</span>
-                        <span style="font-weight:600; font-size:0.82rem; color:var(--text);">${c.name}</span>
-                    </div>
-                    <span style="font-size:0.7rem; font-family:monospace; padding:2px 8px; border-radius:4px; background:rgba(99,102,241,0.18); color:#c7d2fe; border:1px solid rgba(99,102,241,0.35); font-weight:700;">
-                        ${(c.type || 'VARCHAR').toUpperCase()}
-                    </span>
-                </div>
-            `).join('');
-        } else {
-            errorEl.style.display = 'block';
-            errorEl.innerText = data.error || 'Failed to inspect schema for this object.';
-        }
-    } catch (err) {
-        loading.style.display = 'none';
-        errorEl.style.display = 'block';
-        errorEl.innerText = err.message || 'Error fetching remote schema.';
-    }
-};
-
-window.closeCatalogSchemaModal = () => {
-    const modal = document.getElementById('catalog-schema-modal');
-    if (modal) modal.style.display = 'none';
-};
-
-window.queryFromCatalogSchema = () => {
-    if (!_currentCatalogSchemaFile) return;
-    const fileToQuery = _currentCatalogSchemaFile;
-    const targetToQuery = _currentCatalogSchemaTarget;
-
-    window.closeCatalogSchemaModal();
-    const overlay = document.getElementById('admin-overlay');
-    if (overlay) overlay.style.display = 'none';
-
-    // Switch to SQL mode
-    if (window.switchMainMode) window.switchMainMode('sql');
-
-    // Automatically switch active storage target to the target where this file exists!
-    if (targetToQuery) {
-        _activeTargetId = targetToQuery;
-        if (window.selectTarget) {
-            window.selectTarget(targetToQuery);
-        }
-    }
-
-    // Build SQL query
-    let sql = '';
-    const fn = fileToQuery;
-    if (fn.toLowerCase().endsWith('.iceberg') || fn.toLowerCase().includes('iceberg')) {
-        sql = `SELECT * FROM iceberg_scan('${fn}') LIMIT 100;`;
-    } else if (fn.toLowerCase().endsWith('.parquet')) {
-        sql = `SELECT * FROM read_parquet('${fn}') LIMIT 100;`;
-    } else if (fn.toLowerCase().endsWith('.csv')) {
-        sql = `SELECT * FROM read_csv_auto('${fn}') LIMIT 100;`;
-    } else if (fn.toLowerCase().endsWith('.json')) {
-        sql = `SELECT * FROM read_json_auto('${fn}') LIMIT 100;`;
-    } else {
-        sql = `SELECT * FROM '${fn}' LIMIT 100;`;
-    }
-
-    const editor = document.getElementById('query-editor');
-    if (editor) {
-        editor.value = sql;
-    }
-    if (window.executeQuery) {
-        window.executeQuery();
     }
 };
