@@ -2078,15 +2078,25 @@ let _currentCatalogSchemaFile = null;
 let _currentCatalogSchemaTarget = null;
 
 window.viewCatalogSchema = async (targetId, filePath, format, targetName) => {
+    let resolvedTargetId = targetId;
+    if (!resolvedTargetId || resolvedTargetId === 'undefined' || resolvedTargetId === 'null' || resolvedTargetId === '') {
+        resolvedTargetId = _activeTargetId || (_targets && _targets[0] ? _targets[0].target_id : null);
+    }
+
     _currentCatalogSchemaFile = filePath;
-    _currentCatalogSchemaTarget = targetId;
+    _currentCatalogSchemaTarget = resolvedTargetId;
 
     const modal = document.getElementById('catalog-schema-modal');
-    if (!modal) return;
+    if (!modal) {
+        alert(`Schema for ${filePath}: Please refresh the page to load the latest Schema Inspector.`);
+        return;
+    }
+
+    modal.style.zIndex = '100000';
     modal.style.display = 'flex';
 
     document.getElementById('catalog-schema-title').innerText = `Schema: ${filePath}`;
-    document.getElementById('catalog-schema-target').innerText = `Storage Target: ${targetName || targetId} | Format: ${(format || 'parquet').toUpperCase()}`;
+    document.getElementById('catalog-schema-target').innerText = `Storage Target: ${targetName || 'Primary Storage'} | Format: ${(format || 'parquet').toUpperCase()}`;
     document.getElementById('catalog-schema-rows').innerText = '—';
     document.getElementById('catalog-schema-cols').innerText = '—';
     document.getElementById('catalog-schema-fmt').innerText = (format || 'parquet').toUpperCase();
@@ -2101,7 +2111,10 @@ window.viewCatalogSchema = async (targetId, filePath, format, targetName) => {
     listEl.innerHTML = '';
 
     try {
-        const data = await apiFetch(`/api/schema/${targetId}?fileName=${encodeURIComponent(filePath)}`);
+        const queryUrl = resolvedTargetId 
+            ? `/api/schema/${resolvedTargetId}?fileName=${encodeURIComponent(filePath)}`
+            : `/api/schema?fileName=${encodeURIComponent(filePath)}`;
+        const data = await apiFetch(queryUrl);
         loading.style.display = 'none';
 
         if (data.success && Array.isArray(data.columns) && data.columns.length > 0) {
@@ -2109,12 +2122,12 @@ window.viewCatalogSchema = async (targetId, filePath, format, targetName) => {
             document.getElementById('catalog-schema-cols').innerText = data.columns.length;
             listEl.style.display = 'flex';
             listEl.innerHTML = data.columns.map(c => `
-                <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 10px; background:rgba(255,255,255,0.03); border-radius:6px; border:1px solid rgba(255,255,255,0.05);">
+                <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:rgba(255,255,255,0.03); border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
                     <div style="display:flex; align-items:center; gap:8px;">
-                        <span style="color:#818cf8; font-size:0.75rem;">🏷️</span>
-                        <span style="font-weight:600; font-size:0.8rem; color:var(--text);">${c.name}</span>
+                        <span style="color:#818cf8; font-size:0.8rem;">🏷️</span>
+                        <span style="font-weight:600; font-size:0.82rem; color:var(--text);">${c.name}</span>
                     </div>
-                    <span style="font-size:0.7rem; font-family:monospace; padding:2px 8px; border-radius:4px; background:rgba(99,102,241,0.15); color:#a5b4fc; border:1px solid rgba(99,102,241,0.3); font-weight:600;">
+                    <span style="font-size:0.7rem; font-family:monospace; padding:2px 8px; border-radius:4px; background:rgba(99,102,241,0.18); color:#c7d2fe; border:1px solid rgba(99,102,241,0.35); font-weight:700;">
                         ${(c.type || 'VARCHAR').toUpperCase()}
                     </span>
                 </div>
