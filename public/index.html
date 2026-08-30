@@ -1069,6 +1069,57 @@
         </div>
     </div>
 
-    <script src="app.js?v=4"></script>
+    <!-- ── Catalog Schema Inspector Modal ──────────────────────────── -->
+    <div class="modal-overlay" id="catalog-schema-modal" onclick="if(event.target.id==='catalog-schema-modal') closeCatalogSchemaModal()" style="display:none;">
+        <div class="modal" style="width: 580px; max-height: 85vh; display: flex; flex-direction: column; gap: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 1.4rem;" id="catalog-schema-icon">📐</span>
+                    <div>
+                        <h2 style="margin: 0; font-size: 1.05rem; font-weight: 700;" id="catalog-schema-title">Schema Inspector</h2>
+                        <p style="margin: 2px 0 0 0; font-size: 0.75rem; color: var(--text-muted);" id="catalog-schema-target">Loading target...</p>
+                    </div>
+                </div>
+                <button onclick="closeCatalogSchemaModal()" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem;">✕</button>
+            </div>
+
+            <!-- Stats Bar -->
+            <div id="catalog-schema-stats" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center;">
+                <div>
+                    <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase;">Total Rows</div>
+                    <div style="font-size: 1rem; font-weight: 700;" id="catalog-schema-rows">—</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase;">Columns</div>
+                    <div style="font-size: 1rem; font-weight: 700;" id="catalog-schema-cols">—</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase;">Format</div>
+                    <div style="font-size: 1rem; font-weight: 700; color: #818cf8;" id="catalog-schema-fmt">—</div>
+                </div>
+            </div>
+
+            <!-- Columns List -->
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+                <label style="font-size: 0.78rem; font-weight: 600; color: var(--text);">Column Specifications & Data Types</label>
+                <div id="catalog-schema-loading" style="text-align: center; padding: 25px; color: var(--text-muted); font-size: 0.85rem;">
+                    🔄 Inspecting remote schema with DuckDB...
+                </div>
+                <div id="catalog-schema-error" style="display: none; padding: 12px; border-radius: 8px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; font-size: 0.8rem;"></div>
+                <div id="catalog-schema-list" style="display: none; max-height: 280px; overflow-y: auto; flex-direction: column; gap: 4px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 8px;"></div>
+            </div>
+
+            <!-- Actions -->
+            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border); padding-top: 14px;">
+                <button class="btn btn-secondary" onclick="closeCatalogSchemaModal()">Close</button>
+                <button id="catalog-schema-query-btn" class="btn btn-primary" style="background: linear-gradient(135deg, #6366f1, #4f46e5); color: white; display: flex; align-items: center; gap: 6px;" onclick="window.queryFromCatalogSchema()">
+                    <span>💻</span>
+                    <span>Query Table in Editor</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=5"></script>
 </body>
 </html>
