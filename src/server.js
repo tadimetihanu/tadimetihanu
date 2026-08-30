@@ -425,7 +425,7 @@ app.get('/api/schema/:targetId', authenticate, checkAccess('read'), async (req, 
 
     try {
         const { getTarget } = require('./drivers/storage');
-        const target = getTarget(targetId);
+        const target = await getTarget(targetId);
         const prefix = getAzurePrefix(target);
         const fullPath = fileName.includes('://') ? fileName : `${prefix}${fileName}`;
 

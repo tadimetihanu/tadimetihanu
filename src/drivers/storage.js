@@ -117,7 +117,7 @@ async function testConnection(config) {
 }
 
 async function listFiles(targetId) {
-    const target = getTarget(targetId);
+    const target = await getTarget(targetId);
 
     try {
         let results = [];
@@ -266,7 +266,7 @@ async function listFiles(targetId) {
 }
 
 async function uploadFile(targetId, filename, buffer, mimetype) {
-    const target = getTarget(targetId);
+    const target = await getTarget(targetId);
 
     if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
         const s3 = getS3Client(target);
@@ -323,7 +323,7 @@ async function uploadFile(targetId, filename, buffer, mimetype) {
 }
 
 async function uploadStream(targetId, filename, stream, mimetype, sizeHint) {
-    const target = getTarget(targetId);
+    const target = await getTarget(targetId);
 
     if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
         const { Upload } = require('@aws-sdk/lib-storage');
@@ -366,7 +366,7 @@ async function uploadStream(targetId, filename, stream, mimetype, sizeHint) {
 
 async function downloadFile(targetId, filename, destPath) {
     const fs = require('fs');
-    const target = getTarget(targetId);
+    const target = await getTarget(targetId);
 
     // Auto-strip prefixes to prevent NoSuchKey errors
     let cleanFilename = filename;
@@ -440,7 +440,7 @@ async function downloadFile(targetId, filename, destPath) {
 }
 
 async function createIcebergTable(targetId, rawTableName, sourceDataOrSql, description = '') {
-    const target = getTarget(targetId);
+    const target = await getTarget(targetId);
     let tableName = (rawTableName || 'custom_dataset').trim().replace(/[^a-zA-Z0-9_\-.]/g, '_');
     if (!tableName.toLowerCase().endsWith('.iceberg')) {
         tableName += '.iceberg';
@@ -615,7 +615,7 @@ async function createIcebergTable(targetId, rawTableName, sourceDataOrSql, descr
 }
 
 async function appendIcebergRecords(targetId, rawTableName, sourceDataOrSql) {
-    const target = getTarget(targetId);
+    const target = await getTarget(targetId);
     let tableName = (rawTableName || '').trim().replace(/[^a-zA-Z0-9_\-.]/g, '_');
     if (!tableName.toLowerCase().endsWith('.iceberg')) {
         tableName += '.iceberg';
