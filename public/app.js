@@ -907,9 +907,16 @@ window.executeQuery = async function() {
     const tableBody = document.getElementById('table-body');
     if (!sql) return;
 
+    const targetId = _activeTargetId || (_targets && _targets[0] ? _targets[0].target_id : null);
+    if (!targetId) {
+        status.innerText = '❌ Error: Please select a storage target before executing queries.';
+        return;
+    }
+    _activeTargetId = targetId;
+
     status.innerText = '📡 Execution in progress...';
     try {
-        const data = await apiFetch(`/api/query/${_activeTargetId}`, {
+        const data = await apiFetch(`/api/query/${targetId}`, {
             method: 'POST',
             body: JSON.stringify({ sql })
         });
@@ -928,7 +935,7 @@ window.executeQuery = async function() {
                 if (classEl) classEl.value = ''; // Not needed for Python
                 if (jarEl) jarEl.value = '/app/sql_bridge.py'; 
                 if (argsEl) argsEl.value = `--sql "${sql.replace(/"/g, '\\"')}"`;
-                if (targetEl && _activeTargetId) targetEl.value = _activeTargetId;
+                if (targetEl && targetId) targetEl.value = targetId;
             }, 600);
             status.innerText = '⚡ [Auto-Translate] Redirected to Spark';
             return;
@@ -952,12 +959,14 @@ window.executeQuery = async function() {
             saveNotebooks();
             window.renderResults(data.data);
         } else {
-            document.getElementById('live-burn-meter').style.display = 'none';
-            status.innerText = `❌ Error: ${data.error}`;
+            const meter = document.getElementById('live-burn-meter');
+            if (meter) meter.style.display = 'none';
+            status.innerText = `❌ Error: ${data.error || 'Query failed'}`;
         }
     } catch (err) {
-        document.getElementById('live-burn-meter').style.display = 'none';
-        status.innerText = `❌ Request failed`;
+        const meter = document.getElementById('live-burn-meter');
+        if (meter) meter.style.display = 'none';
+        status.innerText = `❌ Error: ${err.message || 'Request failed'}`;
     }
 };
 
@@ -1616,9 +1625,27 @@ async function login() {
     if (data.success) { localStorage.setItem('ciq_token', data.token); localStorage.setItem('ciq_user', JSON.stringify(data.user)); location.reload(); }
 }
 async function apiFetch(path, options={}) {
-    const res = await fetch(path, { ...options, headers: { 'Authorization': `Bearer ${localStorage.getItem('ciq_token')}`, 'Content-Type': 'application/json', ...options.headers } });
-    if (res.status === 401 || res.status === 403) { localStorage.clear(); location.reload(); return { success: false }; }
-    return res.json();
+    const token = localStorage.getItem('ciq_token');
+    const headers = {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        ...options.headers
+    };
+    try {
+        const res = await fetch(path, { ...options, headers });
+        if (res.status === 401 && !path.includes('/api/auth/login')) {
+            localStorage.clear();
+            location.reload();
+            return { success: false, error: 'Session expired. Please log in again.' };
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            return { success: false, error: data.error || data.message || `HTTP Error ${res.status}` };
+        }
+        return data;
+    } catch (err) {
+        return { success: false, error: err.message || 'Network error' };
+    }
 }
 window.logout = () => { localStorage.clear(); location.reload(); };
 window.closeProfile = () => document.getElementById('profile-modal').style.display = 'none';
