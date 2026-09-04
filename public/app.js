@@ -308,9 +308,10 @@ window.showAdminTab = async function(tab) {
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
                         <h3 style="margin:0;">Metadata Catalog</h3>
                         <div style="display:flex; gap:10px;">
-                            <select id="catalog-target-scan" class="ghost-btn" style="background:rgba(255,255,255,0.05); padding:8px 12px; border-radius:8px;">
-                                <option value="">Select Target to Scan</option>\n                                <option value="all" style="font-weight:bold; color:var(--primary);">-- Scan All Object Storages --</option>
-                                ${_targets.map(t => `<option value="${t.target_id}">${t.target_name}</option>`).join('')}
+                            <select id="catalog-target-scan" class="ghost-btn" style="background:rgba(255,255,255,0.05); padding:8px 12px; border-radius:8px;" onchange="window.catalogFilterTargetId = this.value; window.showAdminTab('catalog');">
+                                <option value="">Select Target to Scan</option>
+                                <option value="all" style="font-weight:bold; color:var(--primary);" ${window.catalogFilterTargetId === 'all' ? 'selected' : ''}>-- Scan All Object Storages --</option>
+                                ${_targets.map(t => `<option value="${t.target_id}" ${String(window.catalogFilterTargetId) === String(t.target_id) ? 'selected' : ''}>${t.target_name}</option>`).join('')}
                             </select>
                             <button class="btn btn-primary" onclick="window.startMetadataScan()" id="scan-btn" style="font-size:0.75rem;">🔍 Start Deep Scan</button>
                         </div>
@@ -319,20 +320,30 @@ window.showAdminTab = async function(tab) {
                     
                     <table class="dashboard-table">
                         <thead><tr><th>Source Target</th><th>Object Path</th><th>Format</th><th>Size</th><th>Schema</th></tr></thead>
-                        <tbody>${data.catalog.length === 0 ? '<tr><td colspan="5" style="text-align:center; padding:30px;">No metadata cataloged yet. Start a scan above.</td></tr>' : data.catalog.map(c => `
+                        <tbody>${(() => {
+                            let filtered = data.catalog;
+                            if (window.catalogFilterTargetId && window.catalogFilterTargetId !== 'all') {
+                                const selTarget = _targets.find(t => String(t.target_id) === String(window.catalogFilterTargetId));
+                                if (selTarget) {
+                                    filtered = filtered.filter(c => c.target_name === selTarget.target_name);
+                                }
+                            }
+                            return filtered.length === 0 ? '<tr><td colspan="5" style="text-align:center; padding:30px;">No metadata cataloged yet. Start a scan above.</td></tr>' : filtered.map(c => `
                             <tr>
                                 <td style="color:#818cf8; font-weight:700;">${c.target_name || 'Storage Lake'}</td>
                                 <td style="font-family:monospace; font-size:0.8rem; font-weight:600;">${c.file_path}</td>
                                 <td><span style="background:rgba(255,255,255,0.05); padding:2px 8px; border-radius:4px; font-size:0.65rem; text-transform:uppercase; font-weight:600; color:#a5b4fc;">${c.format}</span></td>
                                 <td>${(c.file_size / 1024).toFixed(1)} KB</td>
                                 <td>${c.schema_json ? '✅ Ready' : '<span style="opacity:0.5;">-</span>'}</td>
-                            </tr>`).join('')}
+                            </tr>`).join('');
+                        })()}
                         </tbody>
                     </table>`;
             } else { container.innerHTML = `<div style="color:var(--error); padding:20px;">Error: ${data.error}</div>`; }
         } else if (tab === 'analytics') {
             const data = await apiFetch('/api/admin/logs');
-            if (data.success) {
+            const sysData = await apiFetch('/api/admin/system_logs');
+            if (data.success && sysData.success) {
                 container.innerHTML = `
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
                         <h3 style="margin:0;">📊 Log Analytics (Security & Performance)</h3>
@@ -354,7 +365,8 @@ window.showAdminTab = async function(tab) {
                         </div>
                     </div>
 
-                    <table class="dashboard-table">
+                    <h4 style="margin-bottom:10px; color:var(--text);">Query Logs</h4>
+                    <table class="dashboard-table" style="margin-bottom: 30px;">
                         <thead><tr><th>Timestamp</th><th>User</th><th>Target</th><th>Status</th><th>Scan Price</th><th>SQL Preview</th></tr></thead>
                         <tbody>${data.logs.map(l => `
                             <tr>
@@ -366,8 +378,22 @@ window.showAdminTab = async function(tab) {
                                 <td style="font-family:monospace; font-size:0.6rem; opacity:0.8;" title="${l.query_text}">${l.query_text.substring(0, 40)}...</td>
                             </tr>`).join('')}
                         </tbody>
+                    </table>
+
+                    <h4 style="margin-bottom:10px; color:var(--text);">System Logs (App, Network, DB, Errors)</h4>
+                    <table class="dashboard-table">
+                        <thead><tr><th>Timestamp</th><th>Level</th><th>Category</th><th>Message</th><th>Metadata</th></tr></thead>
+                        <tbody>${sysData.logs.map(l => `
+                            <tr>
+                                <td style="font-size:0.6rem;">${new Date(l.timestamp).toLocaleString()}</td>
+                                <td><span style="padding: 2px 5px; border-radius: 4px; background: ${l.level==='ERROR'?'#ef444420':l.level==='WARN'?'#fbbf2420':'#10b98120'}; color: ${l.level==='ERROR'?'#ef4444':l.level==='WARN'?'#fbbf24':'#10b981'}; font-size: 0.65rem;">${l.level}</span></td>
+                                <td style="font-weight:700; text-transform:uppercase; font-size: 0.65rem;">${l.category}</td>
+                                <td style="white-space: normal; max-width: 300px;">${l.message}</td>
+                                <td style="font-family:monospace; font-size:0.6rem; opacity:0.8; white-space: normal; max-width: 250px;">${l.metadata || ''}</td>
+                            </tr>`).join('')}
+                        </tbody>
                     </table>`;
-            } else { container.innerHTML = `<div style="color:var(--error); padding:20px;">Error: ${data.error}</div>`; }
+            } else { container.innerHTML = `<div style="color:var(--error); padding:20px;">Error loading logs.</div>`; }
         } else if (tab === 'spark') {
             container.innerHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
@@ -1853,6 +1879,8 @@ window.openTargetEditor = async (targetId = null) => {
                 <div><label class="cfg-lbl">Provider</label>
                     <select id="tgt-type" class="cfg-input" style="height:44px; width:104%" onchange="window.handleTargetTypeChange(this.value)">
                         <option value="gdrive" ${target.provider_type === 'gdrive' || target.provider_type === 'googledrive' ? 'selected':''}>📁 Google Drive</option>
+                        <option value="github" ${target.provider_type === 'github' ? 'selected':''}>🐙 GitHub</option>
+                        <option value="onedrive" ${target.provider_type === 'onedrive' ? 'selected':''}>☁️ Microsoft OneDrive</option>
                         <option value="r2" ${target.provider_type === 'r2' || target.provider_type === 'cloudflare' ? 'selected':''}>🟠 Cloudflare R2</option>
                         <option value="minio" ${target.provider_type === 'minio'?'selected':''}>MinIO</option>
                         <option value="s3" ${target.provider_type === 's3'?'selected':''}>S3 / MinIO</option>
@@ -1893,6 +1921,23 @@ window.handleTargetTypeChange = (type) => {
         if (endpointInput && !endpointInput.value) endpointInput.value = 'https://www.googleapis.com/drive/v3';
         if (bucketLabel) bucketLabel.innerText = 'Folder ID (or root)';
         if (bucketInput && !bucketInput.value) bucketInput.value = 'root';
+    } else if (type === 'github') {
+        if (endpointInput && !endpointInput.value) endpointInput.value = 'https://api.github.com';
+        if (bucketLabel) bucketLabel.innerText = 'Repository (Owner/Repo)';
+        const accessLabel = document.getElementById('lbl-access');
+        const secretLabel = document.getElementById('lbl-secret');
+        if (accessLabel) accessLabel.innerText = 'GitHub Username';
+        if (secretLabel) secretLabel.innerText = 'Personal Access Token';
+    } else if (type === 'onedrive') {
+        const accessLabel = document.getElementById('lbl-access');
+        const secretLabel = document.getElementById('lbl-secret');
+        const endpointLabel = document.getElementById('lbl-endpoint');
+        if (accessLabel) accessLabel.innerText = 'Microsoft Account Email';
+        if (secretLabel) secretLabel.innerText = 'Password';
+        if (endpointLabel) endpointLabel.innerText = 'Azure App Client ID';
+        if (bucketLabel) bucketLabel.innerText = 'Folder ID (or root)';
+        if (bucketInput && !bucketInput.value) bucketInput.value = 'root';
+        if (regionInput && !regionInput.value) regionInput.value = 'common';
     } else if (type === 'r2' || type === 'cloudflare') {
         if (endpointInput) endpointInput.placeholder = 'https://<ACCOUNT_ID>.r2.cloudflarestorage.com';
         if (bucketLabel) bucketLabel.innerText = 'R2 Bucket Name';

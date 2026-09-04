@@ -5,6 +5,7 @@ const os = require('os');
 const crypto = require('crypto');
 const gdrive = require('../drivers/gdrive');
 const db = require('../db');
+const logger = require('../utils/logger');
 
 // SSL CA Certificate Paths for libcurl / OpenSSL / DuckDB
 if (!process.env.CURL_CA_BUNDLE) process.env.CURL_CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
@@ -511,6 +512,13 @@ async function logQuery(userId, targetId, sql, rowCount, duration, status, scann
                 INSERT INTO query_logs (user_id, target_id, query_text, row_count, execution_time_ms, status, data_scanned_bytes, calculated_cost_usd)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             `, [userId, targetId, sql, rowCount, duration, status, scannedBytes, costUsd]);
+
+            // Log to system_logs
+            if (status === 'success') {
+                logger.logInfo('duckdb', `Query Executed (${duration}ms)`, { sql, rowCount, scannedBytes, costUsd, targetId, userId });
+            } else {
+                logger.logError('duckdb', `Query Failed (${duration}ms)`, { sql, targetId, userId });
+            }
         } catch (e) {}
     }
 }

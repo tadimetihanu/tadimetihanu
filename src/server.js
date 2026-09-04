@@ -10,6 +10,16 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const crypto = nodeCrypto;
+const fs = require('fs');
+const logger = require('./utils/logger');
+
+// Global error handlers
+process.on('uncaughtException', (err) => {
+    logger.logError('APP', `Uncaught Exception: ${err.message}`, { stack: err.stack });
+});
+process.on('unhandledRejection', (reason, promise) => {
+    logger.logError('APP', `Unhandled Rejection: ${reason}`, { promise });
+});
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -27,7 +37,6 @@ const { suggestQuery } = require('./query/ai');
 const { handleNl2Sql } = require('./nl2sql');
 const { authenticate, isAdmin, loginLimiter, SECRET_KEY } = require('./middleware/auth');
 const { checkAccess } = require('./middleware/checkAccess');
-const fs = require('fs');
 
 // Initialize Control Plane Database (PostgreSQL / SQLite)
 db.initDatabase().then(async () => {
@@ -58,6 +67,12 @@ app.use(passport.initialize());
 app.use(passport.session());
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((obj, done) => done(null, obj));
+
+// Global request logging middleware
+app.use((req, res, next) => {
+    logger.logInfo('NETWORK', `${req.method} ${req.url}`, { ip: req.ip, userAgent: req.headers['user-agent'] });
+    next();
+});
 
 passport.use(new GoogleStrategy({ clientID: process.env.GOOGLE_CLIENT_ID || 'dummy_id', clientSecret: process.env.GOOGLE_CLIENT_SECRET || 'dummy_secret', callbackURL: (process.env.APP_URL || 'http://localhost:4000') + "/api/auth/google/callback" }, (accessToken, refreshToken, profile, done) => {
     profile.oauth_provider = 'google';
@@ -818,6 +833,16 @@ app.delete('/api/admin/targets/:targetId', authenticate, async (req, res) => {
     try {
         await db.run('DELETE FROM targets WHERE target_id = ?', [targetId]);
         res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/admin/system_logs', authenticate, async (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+    try {
+        const logs = await db.all(`SELECT * FROM system_logs ORDER BY timestamp DESC LIMIT 200`);
+        res.json({ success: true, logs });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
