@@ -1892,68 +1892,14 @@ window.openTargetEditor = async (targetId = null) => {
                     </select>
                 </div>
                 <div><label class="cfg-lbl" id="lbl-endpoint">Endpoint URL</label><input id="tgt-endpoint" class="cfg-input" placeholder="https://<ACCOUNT_ID>.r2.cloudflarestorage.com" value="${target.endpoint || ''}"></div>
-                <div id="krb-principal-edit" style="display:${target.provider_type==='hdfs'?'block':'none'};">
-                     <label class="cfg-lbl" style="color:#fbbf24;">Kerberos Principal</label><input id="tgt-principal" class="cfg-input" value="${target.krb_principal || ''}">
-                </div>
-                <div id="krb-keytab-edit" style="display:${target.provider_type==='hdfs'?'block':'none'};">
-                     <label class="cfg-lbl" style="color:#fbbf24;">Kerberos Keytab Path</label><input id="tgt-keytab" class="cfg-input" value="${target.krb_keytab || ''}">
+                <div id="krb-fields-edit" style="display:${target.provider_type==='hdfs'?'block':'none'}; border-top:1px solid var(--border); padding-top:10px; margin-top:10px;">
+                     <div><label class="cfg-lbl" style="color:#fbbf24;">Kerberos Principal</label><input id="tgt-principal" class="cfg-input" value="${target.krb_principal || ''}"></div>
+                     <div><label class="cfg-lbl" style="color:#fbbf24;">Kerberos Keytab Path</label><input id="tgt-keytab" class="cfg-input" value="${target.krb_keytab || ''}"></div>
                 </div>
                 <div><label class="cfg-lbl" id="lbl-bucket">Bucket / Folder ID</label><input id="tgt-bucket" class="cfg-input" placeholder="bucket-name" value="${target.bucket || ''}"></div>
                 <div><label class="cfg-lbl" id="lbl-access">Access Key ID / Account Email</label><input id="tgt-access" class="cfg-input" value="${target.access_key || ''}"></div>
                 <div><label class="cfg-lbl" id="lbl-secret">Secret Access Key / Private Key (Optional)</label><input id="tgt-secret" class="cfg-input" type="password" value="${target.secret_key || ''}"></div>
                 <div><label class="cfg-lbl">Region</label><input id="tgt-region" class="cfg-input" placeholder="auto" value="${target.region || ''}"></div>
-            </div>
-            
-            <div id="adv-hadoop-config" style="display:${target.provider_type==='hdfs'?'block':'none'}; margin-top:20px; border-top:1px solid var(--border); padding-top:20px;">
-                <h4 style="margin-bottom:15px; color:#4285F4;">Advanced Hadoop (CDP) Configuration</h4>
-                
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px;">
-                    <div><label class="cfg-lbl">Namenode HA</label><select id="tgt-nn-ha" class="cfg-input"><option value="Yes" ${target.nn_ha==='Yes'?'selected':''}>Yes</option><option value="No" ${target.nn_ha==='No'?'selected':''}>No</option></select></div>
-                    <div><label class="cfg-lbl">Name Service Name</label><input id="tgt-ns-name" class="cfg-input" value="${target.ns_name || ''}"></div>
-                    <div><label class="cfg-lbl">Name Node1 Name</label><input id="tgt-nn1-name" class="cfg-input" value="${target.nn1_name || ''}"></div>
-                    <div><label class="cfg-lbl">Name Node1 RPC URL</label><input id="tgt-nn1-rpc" class="cfg-input" value="${target.nn1_rpc || ''}"></div>
-                    <div><label class="cfg-lbl">Name Node2 Name</label><input id="tgt-nn2-name" class="cfg-input" value="${target.nn2_name || ''}"></div>
-                    <div><label class="cfg-lbl">Name Node2 RPC URL</label><input id="tgt-nn2-rpc" class="cfg-input" value="${target.nn2_rpc || ''}"></div>
-                    
-                    <div><label class="cfg-lbl">Solr Cloud Enabled</label><select id="tgt-solr-enabled" class="cfg-input"><option value="No" ${target.solr_enabled==='No'?'selected':''}>No</option><option value="Yes" ${target.solr_enabled==='Yes'?'selected':''}>Yes</option></select></div>
-                    <div><label class="cfg-lbl">Solr Server URL</label><input id="tgt-solr-url" class="cfg-input" value="${target.solr_url || ''}"></div>
-                    <div><label class="cfg-lbl">Collection Name</label><input id="tgt-solr-collection" class="cfg-input" value="${target.solr_collection || ''}"></div>
-                    
-                    <div><label class="cfg-lbl">Hadoop RPC Protection</label><input id="tgt-rpc-prot" class="cfg-input" value="${target.rpc_prot || 'Privacy'}"></div>
-                    <div><label class="cfg-lbl">DFS Data Transfer Protection</label><input id="tgt-dfs-prot" class="cfg-input" value="${target.dfs_prot || 'Privacy'}"></div>
-                    
-                    <div><label class="cfg-lbl">Resource Manager HA</label><select id="tgt-rm-ha" class="cfg-input"><option value="Yes" ${target.rm_ha==='Yes'?'selected':''}>Yes</option><option value="No" ${target.rm_ha==='No'?'selected':''}>No</option></select></div>
-                    <div><label class="cfg-lbl">RM Node1 Name</label><input id="tgt-rm1-name" class="cfg-input" value="${target.rm1_name || ''}"></div>
-                    <div><label class="cfg-lbl">RM Node1 Address</label><input id="tgt-rm1-addr" class="cfg-input" value="${target.rm1_addr || ''}"></div>
-                    <div><label class="cfg-lbl">RM Node1 Scheduler</label><input id="tgt-rm1-sched" class="cfg-input" value="${target.rm1_sched || ''}"></div>
-                    <div><label class="cfg-lbl">RM Node2 Name</label><input id="tgt-rm2-name" class="cfg-input" value="${target.rm2_name || ''}"></div>
-                    <div><label class="cfg-lbl">RM Node2 Address</label><input id="tgt-rm2-addr" class="cfg-input" value="${target.rm2_addr || ''}"></div>
-                    <div><label class="cfg-lbl">RM Node2 Scheduler</label><input id="tgt-rm2-sched" class="cfg-input" value="${target.rm2_sched || ''}"></div>
-                    
-                    <div><label class="cfg-lbl">Hive Server HA</label><select id="tgt-hive-ha" class="cfg-input"><option value="Yes" ${target.hive_ha==='Yes'?'selected':''}>Yes</option><option value="No" ${target.hive_ha==='No'?'selected':''}>No</option></select></div>
-                    <div><label class="cfg-lbl">Hive IP</label><input id="tgt-hive-ip" class="cfg-input" value="${target.hive_ip || ''}"></div>
-                    <div style="grid-column: span 2;"><label class="cfg-lbl">Zookeeper Quorum</label><input id="tgt-zk-quorum" class="cfg-input" value="${target.zk_quorum || ''}"></div>
-                    <div style="grid-column: span 2;"><label class="cfg-lbl">Beeline String for Dev</label><textarea id="tgt-beeline-dev" class="cfg-input" style="height:60px;">${target.beeline_dev || ''}</textarea></div>
-                    <div style="grid-column: span 2;"><label class="cfg-lbl">Beeline String for QA</label><textarea id="tgt-beeline-qa" class="cfg-input" style="height:60px;">${target.beeline_qa || ''}</textarea></div>
-                    <div><label class="cfg-lbl">Hive Database</label><input id="tgt-hive-db" class="cfg-input" value="${target.hive_db || ''}"></div>
-                    
-                    <div><label class="cfg-lbl">HDFS Kerberos Enable</label><select id="tgt-hdfs-krb" class="cfg-input"><option value="Yes" ${target.hdfs_krb==='Yes'?'selected':''}>Yes</option><option value="No" ${target.hdfs_krb==='No'?'selected':''}>No</option></select></div>
-                    <div><label class="cfg-lbl">Proxy User</label><input id="tgt-proxy-user" class="cfg-input" value="${target.proxy_user || ''}"></div>
-                    <div style="grid-column: span 2;"><label class="cfg-lbl">HDFS Path</label><input id="tgt-hdfs-path" class="cfg-input" value="${target.hdfs_path || ''}"></div>
-                    <div><label class="cfg-lbl">Namenode Kerberos Principal</label><input id="tgt-nn-krb" class="cfg-input" value="${target.nn_krb || ''}"></div>
-                    <div><label class="cfg-lbl">RM Kerberos Principal</label><input id="tgt-rm-krb" class="cfg-input" value="${target.rm_krb || ''}"></div>
-                    <div><label class="cfg-lbl">Hive Kerberos Principal</label><input id="tgt-hive-krb" class="cfg-input" value="${target.hive_krb || ''}"></div>
-                    <div><label class="cfg-lbl">Map Principals to Short Names</label><select id="tgt-krb-map" class="cfg-input"><option value="No" ${target.krb_map==='No'?'selected':''}>No</option><option value="Yes" ${target.krb_map==='Yes'?'selected':''}>Yes</option></select></div>
-                    
-                    <div><label class="cfg-lbl">SASL Enable</label><select id="tgt-sasl" class="cfg-input"><option value="No" ${target.sasl==='No'?'selected':''}>No</option><option value="Yes" ${target.sasl==='Yes'?'selected':''}>Yes</option></select></div>
-                    <div><label class="cfg-lbl">SSL Enable</label><select id="tgt-ssl" class="cfg-input"><option value="Yes" ${target.ssl==='Yes'?'selected':''}>Yes</option><option value="No" ${target.ssl==='No'?'selected':''}>No</option></select></div>
-                    <div><label class="cfg-lbl">Hive TLS/SSL Trust Store File</label><input id="tgt-truststore" class="cfg-input" value="${target.truststore || ''}"></div>
-                    <div><label class="cfg-lbl">Trust Store Password</label><input id="tgt-truststore-pw" class="cfg-input" type="password" value="${target.truststore_pw || ''}"></div>
-                    
-                    <div><label class="cfg-lbl">KMS Enable</label><select id="tgt-kms" class="cfg-input"><option value="Yes" ${target.kms==='Yes'?'selected':''}>Yes</option><option value="No" ${target.kms==='No'?'selected':''}>No</option></select></div>
-                    <div><label class="cfg-lbl">KMS URL</label><input id="tgt-kms-url" class="cfg-input" value="${target.kms_url || ''}"></div>
-                    <div><label class="cfg-lbl">Ranger URL</label><input id="tgt-ranger-url" class="cfg-input" value="${target.ranger_url || ''}"></div>
-                </div>
             </div>
             <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
                 <button class="btn btn-secondary" onclick="window.showAdminTab('targets')">Cancel</button>
@@ -1964,12 +1910,8 @@ window.openTargetEditor = async (targetId = null) => {
 };
 
 window.handleTargetTypeChange = (type) => {
-    const krbPrincipal = document.getElementById('krb-principal-edit');
-    const krbKeytab = document.getElementById('krb-keytab-edit');
-    const advHadoop = document.getElementById('adv-hadoop-config');
-    if (krbPrincipal) krbPrincipal.style.display = type === 'hdfs' ? 'block' : 'none';
-    if (krbKeytab) krbKeytab.style.display = type === 'hdfs' ? 'block' : 'none';
-    if (advHadoop) advHadoop.style.display = type === 'hdfs' ? 'block' : 'none';
+    const krb = document.getElementById('krb-fields-edit');
+    if (krb) krb.style.display = type === 'hdfs' ? 'block' : 'none';
     const endpointInput = document.getElementById('tgt-endpoint');
     const bucketLabel = document.getElementById('lbl-bucket');
     const bucketInput = document.getElementById('tgt-bucket');
@@ -2024,45 +1966,7 @@ window.saveTarget = async (id) => {
         credentials: `${document.getElementById('tgt-access').value}:${document.getElementById('tgt-secret').value}`,
         region: document.getElementById('tgt-region').value,
         krb_principal: document.getElementById('tgt-principal')?.value || '',
-        krb_keytab: document.getElementById('tgt-keytab')?.value || '',
-        nn_ha: document.getElementById('tgt-nn-ha')?.value || '',
-        ns_name: document.getElementById('tgt-ns-name')?.value || '',
-        nn1_name: document.getElementById('tgt-nn1-name')?.value || '',
-        nn1_rpc: document.getElementById('tgt-nn1-rpc')?.value || '',
-        nn2_name: document.getElementById('tgt-nn2-name')?.value || '',
-        nn2_rpc: document.getElementById('tgt-nn2-rpc')?.value || '',
-        solr_enabled: document.getElementById('tgt-solr-enabled')?.value || '',
-        solr_url: document.getElementById('tgt-solr-url')?.value || '',
-        solr_collection: document.getElementById('tgt-solr-collection')?.value || '',
-        rpc_prot: document.getElementById('tgt-rpc-prot')?.value || '',
-        dfs_prot: document.getElementById('tgt-dfs-prot')?.value || '',
-        rm_ha: document.getElementById('tgt-rm-ha')?.value || '',
-        rm1_name: document.getElementById('tgt-rm1-name')?.value || '',
-        rm1_addr: document.getElementById('tgt-rm1-addr')?.value || '',
-        rm1_sched: document.getElementById('tgt-rm1-sched')?.value || '',
-        rm2_name: document.getElementById('tgt-rm2-name')?.value || '',
-        rm2_addr: document.getElementById('tgt-rm2-addr')?.value || '',
-        rm2_sched: document.getElementById('tgt-rm2-sched')?.value || '',
-        hive_ha: document.getElementById('tgt-hive-ha')?.value || '',
-        hive_ip: document.getElementById('tgt-hive-ip')?.value || '',
-        zk_quorum: document.getElementById('tgt-zk-quorum')?.value || '',
-        beeline_dev: document.getElementById('tgt-beeline-dev')?.value || '',
-        beeline_qa: document.getElementById('tgt-beeline-qa')?.value || '',
-        hive_db: document.getElementById('tgt-hive-db')?.value || '',
-        hdfs_krb: document.getElementById('tgt-hdfs-krb')?.value || '',
-        proxy_user: document.getElementById('tgt-proxy-user')?.value || '',
-        hdfs_path: document.getElementById('tgt-hdfs-path')?.value || '',
-        nn_krb: document.getElementById('tgt-nn-krb')?.value || '',
-        rm_krb: document.getElementById('tgt-rm-krb')?.value || '',
-        hive_krb: document.getElementById('tgt-hive-krb')?.value || '',
-        krb_map: document.getElementById('tgt-krb-map')?.value || '',
-        sasl: document.getElementById('tgt-sasl')?.value || '',
-        ssl: document.getElementById('tgt-ssl')?.value || '',
-        truststore: document.getElementById('tgt-truststore')?.value || '',
-        truststore_pw: document.getElementById('tgt-truststore-pw')?.value || '',
-        kms: document.getElementById('tgt-kms')?.value || '',
-        kms_url: document.getElementById('tgt-kms-url')?.value || '',
-        ranger_url: document.getElementById('tgt-ranger-url')?.value || ''
+        krb_keytab: document.getElementById('tgt-keytab')?.value || ''
     };
 
     try {
