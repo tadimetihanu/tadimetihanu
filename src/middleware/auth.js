@@ -4,8 +4,9 @@ const rateLimit = require('express-rate-limit');
 // ── Rate Limiter: Login (Brute-force protection) ──────────────
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 10, // Fail after 10 attempts
-    message: { error: 'Too many login attempts, please try again later' },
+    max: 50,
+    skipSuccessfulRequests: true,
+    message: { error: 'Too many failed login attempts, please try again later' },
     standardHeaders: true,
     legacyHeaders: false,
 });
@@ -20,7 +21,7 @@ function authenticate(req, res, next) {
     if (!token) return res.status(401).json({ error: 'Authentication required' });
 
     jwt.verify(token, SECRET_KEY, (err, decoded) => {
-        if (err) return res.status(403).json({ error: 'Token expired or invalid' });
+        if (err) return res.status(401).json({ error: 'Token expired or invalid' });
         
         req.user = decoded;
         next();

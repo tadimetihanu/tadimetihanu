@@ -1648,11 +1648,52 @@ window.submitInsertIcebergRecords = async () => {
 
 // ── Auth & Helpers ──
 async function login() {
-    const email = document.getElementById('login-email').value;
-    const password = document.getElementById('login-password').value;
-    const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
-    const data = await res.json();
-    if (data.success) { localStorage.setItem('ciq_token', data.token); localStorage.setItem('ciq_user', JSON.stringify(data.user)); location.reload(); }
+    const emailEl = document.getElementById('login-email');
+    const passEl = document.getElementById('login-password');
+    const errEl = document.getElementById('login-error');
+    const btnEl = document.getElementById('login-btn');
+
+    const email = (emailEl ? emailEl.value : '').trim();
+    const password = passEl ? passEl.value : '';
+
+    if (errEl) errEl.style.display = 'none';
+    if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.innerText = 'Signing in...';
+    }
+
+    try {
+        const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
+            localStorage.setItem('ciq_token', data.token);
+            localStorage.setItem('ciq_user', JSON.stringify(data.user));
+            location.reload();
+            return;
+        }
+        const msg = data.error || `Login failed (HTTP ${res.status})`;
+        if (errEl) {
+            errEl.innerText = msg;
+            errEl.style.display = 'block';
+        } else if (window.showStatus) {
+            window.showStatus(msg, 'error');
+        }
+    } catch (err) {
+        const msg = err.message || 'Network error while signing in';
+        if (errEl) {
+            errEl.innerText = msg;
+            errEl.style.display = 'block';
+        }
+    } finally {
+        if (btnEl) {
+            btnEl.disabled = false;
+            btnEl.innerText = 'Sign Into Data Lake 🚀';
+        }
+    }
 }
 async function apiFetch(path, options={}) {
     const token = localStorage.getItem('ciq_token');
@@ -1663,12 +1704,13 @@ async function apiFetch(path, options={}) {
     };
     try {
         const res = await fetch(path, { ...options, headers });
-        if (res.status === 401 && !path.includes('/api/auth/login')) {
-            localStorage.clear();
+        const data = await res.json().catch(() => ({}));
+        if ((res.status === 401 || (res.status === 403 && data.error === 'Token expired or invalid')) && !path.includes('/api/auth/login')) {
+            localStorage.removeItem('ciq_token');
+            localStorage.removeItem('ciq_user');
             location.reload();
             return { success: false, error: 'Session expired. Please log in again.' };
         }
-        const data = await res.json().catch(() => ({}));
         if (!res.ok) {
             return { success: false, error: data.error || data.message || `HTTP Error ${res.status}` };
         }

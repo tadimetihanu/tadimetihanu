@@ -51,6 +51,7 @@ db.initDatabase().then(async () => {
 });
 
 const app = express();
+app.set('trust proxy', 1);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
 app.use(cors({
@@ -62,7 +63,7 @@ app.use(cors({
 app.get('/api/ping', (req, res) => res.json({
     status: 'online',
     timestamp: new Date(),
-    version: '2.1.0-pg-metadata',
+    version: '2.1.1-pg-metadata',
     metadataDb: db.getStatus ? db.getStatus() : { engine: db.isPostgres ? 'postgresql' : 'sqlite' }
 }));
 app.use(express.json());
@@ -736,9 +737,17 @@ app.get('/api/admin/users', authenticate, async (req, res) => {
 app.put('/api/admin/users/:userId', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const { userId } = req.params;
-    const { role } = req.body;
+    const { role, password } = req.body;
     try {
-        await db.run('UPDATE users SET role = ? WHERE user_id = ?', [role, userId]);
+        if (password && role) {
+            const hash = await bcrypt.hash(password, 10);
+            await db.run('UPDATE users SET role = ?, password_hash = ? WHERE user_id = ?', [role, hash, userId]);
+        } else if (password) {
+            const hash = await bcrypt.hash(password, 10);
+            await db.run('UPDATE users SET password_hash = ? WHERE user_id = ?', [hash, userId]);
+        } else if (role) {
+            await db.run('UPDATE users SET role = ? WHERE user_id = ?', [role, userId]);
+        }
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });

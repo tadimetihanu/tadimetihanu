@@ -409,10 +409,10 @@ async function initDatabase() {
                 await ensureSqliteMigrations();
             }
 
-            // 1. Seed Admin User if none exists
+            // 1. Seed Admin User if none exists (matches login form default 'admin123' unless ADMIN_PASSWORD env var is set)
             const adminEmail = process.env.ADMIN_EMAIL || 'admin@cloudobjectiq.com';
-            const adminPass = process.env.ADMIN_PASSWORD || 'Admin@123456';
-            const adminUser = await get('SELECT user_id FROM users WHERE email = ?', [adminEmail]);
+            const adminPass = process.env.ADMIN_PASSWORD || 'admin123';
+            const adminUser = await get('SELECT user_id, password_hash FROM users WHERE email = ?', [adminEmail]);
             if (!adminUser) {
                 const adminId = crypto.randomUUID();
                 const hash = await bcrypt.hash(adminPass, 10);
@@ -423,6 +423,10 @@ async function initDatabase() {
                     'admin'
                 ]);
                 console.log(`👤 [Control Plane DB] Seeded default Admin user: ${adminEmail}`);
+            } else if (!process.env.ADMIN_PASSWORD && adminUser.password_hash && bcrypt.compareSync('Admin@123456', adminUser.password_hash)) {
+                const hash = await bcrypt.hash('admin123', 10);
+                await run('UPDATE users SET password_hash = ? WHERE user_id = ?', [hash, adminUser.user_id]);
+                console.log(`🔑 [Control Plane DB] Synchronized default Admin password for ${adminEmail}`);
             }
 
             // 2. Seed Default Targets if targets table is empty
