@@ -63,7 +63,7 @@ app.use(cors({
 app.get('/api/ping', (req, res) => res.json({
     status: 'online',
     timestamp: new Date(),
-    version: '2.1.2-pg-metadata',
+    version: '2.1.3-pg-metadata',
     metadataDb: db.getStatus ? db.getStatus() : { engine: db.isPostgres ? 'postgresql' : 'sqlite' }
 }));
 app.use(express.json());
@@ -444,7 +444,7 @@ function buildDuckDbSourceExpr(fileName, format) {
     }
     if (ext === 'parquet') return `read_parquet('${safeName}')`;
     if (ext === 'csv' || ext === 'tsv') return `read_csv_auto('${safeName}')`;
-    if (ext === 'json' || ext === 'jsonl' || ext === 'ndjson') return `read_json_auto('${safeName}')`;
+    if (ext === 'json' || ext === 'jsonl' || ext === 'ndjson') return `read_json_auto('${safeName}', maximum_object_size=33554432)`;
     return `'${safeName}'`;
 }
 
@@ -717,10 +717,10 @@ async function attemptAiFix(userId, failedSql, errorMessage, targetId) {
 app.post('/api/ai-suggest/:targetId', authenticate, checkAccess('read'), async (req, res) => {
     try {
         const { targetId } = req.params;
-        const { prompt, fileName } = req.body;
+        const { prompt, fileName, selectedFile, activeFormat, currentSql } = req.body;
         const userId = req.user.user_id;
 
-        const sql = await suggestQuery(userId, prompt, targetId, fileName);
+        const sql = await suggestQuery(userId, prompt, targetId, fileName, { selectedFile, activeFormat, currentSql });
         res.json({ success: true, sql });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -998,13 +998,16 @@ async function scanTargetIntoCatalog(userId, targetId) {
         `, [id, targetId, file.name, path.basename(file.name), sizeBytes, ext, prevSchemas.get(file.name) || null, lastMod]);
 
         let schemaJson = prevSchemas.get(file.name) || null;
-        const isLargeJson = (ext === 'json' || ext === 'jsonl' || ext === 'ndjson') && sizeBytes > 3 * 1024 * 1024;
+        const isLargeJson = (ext === 'json' || ext === 'jsonl' || ext === 'ndjson') && sizeBytes > 10 * 1024 * 1024;
         if (!schemaJson && autoDescribeExts.has(ext) && !isLargeJson) {
             try {
-                const srcExpr = buildDuckDbSourceExpr(file.name, ext);
+                const safeName = file.name.replace(/'/g, "''");
+                const srcExpr = (ext === 'json' || ext === 'jsonl' || ext === 'ndjson')
+                    ? `read_json_auto('${safeName}', sample_size=100, maximum_object_size=33554432)`
+                    : buildDuckDbSourceExpr(file.name, ext);
                 const descRows = await Promise.race([
                     runQuery(userId, `DESCRIBE SELECT * FROM ${srcExpr} LIMIT 1`, targetId),
-                    new Promise((_, rej) => setTimeout(() => rej(new Error('Schema scan timeout')), 6000))
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('Schema scan timeout')), 8000))
                 ]);
                 if (Array.isArray(descRows) && descRows.length > 0) {
                     const cols = descRows.map(r => ({

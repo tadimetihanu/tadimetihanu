@@ -54,6 +54,7 @@ let _targets = [];
 let _activeTargetId = null;
 let _allFiles = [];
 let _activeTypeFilter = 'all';
+let _selectedFile = null;
 let _currentSchema = [];
 let chartInstance = null;
 let _pinnedItems = [];
@@ -1107,7 +1108,7 @@ function renderTargets() {
     });
 }
 
-window.selectTarget = (id) => { _activeTargetId = id; renderTargets(); loadFiles(); };
+window.selectTarget = (id) => { _activeTargetId = id; _selectedFile = null; renderTargets(); loadFiles(); };
 
 async function loadFiles() {
     const list = document.getElementById('browser-list');
@@ -1220,6 +1221,7 @@ window.filterByType = function(type) {
 }
 
 window.selectFileForQuery = (name) => {
+    _selectedFile = name;
     const target = _targets.find(t => t.target_id === _activeTargetId);
     const prefix = target ? (target.base_uri || '') : '';
     const ext = name.split('.').pop().toLowerCase();
@@ -1907,9 +1909,16 @@ window.aiSuggest = async () => {
     btn.innerText = '⏳ Thinking...';
     try {
         const fileName = (_allFiles || []).map(f => f.name).join(', ');
+        const currentSql = document.getElementById('query-editor')?.value || '';
         const data = await apiFetch(`/api/ai-suggest/${_activeTargetId}`, {
             method: 'POST',
-            body: JSON.stringify({ prompt, fileName })
+            body: JSON.stringify({
+                prompt,
+                fileName,
+                selectedFile: _selectedFile,
+                activeFormat: _activeTypeFilter,
+                currentSql
+            })
         });
         if (data.success) {
             document.getElementById('query-editor').value = data.sql;
@@ -1922,6 +1931,7 @@ window.aiSuggest = async () => {
 };
 
 window.clearEditor = () => {
+    _selectedFile = null;
     document.getElementById('query-editor').value = '';
     if (_notebooks[_activeTabIdx]) {
         _notebooks[_activeTabIdx].sql = '';
@@ -2283,6 +2293,7 @@ window.inspectCatalogSchema = async (targetId, filePath, format, targetName) => 
 };
 
 window.queryCatalogObject = (targetId, filePath, format) => {
+    _selectedFile = filePath;
     window.closeCatalogSchemaModal();
     const adminOverlay = document.getElementById('admin-overlay');
     if (adminOverlay) adminOverlay.style.display = 'none';

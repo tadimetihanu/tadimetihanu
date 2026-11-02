@@ -272,9 +272,10 @@ async function runQuery(userId, sql, targetId) {
                 logicalName = row.file_path;
             }
 
-            // Construct physical URI
+            // Construct physical URI (prefer real cloud bucket for remote cloud targets; use localSamplePath for local/demo targets or fallback)
+            const isLocalTarget = !target.endpoint || target.endpoint.includes('localhost') || target.endpoint.includes('127.0.0.1') || target.provider_type === 'local';
             let physicalUri;
-            if (localSamplePath) {
+            if (localSamplePath && (isLocalTarget || !row)) {
                 physicalUri = localSamplePath;
             } else {
                 const prefix = target.provider_type === 'azure' || target.provider_type === 'adls' ? 'az://' : 's3://';
