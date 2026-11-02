@@ -1069,6 +1069,51 @@
         </div>
     </div>
 
-    <script src="app.js?v=10"></script>
+    <!-- ── Metadata Catalog Schema Inspector Modal ──────────────── -->
+    <div class="modal-overlay" id="catalog-schema-modal" onclick="if(event.target.id==='catalog-schema-modal') closeCatalogSchemaModal()" style="display:none; position:fixed; inset:0; z-index:20000; background:rgba(15,23,42,0.55); align-items:center; justify-content:center;">
+        <div class="modal" style="width: 560px; max-width: 92vw; max-height: 85vh; background: #ffffff; color: #0f172a; border-radius: 16px; padding: 24px; box-shadow: 0 25px 60px rgba(0,0,0,0.28); display: flex; flex-direction: column; gap: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px;">
+                <div>
+                    <h2 style="margin: 0; font-size: 1rem; font-weight: 700; color: #0f172a; word-break: break-all;" id="catalog-schema-title">Dataset Schema</h2>
+                    <p style="margin: 4px 0 0 0; font-size: 0.75rem; color: #64748b;" id="catalog-schema-target">Loading metadata...</p>
+                </div>
+                <button onclick="closeCatalogSchemaModal()" style="background: none; border: none; color: #64748b; cursor: pointer; font-size: 1.2rem;">✕</button>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px; text-align: center;">
+                <div>
+                    <div style="font-size: 0.65rem; color: #64748b; text-transform: uppercase; font-weight: 700;">Total Rows</div>
+                    <div style="font-size: 1rem; font-weight: 800; color: #0f172a;" id="catalog-schema-rows">—</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.65rem; color: #64748b; text-transform: uppercase; font-weight: 700;">Columns</div>
+                    <div style="font-size: 1rem; font-weight: 800; color: #0f172a;" id="catalog-schema-cols">—</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.65rem; color: #64748b; text-transform: uppercase; font-weight: 700;">Format</div>
+                    <div style="font-size: 1rem; font-weight: 800; color: #4f46e5;" id="catalog-schema-fmt">—</div>
+                </div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 6px; min-height: 120px;">
+                <label style="font-size: 0.75rem; font-weight: 700; color: #334155;">Columns & DuckDB Data Types (Persisted in Render PostgreSQL)</label>
+                <div id="catalog-schema-loading" style="text-align: center; padding: 24px; color: #64748b; font-size: 0.85rem;">
+                    ⏳ Extracting remote column schema with DuckDB...
+                </div>
+                <div id="catalog-schema-error" style="display: none; padding: 12px; border-radius: 8px; background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; font-size: 0.8rem;"></div>
+                <div id="catalog-schema-list" style="display: none; max-height: 280px; overflow-y: auto; flex-direction: column; gap: 6px; padding: 4px;"></div>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; padding-top: 14px;">
+                <button class="btn btn-secondary" onclick="closeCatalogSchemaModal()">Close</button>
+                <button class="btn btn-primary" style="background: #0f172a; color: #ffffff; display: flex; align-items: center; gap: 6px;" onclick="window.queryActiveCatalogModal()">
+                    <span>⚡</span>
+                    <span>Query in SQL Editor</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=12"></script>
 </body>
 </html>

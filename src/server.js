@@ -63,7 +63,7 @@ app.use(cors({
 app.get('/api/ping', (req, res) => res.json({
     status: 'online',
     timestamp: new Date(),
-    version: '2.1.1-pg-metadata',
+    version: '2.1.2-pg-metadata',
     metadataDb: db.getStatus ? db.getStatus() : { engine: db.isPostgres ? 'postgresql' : 'sqlite' }
 }));
 app.use(express.json());
@@ -436,6 +436,18 @@ app.get('/api/airbyte/jobs', authenticate, async (req, res) => {
 });
 
 
+function buildDuckDbSourceExpr(fileName, format) {
+    const ext = (format || fileName.split('.').pop() || '').toLowerCase();
+    const safeName = fileName.replace(/'/g, "''");
+    if (ext === 'iceberg' || fileName.toLowerCase().endsWith('.iceberg') || fileName.toLowerCase().includes('.iceberg')) {
+        return `iceberg_scan('${safeName}')`;
+    }
+    if (ext === 'parquet') return `read_parquet('${safeName}')`;
+    if (ext === 'csv' || ext === 'tsv') return `read_csv_auto('${safeName}')`;
+    if (ext === 'json' || ext === 'jsonl' || ext === 'ndjson') return `read_json_auto('${safeName}')`;
+    return `'${safeName}'`;
+}
+
 // ── SCHEMA INSPECTION (DATA SCANNING) ──────────────────────────
 app.get('/api/schema/:targetId', authenticate, checkAccess('read'), async (req, res) => {
     const { targetId } = req.params;
@@ -451,7 +463,7 @@ app.get('/api/schema/:targetId', authenticate, checkAccess('read'), async (req, 
         const fullPath = fileName.includes('://') ? fileName : `${prefix}${fileName}`;
 
         // Intercept unstructured or binary files to prevent DuckDB binder errors
-        const unstructuredExts = ['.dwg', '.dwf', '.dxf', '.pdf', '.png', '.jpg', '.jpeg', '.txt', '.md'];
+        const unstructuredExts = ['.dwg', '.dwf', '.dxf', '.pdf', '.png', '.jpg', '.jpeg', '.txt', '.md', '.xlsx', '.xls', '.docx', '.doc', '.pptx', '.zip', '.gz', '.tar'];
         const isUnstructured = unstructuredExts.some(ext => fileName.toLowerCase().endsWith(ext) || fullPath.toLowerCase().endsWith(ext));
         
         if (isUnstructured) {
@@ -489,29 +501,39 @@ app.get('/api/schema/:targetId', authenticate, checkAccess('read'), async (req, 
             });
         }
 
-        // Support Iceberg table schema inspection
-        const isIceberg = fileName.toLowerCase().endsWith('.iceberg') || fileName.toLowerCase().includes('iceberg');
-        const queryTarget = isIceberg ? `iceberg_scan('${fileName}')` : `'${fileName}'`;
+        const queryTarget = buildDuckDbSourceExpr(fileName);
 
         // 1. Get Column Details & Row Count (Sequentially for stability)
         const descRows = await runQuery(userId, `DESCRIBE SELECT * FROM ${queryTarget}`, targetId);
-        const countRows = await runQuery(userId, `SELECT COUNT(*) AS row_count FROM ${queryTarget}`, targetId);
+        let rowCount = 0;
+        try {
+            const countRows = await runQuery(userId, `SELECT COUNT(*) AS row_count FROM ${queryTarget}`, targetId);
+            rowCount = Number(countRows[0]?.row_count ?? 0);
+        } catch (_) {}
 
         const columns = descRows.map(r => ({
             name:     r.column_name,
             type:     r.column_type,
             nullable: r.null === 'YES',
         }));
+
+        // Persist discovered schema in PostgreSQL metadata_catalog
+        if (columns.length > 0) {
+            await db.run(
+                'UPDATE metadata_catalog SET schema_json = ? WHERE target_id = ? AND (file_path = ? OR file_name = ?)',
+                [JSON.stringify(columns), targetId, fileName, fileName]
+            ).catch(() => {});
+        }
         
         // 2. Count types (Booleans, etc)
         const boolCount = columns.filter(c => c.type.toLowerCase().includes('bool')).length;
-        const numCount  = columns.filter(c => ['integer', 'double', 'float', 'decimal', 'hugeint'].some(t => c.type.toLowerCase().includes(t))).length;
+        const numCount  = columns.filter(c => ['integer', 'bigint', 'double', 'float', 'decimal', 'hugeint', 'numeric'].some(t => c.type.toLowerCase().includes(t))).length;
 
         res.json({ 
             success: true, 
             fileName, 
             columns, 
-            rowCount: Number(countRows[0]?.row_count ?? 0),
+            rowCount,
             stats: {
                 totalColumns: columns.length,
                 booleanColumns: boolCount,
@@ -947,36 +969,85 @@ app.get('/api/admin/catalog', authenticate, async (req, res) => {
     }
 });
 
+async function scanTargetIntoCatalog(userId, targetId) {
+    const rawFiles = await listFiles(targetId);
+    const files = rawFiles.filter(f => f && f.name && !f.name.endsWith('/'));
+
+    // Preserve any previously extracted schemas so large files stay cached across rescans
+    const prevRows = await db.all('SELECT file_path, schema_json FROM metadata_catalog WHERE target_id = ?', [targetId]).catch(() => []);
+    const prevSchemas = new Map();
+    for (const r of prevRows) {
+        if (r.file_path && r.schema_json) prevSchemas.set(r.file_path, r.schema_json);
+    }
+
+    await db.run('DELETE FROM metadata_catalog WHERE target_id = ?', [targetId]);
+
+    const autoDescribeExts = new Set(['parquet', 'csv', 'tsv', 'iceberg', 'json', 'jsonl', 'ndjson']);
+    let schemasDetected = 0;
+
+    for (const file of files) {
+        const id = require('crypto').createHash('md5').update(`${targetId}_${file.name}`).digest('hex');
+        const ext = (file.format || (file.name.toLowerCase().endsWith('.iceberg') || file.name.toLowerCase().includes('.iceberg') ? 'iceberg' : file.name.split('.').pop() || 'bin')).toLowerCase();
+        const sizeBytes = Number(file.size || 0);
+        const lastMod = file.lastModified || new Date().toISOString();
+
+        // Insert catalog entry first so engine.js can resolve logicalName during DESCRIBE
+        await db.run(`
+            INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, schema_json, last_modified)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `, [id, targetId, file.name, path.basename(file.name), sizeBytes, ext, prevSchemas.get(file.name) || null, lastMod]);
+
+        let schemaJson = prevSchemas.get(file.name) || null;
+        const isLargeJson = (ext === 'json' || ext === 'jsonl' || ext === 'ndjson') && sizeBytes > 3 * 1024 * 1024;
+        if (!schemaJson && autoDescribeExts.has(ext) && !isLargeJson) {
+            try {
+                const srcExpr = buildDuckDbSourceExpr(file.name, ext);
+                const descRows = await Promise.race([
+                    runQuery(userId, `DESCRIBE SELECT * FROM ${srcExpr} LIMIT 1`, targetId),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('Schema scan timeout')), 6000))
+                ]);
+                if (Array.isArray(descRows) && descRows.length > 0) {
+                    const cols = descRows.map(r => ({
+                        name: r.column_name,
+                        type: r.column_type,
+                        nullable: r.null === 'YES'
+                    }));
+                    schemaJson = JSON.stringify(cols);
+                    await db.run('UPDATE metadata_catalog SET schema_json = ? WHERE id = ?', [schemaJson, id]);
+                }
+            } catch (descErr) {
+                console.warn(`[Catalog Schema Notice] ${file.name}: ${descErr.message}`);
+            }
+        }
+        if (schemaJson) schemasDetected++;
+    }
+
+    return { indexedCount: files.length, schemasDetected };
+}
+
 app.post('/api/admin/catalog/scan-all', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     
     try {
         const targets = await db.all('SELECT target_id, target_name FROM targets');
         let totalFiles = 0;
+        let totalSchemas = 0;
         let errors = [];
 
         for (const target of targets) {
             try {
-                const files = await listFiles(target.target_id);
-                await db.run('DELETE FROM metadata_catalog WHERE target_id = ?', [target.target_id]);
-                for (const file of files) {
-                    const id = require('crypto').randomUUID();
-                    const ext = file.format || (file.name.toLowerCase().endsWith('.iceberg') || file.name.toLowerCase().includes('iceberg') ? 'iceberg' : file.name.split('.').pop().toLowerCase());
-                    await db.run(`
-                        INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    `, [id, target.target_id, file.name, file.name, Number(file.size || 0), ext, file.lastModified || new Date().toISOString()]);
-                }
-                totalFiles += files.length;
+                const { indexedCount, schemasDetected } = await scanTargetIntoCatalog(req.user.user_id, target.target_id);
+                totalFiles += indexedCount;
+                totalSchemas += schemasDetected;
             } catch (err) {
                 console.error(`Failed to scan ${target.target_name}:`, err);
                 errors.push({ target: target.target_name, error: err.message });
             }
         }
         
-        let message = `Global scan completed. Indexed ${totalFiles} objects across ${targets.length} storages.`;
+        let message = `Global scan completed. Indexed ${totalFiles} objects (${totalSchemas} table schemas extracted) across ${targets.length} storages.`;
         if (errors.length > 0) {
-            message += ` However, ${errors.length} target(s) failed to scan. Check server logs for details.`;
+            message += ` (${errors.length} offline/local target(s) skipped: ${errors.map(e => e.target).join(', ')})`;
         }
 
         res.json({ success: true, message, errors });
@@ -989,18 +1060,11 @@ app.post('/api/admin/catalog/scan/:targetId', authenticate, async (req, res) => 
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const { targetId } = req.params;
     try {
-        const files = await listFiles(targetId);
-        await db.run('DELETE FROM metadata_catalog WHERE target_id = ?', [targetId]);
-        for (const file of files) {
-            const id = require('crypto').randomUUID();
-            const ext = file.format || (file.name.toLowerCase().endsWith('.iceberg') || file.name.toLowerCase().includes('iceberg') ? 'iceberg' : file.name.split('.').pop().toLowerCase());
-            await db.run(`
-                INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            `, [id, targetId, file.name, file.name, Number(file.size || 0), ext, file.lastModified || new Date().toISOString()]);
-        }
-        
-        res.json({ success: true, message: `Scan completed successfully. Indexed ${files.length} objects.` });
+        const { indexedCount, schemasDetected } = await scanTargetIntoCatalog(req.user.user_id, targetId);
+        res.json({
+            success: true,
+            message: `Scan completed! Indexed ${indexedCount} objects and extracted ${schemasDetected} table schemas into PostgreSQL.`
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

@@ -25,17 +25,18 @@ function _ensureProtocol(url) {
 
 // ── Client Builders ─────────────────────────────────────────────
 function getS3Client(target) {
-    let ep = target.endpoint || '';
+    const isR2 = target.provider_type === 'r2' || target.provider_type === 'cloudflare' || (target.endpoint || '').includes('r2.cloudflarestorage.com');
+    let ep = (target.endpoint || '').trim().replace(/\/+$/, '');
     if (ep && !ep.startsWith('http://') && !ep.startsWith('https://')) {
-        ep = 'http://' + ep;
+        ep = (isR2 ? 'https://' : 'http://') + ep;
     }
 
     return new S3Client({
         endpoint:    ep,
-        region:      target.region || 'us-east-1',
+        region:      (target.region || '').trim() || (isR2 ? 'auto' : 'us-east-1'),
         credentials: { 
-            accessKeyId: target.access_key, 
-            secretAccessKey: target.secret_key 
+            accessKeyId: (target.access_key || '').trim(), 
+            secretAccessKey: (target.secret_key || '').trim()
         },
         forcePathStyle: true,
     });
@@ -123,12 +124,20 @@ async function listFiles(targetId) {
         let results = [];
         if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
             const s3 = getS3Client(target);
-            const cmd = new ListObjectsV2Command({ Bucket: target.bucket });
-            const res = await s3.send(cmd);
-            results = (res.Contents || []).map(o => ({
-                name: o.Key, size: o.Size,
-                lastModified: o.LastModified?.toISOString?.() || '',
-            }));
+            const bucketName = (target.bucket || '').trim();
+            let continuationToken = undefined;
+            do {
+                const cmd = new ListObjectsV2Command({ Bucket: bucketName, ContinuationToken: continuationToken });
+                const res = await s3.send(cmd);
+                for (const o of (res.Contents || [])) {
+                    results.push({
+                        name: o.Key,
+                        size: o.Size || 0,
+                        lastModified: o.LastModified?.toISOString?.() || ''
+                    });
+                }
+                continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined;
+            } while (continuationToken);
         } 
         
         else if (target.provider_type === 'azure' || target.provider_type === 'adls') {
@@ -245,6 +254,7 @@ async function listFiles(targetId) {
         const ignoredNames = ['_success', '_metadata', '_common_metadata'];
 
         return finalResults.filter(f => {
+            if (!f.name || f.name.endsWith('/')) return false; // Skip S3/R2 zero-byte directory markers
             const name = f.name.toLowerCase();
             const basename = path.basename(name).toLowerCase();
             if (ignoredNames.includes(basename)) return false;

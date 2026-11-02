@@ -53,7 +53,7 @@ let _user = null;
 let _targets = [];
 let _activeTargetId = null;
 let _allFiles = [];
-let _activeTypeFilter = null;
+let _activeTypeFilter = 'all';
 let _currentSchema = [];
 let chartInstance = null;
 let _pinnedItems = [];
@@ -302,48 +302,79 @@ window.showAdminTab = async function(tab) {
                     </table>`;
             }
         } else if (tab === 'catalog') {
-            const data = await apiFetch('/api/admin/catalog');
+            const [data, tgtData] = await Promise.all([
+                apiFetch('/api/admin/catalog'),
+                apiFetch('/api/admin/targets')
+            ]);
+            if (tgtData && tgtData.success && Array.isArray(tgtData.targets)) {
+                _targets = tgtData.targets;
+            }
             if (data.success) {
+                window._catalogEntries = data.catalog || [];
                 const dbSt = data.dbStatus || {};
                 const isPg = dbSt.engine === 'postgresql';
                 const dbBadge = isPg
-                    ? `<span style="background:rgba(16,185,129,0.14); border:1px solid rgba(16,185,129,0.4); color:#34d399; padding:3px 10px; border-radius:999px; font-size:0.68rem; font-weight:700;">🐘 PostgreSQL Metadata (${dbSt.renderInstanceId || dbSt.host || 'Connected'})</span>`
-                    : `<span style="background:rgba(251,191,36,0.14); border:1px solid rgba(251,191,36,0.4); color:#fbbf24; padding:3px 10px; border-radius:999px; font-size:0.68rem; font-weight:700;">🪶 SQLite Fallback (Set DATABASE_URL for Render PostgreSQL)</span>`;
+                    ? `<span style="background:rgba(16,185,129,0.14); border:1px solid rgba(16,185,129,0.4); color:#059669; padding:3px 10px; border-radius:999px; font-size:0.68rem; font-weight:700;">🐘 PostgreSQL Metadata (${dbSt.renderInstanceId || dbSt.host || 'Connected'})</span>`
+                    : `<span style="background:rgba(251,191,36,0.14); border:1px solid rgba(251,191,36,0.4); color:#d97706; padding:3px 10px; border-radius:999px; font-size:0.68rem; font-weight:700;">🪶 SQLite Fallback (Set DATABASE_URL for Render PostgreSQL)</span>`;
+                const queryableFormats = new Set(['parquet', 'csv', 'tsv', 'json', 'jsonl', 'ndjson', 'iceberg', 'orc']);
                 container.innerHTML = `
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
                         <div style="display:flex; align-items:center; gap:12px;">
                             <h3 style="margin:0;">Metadata Catalog</h3>
                             ${dbBadge}
                         </div>
-                        <div style="display:flex; gap:10px;">
-                            <select id="catalog-target-scan" class="ghost-btn" style="background:rgba(255,255,255,0.05); padding:8px 12px; border-radius:8px;" onchange="window.catalogFilterTargetId = this.value; window.showAdminTab('catalog');">
-                                <option value="">Select Target to Scan</option>
-                                <option value="all" style="font-weight:bold; color:var(--primary);" ${window.catalogFilterTargetId === 'all' ? 'selected' : ''}>-- Scan All Object Storages --</option>
-                                ${_targets.map(t => `<option value="${t.target_id}" ${String(window.catalogFilterTargetId) === String(t.target_id) ? 'selected' : ''}>${t.target_name}</option>`).join('')}
+                        <div style="display:flex; gap:10px; align-items:center;">
+                            <select id="catalog-target-scan" class="ghost-btn" style="background:#f8fafc; color:#0f172a; border:1px solid #cbd5e1; padding:8px 12px; border-radius:8px; font-weight:600;" onchange="window.catalogFilterTargetId = this.value; window.showAdminTab('catalog');">
+                                <option value="">All Registered Storages (${(data.catalog || []).length})</option>
+                                <option value="all" style="font-weight:bold;" ${window.catalogFilterTargetId === 'all' ? 'selected' : ''}>-- Scan All Object Storages --</option>
+                                ${_targets.map(t => `<option value="${t.target_id}" ${String(window.catalogFilterTargetId) === String(t.target_id) ? 'selected' : ''}>${t.target_name} (${(t.provider_type || '').toUpperCase()})</option>`).join('')}
                             </select>
                             <button class="btn btn-primary" onclick="window.startMetadataScan()" id="scan-btn" style="font-size:0.75rem;">🔍 Start Deep Scan</button>
                         </div>
                     </div>
-                    <p style="font-size:0.75rem; color:var(--text-muted); margin-bottom:20px;">Aggregated metadata from across all attached cloud lakes. Searchable and ready for discovery.</p>
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin-bottom:20px;">Aggregated object & column metadata persisted in Render PostgreSQL. Click <b>Inspect</b> to view column types or <b>Query</b> to analyze in DuckDB.</p>
                     
                     <table class="dashboard-table">
-                        <thead><tr><th>Source Target</th><th>Object Path</th><th>Format</th><th>Size</th><th>Schema</th></tr></thead>
+                        <thead><tr><th>Source Target</th><th>Object Path</th><th>Format</th><th>Size</th><th>Schema & Actions</th></tr></thead>
                         <tbody>${(() => {
-                            let filtered = data.catalog;
+                            let filtered = data.catalog || [];
                             if (window.catalogFilterTargetId && window.catalogFilterTargetId !== 'all') {
-                                const selTarget = _targets.find(t => String(t.target_id) === String(window.catalogFilterTargetId));
-                                if (selTarget) {
-                                    filtered = filtered.filter(c => c.target_name === selTarget.target_name);
-                                }
+                                filtered = filtered.filter(c => String(c.target_id) === String(window.catalogFilterTargetId));
                             }
-                            return filtered.length === 0 ? '<tr><td colspan="5" style="text-align:center; padding:30px;">No metadata cataloged yet. Start a scan above.</td></tr>' : filtered.map(c => `
+                            return filtered.length === 0 ? '<tr><td colspan="5" style="text-align:center; padding:30px;">No metadata cataloged for this target yet. Select the target above and click <b>Start Deep Scan</b>.</td></tr>' : filtered.map((c) => {
+                                const fmt = String(c.format || '').toLowerCase();
+                                const isQueryable = queryableFormats.has(fmt);
+                                let colCount = 0;
+                                if (c.schema_json) {
+                                    try {
+                                        const parsed = JSON.parse(c.schema_json);
+                                        if (Array.isArray(parsed)) colCount = parsed.length;
+                                    } catch (_) {}
+                                }
+                                const safeTargetId = String(c.target_id || '').replace(/'/g, "\\'");
+                                const safePath = String(c.file_path || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                                const safeFmt = fmt.replace(/'/g, "\\'");
+                                const safeTgtName = String(c.target_name || 'Storage Lake').replace(/'/g, "\\'");
+
+                                const schemaCell = isQueryable
+                                    ? `<div style="display:flex; align-items:center; gap:6px; flex-wrap:nowrap;">
+                                        ${colCount > 0
+                                            ? `<span style="background:rgba(16,185,129,0.12); color:#059669; border:1px solid rgba(16,185,129,0.35); padding:2px 7px; border-radius:999px; font-size:0.65rem; font-weight:700;">✅ ${colCount} cols</span>`
+                                            : `<span style="background:rgba(99,102,241,0.1); color:#4f46e5; padding:2px 7px; border-radius:999px; font-size:0.65rem; font-weight:600;">On-Demand</span>`}
+                                        <button class="ghost-btn" onclick="window.inspectCatalogSchema('${safeTargetId}', '${safePath}', '${safeFmt}', '${safeTgtName}')" style="padding:3px 8px; font-size:0.65rem; border-radius:6px; cursor:pointer; font-weight:600;">📐 Inspect</button>
+                                        <button class="ghost-btn" onclick="window.queryCatalogObject('${safeTargetId}', '${safePath}', '${safeFmt}')" style="padding:3px 8px; font-size:0.65rem; border-radius:6px; background:#0f172a; color:#ffffff; border:none; cursor:pointer; font-weight:600;">⚡ Query</button>
+                                       </div>`
+                                    : `<span style="opacity:0.65; font-size:0.68rem;">📄 Unstructured</span>`;
+
+                                return `
                             <tr>
-                                <td style="color:#818cf8; font-weight:700;">${c.target_name || 'Storage Lake'}</td>
-                                <td style="font-family:monospace; font-size:0.8rem; font-weight:600;">${c.file_path}</td>
-                                <td><span style="background:rgba(255,255,255,0.05); padding:2px 8px; border-radius:4px; font-size:0.65rem; text-transform:uppercase; font-weight:600; color:#a5b4fc;">${c.format}</span></td>
+                                <td style="color:#4f46e5; font-weight:700; max-width:140px;">${c.target_name || 'Storage Lake'}</td>
+                                <td style="font-family:monospace; font-size:0.78rem; font-weight:600; max-width:260px;" title="${c.file_path}">${c.file_path}</td>
+                                <td><span style="background:rgba(99,102,241,0.1); padding:2px 8px; border-radius:4px; font-size:0.65rem; text-transform:uppercase; font-weight:700; color:#4f46e5;">${c.format}</span></td>
                                 <td>${(Number(c.file_size || 0) / 1024).toFixed(1)} KB</td>
-                                <td>${c.schema_json ? '✅ Ready' : '<span style="opacity:0.5;">-</span>'}</td>
-                            </tr>`).join('');
+                                <td style="max-width:none; overflow:visible;">${schemaCell}</td>
+                            </tr>`;
+                            }).join('');
                         })()}
                         </tbody>
                     </table>`;
@@ -1875,14 +1906,17 @@ window.aiSuggest = async () => {
     btn.disabled = true;
     btn.innerText = '⏳ Thinking...';
     try {
+        const fileName = (_allFiles || []).map(f => f.name).join(', ');
         const data = await apiFetch(`/api/ai-suggest/${_activeTargetId}`, {
             method: 'POST',
-            body: JSON.stringify({ prompt })
+            body: JSON.stringify({ prompt, fileName })
         });
         if (data.success) {
             document.getElementById('query-editor').value = data.sql;
             if (_notebooks[_activeTabIdx]) _notebooks[_activeTabIdx].sql = data.sql;
             saveNotebooks();
+        } else {
+            showStatus(data.error || 'AI query generation failed', 'error');
         }
     } finally { btn.disabled = false; btn.innerText = 'Ask AI'; }
 };
@@ -2118,10 +2152,9 @@ window.deleteUser = async (userId) => {
     }
 };
 window.startMetadataScan = async () => {
-    const targetId = document.getElementById('catalog-target-scan').value;
-    if (!targetId) return alert('Select a target first');
+    const targetId = document.getElementById('catalog-target-scan').value || 'all';
     const btn = document.getElementById('scan-btn');
-    btn.innerHTML = targetId === 'all' ? '?? Scanning All...' : '?? Scanning...';
+    btn.innerHTML = targetId === 'all' ? '⏳ Scanning All & Extracting Schemas...' : '⏳ Scanning & Extracting Schemas...';
     btn.disabled = true;
     try {
         const endpoint = targetId === 'all' ? '/api/admin/catalog/scan-all' : `/api/admin/catalog/scan/${targetId}`;
@@ -2189,4 +2222,110 @@ window.submitSparkJob = async () => {
         btn.innerText = '🚀 Submit Spark Job';
         logs.scrollTop = logs.scrollHeight;
     }
+};
+
+// ── Metadata Catalog Schema Inspector & Direct Query ──
+let _activeCatalogModalCtx = null;
+
+window.closeCatalogSchemaModal = () => {
+    const modal = document.getElementById('catalog-schema-modal');
+    if (modal) modal.style.display = 'none';
+};
+
+window.inspectCatalogSchema = async (targetId, filePath, format, targetName) => {
+    _activeCatalogModalCtx = { targetId, filePath, format };
+    const modal = document.getElementById('catalog-schema-modal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+
+    document.getElementById('catalog-schema-title').innerText = filePath;
+    document.getElementById('catalog-schema-target').innerText = `Target: ${targetName || targetId} • Format: ${(format || 'parquet').toUpperCase()}`;
+    document.getElementById('catalog-schema-rows').innerText = '…';
+    document.getElementById('catalog-schema-cols').innerText = '…';
+    document.getElementById('catalog-schema-fmt').innerText = (format || 'parquet').toUpperCase();
+
+    const loadingEl = document.getElementById('catalog-schema-loading');
+    const errorEl = document.getElementById('catalog-schema-error');
+    const listEl = document.getElementById('catalog-schema-list');
+
+    loadingEl.style.display = 'block';
+    errorEl.style.display = 'none';
+    listEl.style.display = 'none';
+    listEl.innerHTML = '';
+
+    try {
+        const data = await apiFetch(`/api/schema/${targetId}?fileName=${encodeURIComponent(filePath)}`);
+        loadingEl.style.display = 'none';
+
+        if (data.success && Array.isArray(data.columns) && data.columns.length > 0) {
+            document.getElementById('catalog-schema-rows').innerText = data.rowCount !== undefined ? Number(data.rowCount).toLocaleString() : '—';
+            document.getElementById('catalog-schema-cols').innerText = data.columns.length;
+            listEl.style.display = 'flex';
+            listEl.innerHTML = data.columns.map(c => `
+                <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:#f8fafc; border-radius:8px; border:1px solid #e2e8f0;">
+                    <span style="font-family:monospace; font-size:0.8rem; font-weight:700; color:#0f172a;">${c.name}</span>
+                    <span style="font-family:monospace; font-size:0.72rem; font-weight:700; color:#4f46e5; background:rgba(99,102,241,0.1); padding:2px 8px; border-radius:4px;">${c.type}</span>
+                </div>
+            `).join('');
+            // Refresh catalog table in background so cached column badge updates
+            if (document.getElementById('admin-overlay')?.style.display !== 'none') {
+                window.showAdminTab('catalog');
+            }
+        } else {
+            errorEl.innerText = data.error || data.message || 'Could not extract schema for this object.';
+            errorEl.style.display = 'block';
+        }
+    } catch (err) {
+        loadingEl.style.display = 'none';
+        errorEl.innerText = err.message || 'Network error while inspecting schema.';
+        errorEl.style.display = 'block';
+    }
+};
+
+window.queryCatalogObject = (targetId, filePath, format) => {
+    window.closeCatalogSchemaModal();
+    const adminOverlay = document.getElementById('admin-overlay');
+    if (adminOverlay) adminOverlay.style.display = 'none';
+
+    if (typeof window.switchMainMode === 'function') {
+        window.switchMainMode('sql');
+    }
+
+    if (targetId && String(_activeTargetId) !== String(targetId)) {
+        _activeTargetId = targetId;
+        if (typeof renderTargets === 'function') renderTargets();
+        if (typeof loadFiles === 'function') loadFiles();
+    }
+
+    const fmt = (format || filePath.split('.').pop() || '').toLowerCase();
+    const safePath = filePath.replace(/'/g, "''");
+    let sql = `SELECT * FROM '${safePath}' LIMIT 100;`;
+    if (fmt === 'iceberg' || filePath.toLowerCase().endsWith('.iceberg')) {
+        sql = `SELECT * FROM iceberg_scan('${safePath}') LIMIT 100;`;
+    } else if (fmt === 'parquet') {
+        sql = `SELECT * FROM read_parquet('${safePath}') LIMIT 100;`;
+    } else if (fmt === 'csv' || fmt === 'tsv') {
+        sql = `SELECT * FROM read_csv_auto('${safePath}') LIMIT 100;`;
+    } else if (fmt === 'json' || fmt === 'jsonl' || fmt === 'ndjson') {
+        sql = `SELECT * FROM read_json_auto('${safePath}') LIMIT 100;`;
+    }
+
+    const editor = document.getElementById('query-editor');
+    if (editor) {
+        editor.value = sql;
+        if (_notebooks[_activeTabIdx]) {
+            _notebooks[_activeTabIdx].sql = sql;
+            saveNotebooks();
+        }
+    }
+    if (typeof window.runQuery === 'function') {
+        window.runQuery();
+    } else if (typeof window.executeQuery === 'function') {
+        window.executeQuery();
+    }
+};
+
+window.queryActiveCatalogModal = () => {
+    if (!_activeCatalogModalCtx) return;
+    window.queryCatalogObject(_activeCatalogModalCtx.targetId, _activeCatalogModalCtx.filePath, _activeCatalogModalCtx.format);
 };

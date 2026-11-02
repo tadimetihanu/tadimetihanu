@@ -215,9 +215,15 @@ async function runQuery(userId, sql, targetId) {
             }];
         }
 
-        const pathMatch = sql.match(/(?:from\s+|read_[a-z_]+\s*\(\s*|iceberg_[a-z_]+\s*\(\s*)['"]([^'"]+)['"]/i);
-        if (pathMatch) {
-            let logicalName = pathMatch[1];
+        const fileRefRegex = /(?:from\s+|join\s+|read_[a-z0-9_]+\s*\(\s*|iceberg_[a-z0-9_]+\s*\(\s*)['"]([^'"]+)['"]/gi;
+        const pathMatches = Array.from(sql.matchAll(fileRefRegex));
+        const rewrittenRefs = new Set();
+
+        for (const pathMatch of pathMatches) {
+            const rawMatchedPath = pathMatch[1];
+            if (rewrittenRefs.has(rawMatchedPath)) continue;
+            rewrittenRefs.add(rawMatchedPath);
+            let logicalName = rawMatchedPath;
             
             // Look up in metadata catalog for this target
             let row = await db.get('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND file_name = ?', [targetId, logicalName]);
@@ -277,14 +283,13 @@ async function runQuery(userId, sql, targetId) {
 
             // If table format is iceberg and not already using iceberg_scan/iceberg_*, wrap in iceberg_scan
             const isIcebergTable = (row && row.format === 'iceberg') || logicalName.toLowerCase().endsWith('.iceberg') || logicalName.toLowerCase().includes('iceberg');
-            const hasIcebergFunction = /iceberg_[a-z_]+\s*\(/i.test(sql);
+            const escapedRaw = rawMatchedPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const bareFromOrJoinRegex = new RegExp(`((?:FROM|JOIN)\\s+)['"]${escapedRaw}['"]`, 'gi');
 
-            if (isIcebergTable && !hasIcebergFunction && !/read_[a-z_]+\s*\(/i.test(sql)) {
-                // Rewrite `FROM 'logicalName'` -> `FROM iceberg_scan('physicalUri')`
-                sql = sql.replace(new RegExp(`FROM\\s+['"]${pathMatch[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]`, 'i'), `FROM iceberg_scan('${physicalUri}')`);
+            if (isIcebergTable && bareFromOrJoinRegex.test(sql)) {
+                sql = sql.replace(bareFromOrJoinRegex, `$1iceberg_scan('${physicalUri}')`);
             } else {
-                // Standard rewrite
-                sql = sql.replace(pathMatch[1], physicalUri);
+                sql = sql.split(`'${rawMatchedPath}'`).join(`'${physicalUri}'`).split(`"${rawMatchedPath}"`).join(`'${physicalUri}'`);
             }
         }
     
