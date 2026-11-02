@@ -304,9 +304,17 @@ window.showAdminTab = async function(tab) {
         } else if (tab === 'catalog') {
             const data = await apiFetch('/api/admin/catalog');
             if (data.success) {
+                const dbSt = data.dbStatus || {};
+                const isPg = dbSt.engine === 'postgresql';
+                const dbBadge = isPg
+                    ? `<span style="background:rgba(16,185,129,0.14); border:1px solid rgba(16,185,129,0.4); color:#34d399; padding:3px 10px; border-radius:999px; font-size:0.68rem; font-weight:700;">🐘 PostgreSQL Metadata (${dbSt.renderInstanceId || dbSt.host || 'Connected'})</span>`
+                    : `<span style="background:rgba(251,191,36,0.14); border:1px solid rgba(251,191,36,0.4); color:#fbbf24; padding:3px 10px; border-radius:999px; font-size:0.68rem; font-weight:700;">🪶 SQLite Fallback (Set DATABASE_URL for Render PostgreSQL)</span>`;
                 container.innerHTML = `
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-                        <h3 style="margin:0;">Metadata Catalog</h3>
+                        <div style="display:flex; align-items:center; gap:12px;">
+                            <h3 style="margin:0;">Metadata Catalog</h3>
+                            ${dbBadge}
+                        </div>
                         <div style="display:flex; gap:10px;">
                             <select id="catalog-target-scan" class="ghost-btn" style="background:rgba(255,255,255,0.05); padding:8px 12px; border-radius:8px;" onchange="window.catalogFilterTargetId = this.value; window.showAdminTab('catalog');">
                                 <option value="">Select Target to Scan</option>
@@ -333,7 +341,7 @@ window.showAdminTab = async function(tab) {
                                 <td style="color:#818cf8; font-weight:700;">${c.target_name || 'Storage Lake'}</td>
                                 <td style="font-family:monospace; font-size:0.8rem; font-weight:600;">${c.file_path}</td>
                                 <td><span style="background:rgba(255,255,255,0.05); padding:2px 8px; border-radius:4px; font-size:0.65rem; text-transform:uppercase; font-weight:600; color:#a5b4fc;">${c.format}</span></td>
-                                <td>${(c.file_size / 1024).toFixed(1)} KB</td>
+                                <td>${(Number(c.file_size || 0) / 1024).toFixed(1)} KB</td>
                                 <td>${c.schema_json ? '✅ Ready' : '<span style="opacity:0.5;">-</span>'}</td>
                             </tr>`).join('');
                         })()}
@@ -353,11 +361,11 @@ window.showAdminTab = async function(tab) {
                     <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:20px; margin-bottom:25px;">
                         <div style="background:var(--glass-heavy); padding:15px; border-radius:12px; border:1px solid var(--border); text-align:center;">
                             <p style="margin:0; font-size:0.7rem; color:var(--text-muted); text-transform:uppercase;">Total Managed Egress</p>
-                            <h2 style="margin:5px 0 0;">${(data.logs.reduce((acc, l) => acc + (l.data_scanned_bytes || 0), 0) / (1024 * 1024)).toFixed(1)} MB</h2>
+                            <h2 style="margin:5px 0 0;">${(data.logs.reduce((acc, l) => acc + Number(l.data_scanned_bytes || 0), 0) / (1024 * 1024)).toFixed(1)} MB</h2>
                         </div>
                         <div style="background:var(--glass-heavy); padding:15px; border-radius:12px; border:1px solid var(--border); text-align:center;">
                             <p style="margin:0; font-size:0.7rem; color:var(--text-muted); text-transform:uppercase;">Estimated Cloud Cost</p>
-                            <h2 style="margin:5px 0 0; color:#fbbf24;">$${data.logs.reduce((acc, l) => acc + (l.calculated_cost_usd || 0), 0).toFixed(4)}</h2>
+                            <h2 style="margin:5px 0 0; color:#fbbf24;">$${data.logs.reduce((acc, l) => acc + Number(l.calculated_cost_usd || 0), 0).toFixed(4)}</h2>
                         </div>
                         <div style="background:var(--glass-heavy); padding:15px; border-radius:12px; border:1px solid var(--border); text-align:center;">
                             <p style="margin:0; font-size:0.7rem; color:var(--text-muted); text-transform:uppercase;">Enterprise Query Count</p>
@@ -374,8 +382,8 @@ window.showAdminTab = async function(tab) {
                                 <td style="font-weight:700;">${l.email || 'System'}</td>
                                 <td>${l.target_name || '-'}</td>
                                 <td><span style="color:${l.status === 'success' ? '#10b981' : '#ef4444'}">${l.status}</span></td>
-                                <td style="color:#fbbf24;">$${(l.calculated_cost_usd || 0).toFixed(6)}</td>
-                                <td style="font-family:monospace; font-size:0.6rem; opacity:0.8;" title="${l.query_text}">${l.query_text.substring(0, 40)}...</td>
+                                <td style="color:#fbbf24;">$${Number(l.calculated_cost_usd || 0).toFixed(6)}</td>
+                                <td style="font-family:monospace; font-size:0.6rem; opacity:0.8;" title="${l.query_text || ''}">${(l.query_text || '').substring(0, 40)}...</td>
                             </tr>`).join('')}
                         </tbody>
                     </table>

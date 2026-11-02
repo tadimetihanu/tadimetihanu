@@ -44,7 +44,7 @@ async function getWorkspaceId() {
  * Auto-creates a MinIO destination in Airbyte.
  */
 async function setupMinioDestination(targetId) {
-    const target = getTarget(targetId);
+    const target = await getTarget(targetId);
     if (!target || (target.provider_type !== 'minio' && target.provider_type !== 's3')) {
         throw new Error('Only MinIO/S3 targets are currently supported for auto-provisioning');
     }

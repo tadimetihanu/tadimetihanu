@@ -42,7 +42,7 @@ const { checkAccess } = require('./middleware/checkAccess');
 db.initDatabase().then(async () => {
     try {
         const { ensureAllSampleData } = require('./utils/sample_data');
-        ensureAllSampleData();
+        await ensureAllSampleData();
     } catch (e) {
         console.warn('[DB Init] Sample data warning:', e.message);
     }
@@ -59,7 +59,12 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.get('/api/ping', (req, res) => res.json({ status: 'online', timestamp: new Date(), version: '2.0.1-diagnostic' }));
+app.get('/api/ping', (req, res) => res.json({
+    status: 'online',
+    timestamp: new Date(),
+    version: '2.1.0-pg-metadata',
+    metadataDb: db.getStatus ? db.getStatus() : { engine: db.isPostgres ? 'postgresql' : 'sqlite' }
+}));
 app.use(express.json());
 
 app.use(session({ secret: process.env.SESSION_SECRET || 'oauth-secret-fallback', resave: false, saveUninitialized: true }));
@@ -247,11 +252,11 @@ app.get('/api/user/profile', authenticate, async (req, res) => {
                 joined: '2025-03-20' 
             }, 
             stats: {
-                queries: stats.total_queries || 0,
-                computeMs: stats.total_compute_time || 0,
+                queries: Number(stats.total_queries || 0),
+                computeMs: Number(stats.total_compute_time || 0),
                 lastActive: stats.last_active || 'Never',
-                totalScannedMB: ((stats.total_scanned_bytes || 0) / (1024 * 1024)).toFixed(2),
-                totalBurnUsd: (stats.total_burn_usd || 0).toFixed(6)
+                totalScannedMB: (Number(stats.total_scanned_bytes || 0) / (1024 * 1024)).toFixed(2),
+                totalBurnUsd: Number(stats.total_burn_usd || 0).toFixed(6)
             }, 
             history 
         });
@@ -753,12 +758,43 @@ app.post('/api/admin/users', authenticate, async (req, res) => {
     }
 });
 
+app.delete('/api/admin/users/:userId', authenticate, async (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+    const { userId } = req.params;
+    if (userId === req.user.user_id) {
+        return res.status(400).json({ error: 'Cannot delete your own active admin account' });
+    }
+    try {
+        await db.run('DELETE FROM permissions WHERE subject_id = ?', [userId]);
+        await db.run('DELETE FROM users WHERE user_id = ?', [userId]);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Control Plane Metadata DB Status
+app.get('/api/admin/db-status', authenticate, async (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+    try {
+        const counts = {
+            users: Number((await db.get('SELECT COUNT(*) AS cnt FROM users'))?.cnt || 0),
+            targets: Number((await db.get('SELECT COUNT(*) AS cnt FROM targets'))?.cnt || 0),
+            catalog: Number((await db.get('SELECT COUNT(*) AS cnt FROM metadata_catalog'))?.cnt || 0),
+            permissions: Number((await db.get('SELECT COUNT(*) AS cnt FROM permissions'))?.cnt || 0)
+        };
+        res.json({ success: true, status: db.getStatus(), counts });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // 2. Permission Management
 app.get('/api/admin/permissions', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     try {
         const perms = await db.all(`
-            SELECT p.*, u.email, t.target_name 
+            SELECT p.*, p.subject_id AS user_id, u.email, t.target_name 
             FROM permissions p
             LEFT JOIN users u ON p.subject_id = u.user_id AND p.subject_type = 'user'
             LEFT JOIN targets t ON p.target_id = t.target_id
@@ -797,14 +833,15 @@ app.get('/api/admin/targets', authenticate, async (req, res) => {
 
 app.post('/api/admin/targets', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
-    const { target_name, provider_type, endpoint, bucket, credentials, region } = req.body;
+    const { target_name, provider_type, endpoint, bucket, credentials, access_key, secret_key, region, krb_principal, krb_keytab } = req.body;
+    const synced = db.parseCredentials(credentials, access_key, secret_key);
 
     try {
         const targetId = require('crypto').randomUUID();
         await db.run(`
-            INSERT INTO targets (target_id, target_name, provider_type, endpoint, bucket, credentials, region, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-        `, [targetId, target_name, provider_type, endpoint, bucket, credentials, region]);
+            INSERT INTO targets (target_id, target_name, provider_type, endpoint, bucket, credentials, access_key, secret_key, region, is_active, krb_principal, krb_keytab)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        `, [targetId, target_name, provider_type, endpoint, bucket, synced.credentials, synced.access_key, synced.secret_key, region, krb_principal || null, krb_keytab || null]);
         res.json({ success: true, targetId });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -814,12 +851,22 @@ app.post('/api/admin/targets', authenticate, async (req, res) => {
 app.put('/api/admin/targets/:targetId', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const { targetId } = req.params;
-    const { target_name, endpoint, bucket, credentials, region } = req.body;
+    const { target_name, provider_type, endpoint, bucket, credentials, access_key, secret_key, region, krb_principal, krb_keytab } = req.body;
+    const synced = db.parseCredentials(credentials, access_key, secret_key);
     console.log(`[Admin] Updating target ${targetId}: ${target_name}`);
 
     try {
-        await db.run('UPDATE targets SET target_name = ?, endpoint = ?, bucket = ?, credentials = ?, region = ? WHERE target_id = ?',
-          [target_name, endpoint, bucket, credentials, region, targetId]);
+        if (provider_type) {
+            await db.run(
+                'UPDATE targets SET target_name = ?, provider_type = ?, endpoint = ?, bucket = ?, credentials = ?, access_key = ?, secret_key = ?, region = ?, krb_principal = ?, krb_keytab = ? WHERE target_id = ?',
+                [target_name, provider_type, endpoint, bucket, synced.credentials, synced.access_key, synced.secret_key, region, krb_principal || null, krb_keytab || null, targetId]
+            );
+        } else {
+            await db.run(
+                'UPDATE targets SET target_name = ?, endpoint = ?, bucket = ?, credentials = ?, access_key = ?, secret_key = ?, region = ?, krb_principal = ?, krb_keytab = ? WHERE target_id = ?',
+                [target_name, endpoint, bucket, synced.credentials, synced.access_key, synced.secret_key, region, krb_principal || null, krb_keytab || null, targetId]
+            );
+        }
         res.json({ success: true });
     } catch (err) {
         console.error(`[Admin] Update failed: ${err.message}`);
@@ -831,6 +878,8 @@ app.delete('/api/admin/targets/:targetId', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const { targetId } = req.params;
     try {
+        await db.run('DELETE FROM metadata_catalog WHERE target_id = ?', [targetId]);
+        await db.run('DELETE FROM permissions WHERE target_id = ?', [targetId]);
         await db.run('DELETE FROM targets WHERE target_id = ?', [targetId]);
         res.json({ success: true });
     } catch (err) {
@@ -853,13 +902,20 @@ app.get('/api/admin/logs', authenticate, async (req, res) => {
     try {
         let logs = [];
         try {
-            logs = await db.all(`
-                SELECT q.timestamp, u.email, t.target_name, q.status, q.execution_time_ms AS duration, q.calculated_cost_usd, q.query_text
+            const rawLogs = await db.all(`
+                SELECT q.timestamp, u.email, t.target_name, q.status, q.execution_time_ms AS duration, q.data_scanned_bytes, q.calculated_cost_usd, q.query_text
                 FROM query_logs q
                 LEFT JOIN users u ON q.user_id = u.user_id
                 LEFT JOIN targets t ON q.target_id = t.target_id
                 ORDER BY q.timestamp DESC
+                LIMIT 200
             `);
+            logs = rawLogs.map(l => ({
+                ...l,
+                duration: Number(l.duration || 0),
+                data_scanned_bytes: Number(l.data_scanned_bytes || 0),
+                calculated_cost_usd: Number(l.calculated_cost_usd || 0)
+            }));
         } catch (e) {}
         res.json({ success: true, logs });
     } catch (err) {
@@ -874,8 +930,9 @@ app.get('/api/admin/catalog', authenticate, async (req, res) => {
             SELECT m.*, t.target_name 
             FROM metadata_catalog m
             LEFT JOIN targets t ON m.target_id = t.target_id
+            ORDER BY m.created_at DESC
         `);
-        res.json({ success: true, catalog });
+        res.json({ success: true, catalog, dbStatus: db.getStatus ? db.getStatus() : null });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -897,9 +954,9 @@ app.post('/api/admin/catalog/scan-all', authenticate, async (req, res) => {
                     const id = require('crypto').randomUUID();
                     const ext = file.format || (file.name.toLowerCase().endsWith('.iceberg') || file.name.toLowerCase().includes('iceberg') ? 'iceberg' : file.name.split('.').pop().toLowerCase());
                     await db.run(`
-                        INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    `, [id, target.target_id, file.name, file.name, file.size, ext]);
+                        INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    `, [id, target.target_id, file.name, file.name, Number(file.size || 0), ext, file.lastModified || new Date().toISOString()]);
                 }
                 totalFiles += files.length;
             } catch (err) {
@@ -929,9 +986,9 @@ app.post('/api/admin/catalog/scan/:targetId', authenticate, async (req, res) => 
             const id = require('crypto').randomUUID();
             const ext = file.format || (file.name.toLowerCase().endsWith('.iceberg') || file.name.toLowerCase().includes('iceberg') ? 'iceberg' : file.name.split('.').pop().toLowerCase());
             await db.run(`
-                INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
-                VALUES (?, ?, ?, ?, ?, ?)
-            `, [id, targetId, file.name, file.name, file.size, ext]);
+                INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `, [id, targetId, file.name, file.name, Number(file.size || 0), ext, file.lastModified || new Date().toISOString()]);
         }
         
         res.json({ success: true, message: `Scan completed successfully. Indexed ${files.length} objects.` });

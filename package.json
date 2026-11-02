@@ -4,6 +4,7 @@
   "scripts": {
     "start": "node src/server.js",
     "migrate": "npx db-migrate up --config database.json -e sqlite",
+    "migrate:postgres": "node scripts/migrate_sqlite_to_postgres.js",
     "test": "node final_test.js",
     "build": "rimraf .next && next build"
   },

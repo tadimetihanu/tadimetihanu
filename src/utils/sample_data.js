@@ -2,16 +2,17 @@ const fs = require('fs');
 const path = require('path');
 const duckdb = require('duckdb');
 const crypto = require('crypto');
-const Database = require('better-sqlite3');
 
-function ensureAllSampleData() {
+async function ensureAllSampleData() {
     try {
         const samplesDir = path.join(__dirname, '..', '..', 'data', 'samples');
         const minioDir = path.join(__dirname, '..', '..', 'minio_data', 'datalake');
         const gdriveDir = path.join(process.env.USERPROFILE || '/tmp', '.gdrive_cache');
 
         [samplesDir, minioDir, gdriveDir].forEach(d => {
-            if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+            try {
+                if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+            } catch (_) {}
         });
 
         const memDb = new duckdb.Database(':memory:');
@@ -26,7 +27,7 @@ function ensureAllSampleData() {
 
         // 1. Generate sales_data.parquet
         if (!fs.existsSync(salesParquet) || fs.statSync(salesParquet).size === 0) {
-            memDb.run(`
+            await runSql(`
                 COPY (
                     SELECT 
                         1000 + range AS order_id,
@@ -52,7 +53,7 @@ function ensureAllSampleData() {
 
         // 2. Generate customers.csv
         if (!fs.existsSync(customersCsv)) {
-            memDb.run(`
+            await runSql(`
                 COPY (
                     SELECT 
                         range + 1 AS customer_id,
@@ -72,7 +73,7 @@ function ensureAllSampleData() {
 
         // 3. Generate logistics.parquet
         if (!fs.existsSync(logisticsParquet) || fs.statSync(logisticsParquet).size === 0) {
-            memDb.run(`
+            await runSql(`
                 COPY (
                     SELECT 
                         'SHIP-' || (50000 + range) AS shipment_id,
@@ -102,7 +103,7 @@ function ensureAllSampleData() {
 
         // 4. Generate iris.parquet
         if (!fs.existsSync(irisParquet) || fs.statSync(irisParquet).size === 0) {
-            memDb.run(`
+            await runSql(`
                 COPY (
                     SELECT 
                         ROUND(4.3 + (random() * 3.6), 2) AS sepal_length,
@@ -122,7 +123,7 @@ function ensureAllSampleData() {
         // 5. Generate country_full.csv
         const countryCsv = path.join(samplesDir, 'country_full.csv').replace(/\\/g, '/');
         if (!fs.existsSync(countryCsv)) {
-            memDb.run(`
+            await runSql(`
                 COPY (
                     SELECT 
                         range + 1 AS country_id,
@@ -162,7 +163,7 @@ function ensureAllSampleData() {
         // 6. Generate county_uk.csv
         const countyCsv = path.join(samplesDir, 'county_uk.csv').replace(/\\/g, '/');
         if (!fs.existsSync(countyCsv)) {
-            memDb.run(`
+            await runSql(`
                 COPY (
                     SELECT 
                         range + 1 AS county_id,
@@ -184,7 +185,7 @@ function ensureAllSampleData() {
         // 7. Generate currency.csv
         const currencyCsv = path.join(samplesDir, 'currency.csv').replace(/\\/g, '/');
         if (!fs.existsSync(currencyCsv)) {
-            memDb.run(`
+            await runSql(`
                 COPY (
                     SELECT 
                         CASE (range % 5)
@@ -223,7 +224,7 @@ function ensureAllSampleData() {
         // 8. Generate industry.csv
         const industryCsv = path.join(samplesDir, 'industry.csv').replace(/\\/g, '/');
         if (!fs.existsSync(industryCsv)) {
-            memDb.run(`
+            await runSql(`
                 COPY (
                     SELECT 
                         range + 1 AS industry_id,
@@ -246,7 +247,7 @@ function ensureAllSampleData() {
             `);
         }
 
-        // 4. Generate sample Iceberg Tables on disk
+        // 9. Generate sample Iceberg Tables on disk
         const sampleTables = [
             {
                 name: 'ecommerce_orders.iceberg',
@@ -342,7 +343,7 @@ function ensureAllSampleData() {
 
             const parquetDest = path.join(dataDir, '00000-0-data.parquet').replace(/\\/g, '/');
             if (!fs.existsSync(parquetDest) || fs.statSync(parquetDest).size === 0) {
-                memDb.run(`COPY (${st.sql}) TO '${parquetDest}' (FORMAT PARQUET);`);
+                await runSql(`COPY (${st.sql}) TO '${parquetDest}' (FORMAT PARQUET);`);
             }
 
             const metadataPath = path.join(metaDir, 'v1.metadata.json');
@@ -368,7 +369,7 @@ function ensureAllSampleData() {
             }
         }
 
-        // 5. Populate metadata_catalog in Control Plane Database
+        // 10. Populate metadata_catalog in Control Plane Database (PostgreSQL / SQLite)
         const db = require('../db');
         const defaultFiles = [
             { name: 'sales_data.parquet', size: 125000, format: 'parquet' },
@@ -384,27 +385,25 @@ function ensureAllSampleData() {
             { name: 'cloud_telemetry.iceberg', size: 65536, format: 'iceberg' }
         ];
 
-        (async () => {
-            try {
-                const allTargets = await db.all('SELECT target_id FROM targets');
-                for (const t of allTargets) {
-                    for (const f of defaultFiles) {
-                        const cid = crypto.createHash('md5').update(`${t.target_id}_${f.name}`).digest('hex');
-                        try {
-                            await db.run(`
-                                INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
-                            `, [cid, t.target_id, f.name, f.name, f.size, f.format, new Date().toISOString()]);
-                        } catch (insErr) {
-                            await db.run(`
-                                INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
-                                VALUES (?, ?, ?, ?, ?, ?)
-                            `, [cid, t.target_id, f.name, f.name, f.size, f.format]);
-                        }
+        try {
+            const allTargets = await db.all('SELECT target_id FROM targets');
+            for (const t of allTargets) {
+                for (const f of defaultFiles) {
+                    const cid = crypto.createHash('md5').update(`${t.target_id}_${f.name}`).digest('hex');
+                    try {
+                        await db.run(`
+                            INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        `, [cid, t.target_id, f.name, f.name, f.size, f.format, new Date().toISOString()]);
+                    } catch (insErr) {
+                        await db.run(`
+                            INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        `, [cid, t.target_id, f.name, f.name, f.size, f.format]);
                     }
                 }
-            } catch (e) {}
-        })();
+            }
+        } catch (_) {}
     } catch (err) {
         console.warn('[Sample Data] Initialization notice:', err.message);
     }

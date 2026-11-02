@@ -251,7 +251,7 @@ async function runQuery(userId, sql, targetId) {
             if (!row && !localSamplePath) {
                 try {
                     const { ensureAllSampleData } = require('../utils/sample_data');
-                    ensureAllSampleData();
+                    await ensureAllSampleData();
                     for (const sp of sampleCandidates) {
                         if (fs.existsSync(sp)) {
                             localSamplePath = sp.replace(/\\/g, '/');
@@ -289,7 +289,14 @@ async function runQuery(userId, sql, targetId) {
         }
     
 
-            await initSecret(target);
+            try {
+                await initSecret(target);
+            } catch (secErr) {
+                if (/s3:\/\/|r2:\/\/|az:\/\//i.test(sql)) {
+                    throw secErr;
+                }
+                console.warn('[DuckDB Secret Notice]', secErr.message);
+            }
 
             let executableSql = sql;
 
@@ -507,19 +514,22 @@ async function logQuery(userId, targetId, sql, rowCount, duration, status, scann
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `, [queryId, userId, targetId, sql, duration, rowCount, costUsd, scannedBytes]);
     } catch (err) {
-        try {
-            await db.run(`
-                INSERT INTO query_logs (user_id, target_id, query_text, row_count, execution_time_ms, status, data_scanned_bytes, calculated_cost_usd)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `, [userId, targetId, sql, rowCount, duration, status, scannedBytes, costUsd]);
+        console.warn('[Query History Log Notice]', err.message);
+    }
 
-            // Log to system_logs
-            if (status === 'success') {
-                logger.logInfo('duckdb', `Query Executed (${duration}ms)`, { sql, rowCount, scannedBytes, costUsd, targetId, userId });
-            } else {
-                logger.logError('duckdb', `Query Failed (${duration}ms)`, { sql, targetId, userId });
-            }
-        } catch (e) {}
+    try {
+        await db.run(`
+            INSERT INTO query_logs (user_id, target_id, query_text, row_count, execution_time_ms, status, data_scanned_bytes, calculated_cost_usd)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `, [userId, targetId, sql, rowCount, duration, status, scannedBytes, costUsd]);
+    } catch (e) {
+        console.warn('[Query Audit Log Notice]', e.message);
+    }
+
+    if (status === 'success') {
+        logger.logInfo('duckdb', `Query Executed (${duration}ms)`, { sql, rowCount, scannedBytes, costUsd, targetId, userId });
+    } else {
+        logger.logError('duckdb', `Query Failed (${duration}ms)`, { sql, targetId, userId });
     }
 }
 

@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: cloudobjectiq-app
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "3001"
+      - key: APP_URL
+        value: https://app.cloudobjectiq.com
+      - key: RENDER_POSTGRES_ID
+        value: dpg-dbk8g0etlv9c73f5kitg-a
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SESSION_SECRET
+        generateValue: true
