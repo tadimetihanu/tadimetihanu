@@ -1025,8 +1025,24 @@ function heuristicRepairBinderError(sql, errorMessage) {
     if (!sql || !errorMessage) return null;
     let repaired = sql;
 
-    // 1. DuckDB Binder Error: Table "c" does not have a column named "region"
-    // Candidate bindings: : "country"
+    // 1. Table alias join foreign-key typos in star-schema queries (10M benchmark dataset)
+    // Customers (c) has customer_id, customer_name, customer_segment, country, signup_date.
+    // It does NOT have region_id, product_id, or order_id. Those belong to sales_orders (s).
+    repaired = repaired.replace(/\bc\s*\.\s*region_id\b/gi, 's.region_id');
+    repaired = repaired.replace(/\bc\s*\.\s*product_id\b/gi, 's.product_id');
+    repaired = repaired.replace(/\bc\s*\.\s*order_id\b/gi, 's.order_id');
+
+    // Products (p) does not have customer_id, region_id, or order_id.
+    repaired = repaired.replace(/\bp\s*\.\s*customer_id\b/gi, 's.customer_id');
+    repaired = repaired.replace(/\bp\s*\.\s*region_id\b/gi, 's.region_id');
+    repaired = repaired.replace(/\bp\s*\.\s*order_id\b/gi, 's.order_id');
+
+    // Regions (r) does not have customer_id, product_id, or order_id.
+    repaired = repaired.replace(/\br\s*\.\s*customer_id\b/gi, 's.customer_id');
+    repaired = repaired.replace(/\br\s*\.\s*product_id\b/gi, 's.product_id');
+    repaired = repaired.replace(/\br\s*\.\s*order_id\b/gi, 's.order_id');
+
+    // 2. Candidate bindings from DuckDB
     const tableColMatch = errorMessage.match(/Table\s+["']?([a-zA-Z0-9_]+)["']?\s+does not have a column named\s+["']?([a-zA-Z0-9_]+)["']/i);
     const candidateMatch = errorMessage.match(/Candidate bindings:\s*:?\s*["']?([a-zA-Z0-9_]+)["']?/i);
 
@@ -1034,19 +1050,27 @@ function heuristicRepairBinderError(sql, errorMessage) {
         const tbl = tableColMatch[1];
         const badCol = tableColMatch[2];
         const candidate = candidateMatch[1];
-        const qualifiedRegex = new RegExp(`\\b${tbl}\\s*\\.\\s*${badCol}\\b`, 'gi');
-        repaired = repaired.replace(qualifiedRegex, `${tbl}.${candidate}`);
+
+        // Never replace an ID column with a non-ID column (e.g. region_id -> signup_date)
+        const isIdMismatch = badCol.endsWith('_id') && !candidate.endsWith('_id');
+        if (!isIdMismatch) {
+            const qualifiedRegex = new RegExp(`\\b${tbl}\\s*\\.\\s*${badCol}\\b`, 'gi');
+            repaired = repaired.replace(qualifiedRegex, `${tbl}.${candidate}`);
+        }
     } else if (candidateMatch) {
         const colMatch = errorMessage.match(/(?:Referenced column|Column)\s+["']?([a-zA-Z0-9_]+)["']\s+(?:not found|does not exist)/i);
         if (colMatch) {
             const badCol = colMatch[1];
             const candidate = candidateMatch[1];
-            const colRegex = new RegExp(`\\b${badCol}\\b`, 'gi');
-            repaired = repaired.replace(colRegex, candidate);
+            const isIdMismatch = badCol.endsWith('_id') && !candidate.endsWith('_id');
+            if (!isIdMismatch) {
+                const colRegex = new RegExp(`\\b${badCol}\\b`, 'gi');
+                repaired = repaired.replace(colRegex, candidate);
+            }
         }
     }
 
-    // 2. Schema synonym rules for common multi-table join benchmarks (10M dataset)
+    // 3. Schema synonym rules for common multi-table join benchmarks (10M dataset)
     // Products table (p): product_category, product_tier, product_name
     repaired = repaired.replace(/\bp\s*\.\s*category\b/gi, 'p.product_category');
     repaired = repaired.replace(/\bp\s*\.\s*tier\b/gi, 'p.product_tier');
