@@ -464,48 +464,46 @@ async function uploadStream(targetId, filename, stream, mimetype, sizeHint) {
 
 async function downloadFile(targetId, filename, destPath) {
     const fs = require('fs');
+    const { pipeline } = require('stream/promises');
     const target = await getTarget(targetId);
+    const bucketName = _cleanBucketName(target.bucket);
 
     // Auto-strip prefixes to prevent NoSuchKey errors
-    let cleanFilename = filename;
-    const s3Prefix = `s3://${target.bucket}/`;
-    const r2Prefix = `r2://${target.bucket}/`;
-    const azPrefix = `az://${target.bucket}/`;
-    const gdPrefix = `gdrive://${target.bucket}/`;
-    
-    if (cleanFilename.startsWith(s3Prefix)) {
-        cleanFilename = cleanFilename.replace(s3Prefix, '');
-    } else if (cleanFilename.startsWith(r2Prefix)) {
-        cleanFilename = cleanFilename.replace(r2Prefix, '');
-    } else if (cleanFilename.startsWith(azPrefix)) {
-        cleanFilename = cleanFilename.replace(azPrefix, '');
-    } else if (cleanFilename.startsWith(gdPrefix)) {
-        cleanFilename = cleanFilename.replace(gdPrefix, '');
-    } else if (cleanFilename.startsWith(`${target.bucket}/`)) {
-        cleanFilename = cleanFilename.replace(`${target.bucket}/`, '');
+    let cleanFilename = String(filename || '').trim();
+    const prefixes = [
+        `s3://${bucketName}/`,
+        `r2://${bucketName}/`,
+        `az://${bucketName}/`,
+        `gdrive://${bucketName}/`,
+        `s3://${target.bucket}/`,
+        `r2://${target.bucket}/`,
+        `az://${target.bucket}/`,
+        `gdrive://${target.bucket}/`,
+        `${bucketName}/`,
+        `${target.bucket}/`
+    ];
+    for (const pfx of prefixes) {
+        if (pfx && cleanFilename.startsWith(pfx)) {
+            cleanFilename = cleanFilename.slice(pfx.length);
+            break;
+        }
     }
-    // Remove leading slash if any
-    if (cleanFilename.startsWith('/')) {
-        cleanFilename = cleanFilename.substring(1);
-    }
+    cleanFilename = cleanFilename.replace(/^\/+/, '');
+
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
 
     if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare' || _isR2Target(target)) {
         const { GetObjectCommand } = require('@aws-sdk/client-s3');
         const s3 = getS3Client(target);
-        const cmd = new GetObjectCommand({ Bucket: _cleanBucketName(target.bucket), Key: cleanFilename });
+        const cmd = new GetObjectCommand({ Bucket: bucketName, Key: cleanFilename });
         const res = await s3.send(cmd);
-        
-        const destStream = fs.createWriteStream(destPath);
-        return new Promise((resolve, reject) => {
-            res.Body.pipe(destStream)
-                .on('error', reject)
-                .on('close', resolve);
-        });
+        await pipeline(res.Body, fs.createWriteStream(destPath));
+        return;
     }
 
     if (target.provider_type === 'azure' || target.provider_type === 'adls') {
         const blobService = getAzureClient(target);
-        const containerClient = blobService.getContainerClient(target.bucket);
+        const containerClient = blobService.getContainerClient(bucketName || target.bucket);
         const blockBlob = containerClient.getBlockBlobClient(cleanFilename);
         await blockBlob.downloadToFile(destPath);
         return;

@@ -22,6 +22,10 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_DIR=/etc/ssl/certs
 ENV AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED
 ENV AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED
+ENV MALLOC_ARENA_MAX=2
+ENV NODE_OPTIONS=--expose-gc
+
+RUN mkdir -p /app/data/.duckdb_spill /app/data/.parquet_cache /app/data/.upload_tmp
 
 EXPOSE 3001
 CMD ["node", "src/server.js"]

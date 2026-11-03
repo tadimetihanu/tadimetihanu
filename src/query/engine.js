@@ -12,27 +12,130 @@ if (!process.env.CURL_CA_BUNDLE) process.env.CURL_CA_BUNDLE = '/etc/ssl/certs/ca
 if (!process.env.SSL_CERT_FILE) process.env.SSL_CERT_FILE = '/etc/ssl/certs/ca-certificates.crt';
 if (!process.env.SSL_CERT_DIR) process.env.SSL_CERT_DIR = '/etc/ssl/certs';
 
+const SPILL_DIR = path.join(process.cwd(), 'data', '.duckdb_spill');
+const PARQUET_CACHE_DIR = path.join(process.cwd(), 'data', '.parquet_cache');
+const MAX_PARQUET_CACHE_BYTES = Number(process.env.PARQUET_CACHE_MAX_MB || 1200) * 1024 * 1024;
+const MAX_SINGLE_CACHE_FILE_BYTES = Number(process.env.PARQUET_CACHE_SINGLE_MAX_MB || 450) * 1024 * 1024;
+
+function _prepareEngineDirs() {
+    try {
+        if (fs.existsSync(SPILL_DIR)) {
+            fs.rmSync(SPILL_DIR, { recursive: true, force: true });
+        }
+    } catch (_) {}
+    try { fs.mkdirSync(SPILL_DIR, { recursive: true }); } catch (_) {}
+    try { fs.mkdirSync(PARQUET_CACHE_DIR, { recursive: true }); } catch (_) {}
+}
+_prepareEngineDirs();
+
+function detectContainerMemoryMB() {
+    const cgroupPaths = [
+        '/sys/fs/cgroup/memory.max',
+        '/sys/fs/cgroup/memory/memory.limit_in_bytes'
+    ];
+    for (const cgPath of cgroupPaths) {
+        try {
+            if (fs.existsSync(cgPath)) {
+                const raw = fs.readFileSync(cgPath, 'utf8').trim();
+                if (raw && raw !== 'max') {
+                    const bytes = Number(raw);
+                    if (Number.isFinite(bytes) && bytes > 0 && bytes < 1e14) {
+                        return Math.floor(bytes / (1024 * 1024));
+                    }
+                }
+            }
+        } catch (_) {}
+    }
+    return Math.floor(os.totalmem() / (1024 * 1024));
+}
+
+function computeDuckDBLimits() {
+    const containerMB = detectContainerMemoryMB();
+    let memoryLimit;
+    let threads;
+    if (containerMB <= 600) {
+        memoryLimit = '192MB';
+        threads = 2;
+    } else if (containerMB <= 1200) {
+        memoryLimit = '512MB';
+        threads = 2;
+    } else if (containerMB <= 2500) {
+        memoryLimit = '1152MB';
+        threads = 4;
+    } else {
+        memoryLimit = '2048MB';
+        threads = 4;
+    }
+    return {
+        containerMB,
+        memoryLimit: process.env.DUCKDB_MEMORY_LIMIT || memoryLimit,
+        threads: Number(process.env.DUCKDB_THREADS || threads)
+    };
+}
+
 const engineDb = new duckdb.Database(':memory:');
 const conn = engineDb.connect();
 
 let _isBooted = false;
 let _queue = Promise.resolve();
+const _loadedExtensions = new Set();
+
+function _runSqlCmd(cmd) {
+    return new Promise((res, rej) => conn.run(cmd, (e) => e ? rej(e) : res()));
+}
+
+async function ensureExtension(extName) {
+    const name = String(extName || '').trim().toLowerCase();
+    if (!name || _loadedExtensions.has(name)) return;
+    try {
+        await _runSqlCmd(`INSTALL ${name}`);
+        await _runSqlCmd(`LOAD ${name}`);
+        if (name === 'iceberg') {
+            try { await _runSqlCmd(`SET unsafe_enable_version_guessing = true`); } catch (_) {}
+        }
+        _loadedExtensions.add(name);
+        console.log(`🧩 [DuckDB] Lazy-loaded extension: ${name}`);
+    } catch (err) {
+        console.warn(`⚠️ [DuckDB] Could not load extension '${name}':`, err.message);
+    }
+}
 
 // ── Boot Sequence ─────────────────────────────────────────────
 async function boot() {
     console.log('🚀 [Boot] Initializing Cloud Query Engine...');
-    try {
-        const exts = [
-            'INSTALL httpfs', 'LOAD httpfs', 
-            'INSTALL azure', 'LOAD azure', 
-            'INSTALL fts', 'LOAD fts', 
-            'INSTALL iceberg', 'LOAD iceberg',
-            `SET s3_url_style='path'`,
-            `SET s3_region='us-east-1'`,
-            `SET unsafe_enable_version_guessing = true`
-        ];
+    const limits = computeDuckDBLimits();
+    const spillNorm = SPILL_DIR.replace(/\\/g, '/').replace(/'/g, "''");
 
-        // Auto-configure SSL CA certificate bundle for Linux / Docker environments
+    // 1. Apply critical memory, thread, and SSD spill-to-disk limits unconditionally
+    const corePragmas = [
+        `SET temp_directory='${spillNorm}'`,
+        `SET max_temp_directory_size='10GB'`,
+        `SET memory_limit='${limits.memoryLimit}'`,
+        `SET threads=${limits.threads}`,
+        `SET preserve_insertion_order=false`
+    ];
+    for (const cmd of corePragmas) {
+        try {
+            await _runSqlCmd(cmd);
+        } catch (err) {
+            console.warn(`⚠️ [DuckDB] Pragma notice (${cmd}):`, err.message);
+        }
+    }
+
+    // Optional allocator tuning to return freed C++ pages to OS immediately
+    for (const optCmd of [`SET allocator_flush_threshold='16MB'`]) {
+        try { await _runSqlCmd(optCmd); } catch (_) {}
+    }
+
+    console.log(`🧠 [DuckDB] Container RAM: ${limits.containerMB}MB → memory_limit=${limits.memoryLimit}, threads=${limits.threads}, spill=${spillNorm}`);
+
+    // 2. Load httpfs for S3/R2; heavy extensions (azure, iceberg, fts) are lazy-loaded on demand
+    try {
+        await ensureExtension('httpfs');
+        const httpCmds = [
+            `SET s3_url_style='path'`,
+            `SET s3_region='us-east-1'`
+        ];
         const possibleCaPaths = [
             '/etc/ssl/certs/ca-certificates.crt',
             '/etc/pki/tls/certs/ca-bundle.crt',
@@ -41,19 +144,18 @@ async function boot() {
         ];
         for (const caPath of possibleCaPaths) {
             if (fs.existsSync(caPath)) {
-                exts.push(`SET ca_cert_file='${caPath}'`);
+                httpCmds.push(`SET ca_cert_file='${caPath}'`);
                 console.log(`🔒 [DuckDB] Configured CA Cert file: ${caPath}`);
                 break;
             }
         }
-        for (const cmd of exts) {
-            await new Promise((res, rej) => conn.run(cmd, (e) => e ? rej(e) : res()));
+        for (const cmd of httpCmds) {
+            try { await _runSqlCmd(cmd); } catch (_) {}
         }
         _isBooted = true;
-        console.log('🏁 [Boot] All Cloud Extensions Loaded.');
+        console.log('🏁 [Boot] Cloud Query Engine Ready.');
     } catch (err) {
-        console.error('❌ [Boot] Failed to load extensions:', err.message);
-        // We continue anyway, some queries might work
+        console.error('❌ [Boot] Failed to initialize httpfs:', err.message);
         _isBooted = true;
     }
     return true;
@@ -103,41 +205,231 @@ function calculateCost(sql, rows) {
     return { estimatedScan, estimatedCost };
 }
 
+function _cleanBucketName(bucket) {
+    return String(bucket || '').trim().replace(/^\/+|\/+$/g, '');
+}
+
+function _isR2Target(target) {
+    const pType = String(target.provider_type || '').trim().toLowerCase();
+    const ep = String(target.endpoint || '').trim().toLowerCase();
+    return pType === 'r2' || pType === 'cloudflare' || ep.includes('r2.cloudflarestorage.com');
+}
+
+function _getParquetCachePath(targetId, objectKey) {
+    const safeTarget = String(targetId || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const cleanKey = String(objectKey || '').trim().replace(/^\/+/, '');
+    const safeSegments = cleanKey
+        .split('/')
+        .filter(s => s && s !== '.' && s !== '..')
+        .map(s => s.replace(/[^a-zA-Z0-9._-]/g, '_'));
+    if (safeSegments.length === 0) return null;
+    return path.join(PARQUET_CACHE_DIR, safeTarget, ...safeSegments);
+}
+
+function invalidateCachedFile(targetId, objectKey) {
+    try {
+        const p = _getParquetCachePath(targetId, objectKey);
+        if (p && fs.existsSync(p)) {
+            fs.unlinkSync(p);
+        }
+    } catch (_) {}
+}
+
+function _collectCachedFiles(dir, out = []) {
+    try {
+        if (!fs.existsSync(dir)) return out;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                _collectCachedFiles(full, out);
+            } else if (entry.isFile() && !entry.name.startsWith('.tmp_')) {
+                try {
+                    const st = fs.statSync(full);
+                    out.push({ path: full, size: st.size, mtimeMs: st.mtimeMs });
+                } catch (_) {}
+            }
+        }
+    } catch (_) {}
+    return out;
+}
+
+function _evictParquetCacheIfNeeded(incomingBytes, protectedPaths) {
+    try {
+        const files = _collectCachedFiles(PARQUET_CACHE_DIR);
+        let total = files.reduce((acc, f) => acc + f.size, 0);
+        if (total + incomingBytes <= MAX_PARQUET_CACHE_BYTES) return;
+
+        files.sort((a, b) => a.mtimeMs - b.mtimeMs);
+        for (const f of files) {
+            if (total + incomingBytes <= MAX_PARQUET_CACHE_BYTES) break;
+            if (protectedPaths && protectedPaths.has(f.path)) continue;
+            try {
+                fs.unlinkSync(f.path);
+                total -= f.size;
+            } catch (_) {}
+        }
+    } catch (_) {}
+}
+
+async function cacheRemoteParquetFiles(targetId, target, executableSql) {
+    const pType = String(target.provider_type || '').trim().toLowerCase();
+    const isRemoteCloud = (
+        pType === 's3' || pType === 'r2' || pType === 'cloudflare' ||
+        pType === 'minio' || pType === 'azure' || pType === 'adls' || _isR2Target(target)
+    ) && target.endpoint && !target.endpoint.includes('localhost') && !target.endpoint.includes('127.0.0.1');
+
+    if (!isRemoteCloud) return executableSql;
+
+    const bucketName = _cleanBucketName(target.bucket) || 'datalake';
+    const escapedBucket = bucketName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const uriRegex = new RegExp(`['"]((?:s3|az):\\/\\/${escapedBucket}\\/([^'"*?\\[\\]]+\\.parquet))['"]`, 'gi');
+
+    const matches = Array.from(executableSql.matchAll(uriRegex));
+    if (matches.length === 0) return executableSql;
+
+    const uniqueUris = new Map();
+    for (const m of matches) {
+        const fullUri = m[1];
+        const objectKey = m[2];
+        if (!uniqueUris.has(fullUri)) {
+            uniqueUris.set(fullUri, objectKey);
+        }
+    }
+
+    const protectedPaths = new Set();
+    for (const objectKey of uniqueUris.values()) {
+        const p = _getParquetCachePath(targetId, objectKey);
+        if (p) protectedPaths.add(p);
+    }
+
+    const { downloadFile } = require('../drivers/storage');
+    let updatedSql = executableSql;
+
+    for (const [fullUri, objectKey] of uniqueUris.entries()) {
+        const localCachePath = _getParquetCachePath(targetId, objectKey);
+        if (!localCachePath) continue;
+
+        let expectedSize = 0;
+        try {
+            const catRow = await db.get(
+                'SELECT file_size FROM metadata_catalog WHERE target_id = ? AND (file_path = ? OR file_name = ?)',
+                [targetId, objectKey, objectKey]
+            );
+            if (catRow && Number(catRow.file_size) > 0) {
+                expectedSize = Number(catRow.file_size);
+            }
+        } catch (_) {}
+
+        if (expectedSize > MAX_SINGLE_CACHE_FILE_BYTES) {
+            continue;
+        }
+
+        let cacheHit = false;
+        if (fs.existsSync(localCachePath)) {
+            try {
+                const st = fs.statSync(localCachePath);
+                if (st.size > 0 && (!expectedSize || st.size === expectedSize)) {
+                    const now = new Date();
+                    try { fs.utimesSync(localCachePath, now, now); } catch (_) {}
+                    cacheHit = true;
+                }
+            } catch (_) {}
+        }
+
+        if (!cacheHit) {
+            const tmpPath = `${localCachePath}.tmp_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+            try {
+                fs.mkdirSync(path.dirname(localCachePath), { recursive: true });
+                _evictParquetCacheIfNeeded(expectedSize || 64 * 1024 * 1024, protectedPaths);
+                const dlStart = Date.now();
+                await downloadFile(targetId, objectKey, tmpPath);
+                const dlStat = fs.statSync(tmpPath);
+                if (dlStat.size <= 0) {
+                    throw new Error('Downloaded Parquet file is empty');
+                }
+                if (dlStat.size > MAX_SINGLE_CACHE_FILE_BYTES) {
+                    try { fs.unlinkSync(tmpPath); } catch (_) {}
+                    continue;
+                }
+                fs.renameSync(tmpPath, localCachePath);
+                console.log(`⚡ [Parquet Cache] Cached '${objectKey}' (${(dlStat.size / (1024 * 1024)).toFixed(1)} MB in ${Date.now() - dlStart}ms)`);
+                cacheHit = true;
+            } catch (dlErr) {
+                try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (_) {}
+                console.warn(`⚠️ [Parquet Cache] Falling back to httpfs for '${objectKey}': ${dlErr.message}`);
+            }
+        }
+
+        if (cacheHit) {
+            const normLocal = localCachePath.replace(/\\/g, '/');
+            updatedSql = updatedSql
+                .split(`'${fullUri}'`).join(`'${normLocal}'`)
+                .split(`"${fullUri}"`).join(`'${normLocal}'`);
+        }
+    }
+
+    return updatedSql;
+}
+
 // ── Secret Initializer ────────────────────────────────────────
 async function initSecret(target) {
-    const type = target.provider_type;
+    const type = (target.provider_type || '').trim().toLowerCase();
+    const isR2 = _isR2Target(target);
 
-    if (type === 'minio' || type === 's3' || type === 'r2' || type === 'cloudflare') {
-        const rawEp = target.endpoint || '';
-        const ep = rawEp.replace(/^https?:\/\//, '').replace(/\/$/, '');
-        const ssl = !rawEp.startsWith('http://');
-        const region = target.region || (type === 'r2' || type === 'cloudflare' ? 'auto' : 'us-east-1');
-        const secretName = `s3_${target.target_id || target.bucket}`.replace(/[^a-z0-9_]/gi, '_');
+    if (type === 'minio' || type === 's3' || type === 'r2' || type === 'cloudflare' || isR2) {
+        await ensureExtension('httpfs');
+        const bucketName = _cleanBucketName(target.bucket);
+        const rawEp = (target.endpoint || '').trim();
+        let ep = rawEp.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+        if (bucketName && ep.toLowerCase().endsWith('/' + bucketName.toLowerCase())) {
+            ep = ep.slice(0, -(bucketName.length + 1)).replace(/\/+$/, '');
+        }
+        if (isR2 && bucketName) {
+            const escapedBucket = bucketName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const vhostRe = new RegExp(`^${escapedBucket}\\.([a-z0-9-]+\\.(?:eu\\.|fedramp\\.)?r2\\.cloudflarestorage\\.com)$`, 'i');
+            ep = ep.replace(vhostRe, '$1');
+        }
+
+        const ssl = !rawEp.toLowerCase().startsWith('http://');
+        let region = (target.region || '').trim();
+        if (isR2) {
+            const validR2Regions = new Set(['auto', 'wnam', 'enam', 'weur', 'eeur', 'apac', 'oc']);
+            if (!region || !validR2Regions.has(region.toLowerCase())) region = 'auto';
+        } else if (!region) {
+            region = 'us-east-1';
+        }
+
+        const ak = (target.access_key || '').trim().replace(/'/g, "''");
+        const sk = (target.secret_key || '').trim().replace(/'/g, "''");
+        const epEsc = ep.replace(/'/g, "''");
+        const secretName = `s3_${target.target_id || bucketName || 'default'}`.replace(/[^a-z0-9_]/gi, '_');
 
         const cmds = [
             `SET s3_url_style='path'`,
             `SET s3_use_ssl=${ssl}`,
             `CREATE OR REPLACE SECRET ${secretName} (
                 TYPE S3,
-                KEY_ID '${target.access_key}',
-                SECRET '${target.secret_key}',
+                KEY_ID '${ak}',
+                SECRET '${sk}',
                 REGION '${region}',
-                ENDPOINT '${ep}',
+                ENDPOINT '${epEsc}',
                 URL_STYLE 'path',
                 USE_SSL ${ssl}
             )`
         ];
         for (const cmd of cmds) {
-            await new Promise((res, rej) => conn.run(cmd, (e) => e ? rej(e) : res()));
+            await _runSqlCmd(cmd);
         }
 
     } else if (type === 'azure' || type === 'adls') {
-        let connStr = target.endpoint || '';
+        await ensureExtension('azure');
+        let connStr = (target.endpoint || '').trim();
+        const bucketName = _cleanBucketName(target.bucket) || 'datalake';
         
         // Auto-build connection string if only AccountName and keys were provided
         if (connStr && !connStr.includes('AccountKey=')) {
-            let accountName = target.access_key || '';
-            let accountKey = target.secret_key || '';
+            let accountName = (target.access_key || '').trim();
+            let accountKey = (target.secret_key || '').trim();
             if (!accountName && connStr.includes('.blob.core.windows.net')) {
                 const m = connStr.match(/https?:\/\/([^.]+)\.blob\.core\.windows\.net/);
                 if (m) accountName = m[1];
@@ -152,19 +444,18 @@ async function initSecret(target) {
         if (connStr && (connStr.includes('AccountKey=') || connStr.includes('SharedAccessSignature='))) {
             const accMatch = connStr.match(/AccountName=([^;]+)/i);
             const accName = accMatch ? accMatch[1] : 'azure';
-            const scope = `az://${target.bucket || 'datalake'}/`;
-            const secretName = `azure_${accName}_${target.bucket || 'datalake'}`.replace(/[^a-z0-9_]/gi, '_');
+            const scope = `az://${bucketName}/`;
+            const secretName = `azure_${accName}_${bucketName}`.replace(/[^a-z0-9_]/gi, '_');
+            const connEsc = connStr.replace(/'/g, "''");
 
             try {
-                await new Promise((res, rej) => {
-                    conn.run(`
-                        CREATE OR REPLACE SECRET ${secretName} (
-                            TYPE AZURE,
-                            CONNECTION_STRING '${connStr}',
-                            SCOPE '${scope}'
-                        );
-                    `, (e) => e ? rej(e) : res());
-                });
+                await _runSqlCmd(`
+                    CREATE OR REPLACE SECRET ${secretName} (
+                        TYPE AZURE,
+                        CONNECTION_STRING '${connEsc}',
+                        SCOPE '${scope}'
+                    );
+                `);
             } catch (e) {
                 console.warn('[Azure Secret Notice]', e.message);
             }
@@ -279,7 +570,8 @@ async function runQuery(userId, sql, targetId) {
                 physicalUri = localSamplePath;
             } else {
                 const prefix = target.provider_type === 'azure' || target.provider_type === 'adls' ? 'az://' : 's3://';
-                physicalUri = prefix + (target.bucket || 'datalake') + '/' + logicalName.replace(/^\/+/, '');
+                const cleanBkt = _cleanBucketName(target.bucket) || 'datalake';
+                physicalUri = prefix + cleanBkt + '/' + logicalName.replace(/^\/+/, '');
             }
 
             // If table format is iceberg and not already using iceberg_scan/iceberg_*, wrap in iceberg_scan
@@ -361,6 +653,17 @@ async function runQuery(userId, sql, targetId) {
                 }
             }
 
+            // Lazy-load heavy extensions only when needed by the query
+            if (/iceberg/i.test(executableSql)) {
+                await ensureExtension('iceberg');
+            }
+            if (/\bfts_main_|\bcreate_fts_index\b/i.test(executableSql)) {
+                await ensureExtension('fts');
+            }
+
+            // Stream-cache remote cloud Parquet files onto local SSD to eliminate httpfs/TLS heap overhead on 10M+ row joins
+            executableSql = await cacheRemoteParquetFiles(targetId, target, executableSql);
+
             console.log(`🔍 [Query] Executing: ${executableSql.substring(0, 80)}...`);
 
             let rows;
@@ -388,7 +691,7 @@ async function runQuery(userId, sql, targetId) {
                     for (const matchStr of fileRefMatches) {
                         const rawPath = matchStr.replace(/^['"]|['"]$/g, '');
                         const filename = path.basename(rawPath);
-                        const localCached = path.join(os.tmpdir(), `az-cache-${filename}`);
+                        const localCached = path.join(PARQUET_CACHE_DIR, `az-cache-${filename}`);
                         
                         try {
                             if (!fs.existsSync(localCached)) {
@@ -500,12 +803,18 @@ async function runQuery(userId, sql, targetId) {
             const duration = Date.now() - startTime;
             const { estimatedScan, estimatedCost } = calculateCost(sql, rows);
             logQuery(userId, targetId, sql, rows.length, duration, 'success', estimatedScan, estimatedCost);
+            if (typeof global.gc === 'function') {
+                try { global.gc(); } catch (_) {}
+            }
             return rows;
 
         } catch (err) {
             const duration = Date.now() - startTime;
             console.error(`❌ [Query] Failed (${duration}ms): ${err.message}`);
             logQuery(userId, targetId, sql, 0, duration, 'failed', 0, 0);
+            if (typeof global.gc === 'function') {
+                try { global.gc(); } catch (_) {}
+            }
             throw err;
         }
     });
@@ -539,4 +848,4 @@ async function logQuery(userId, targetId, sql, rowCount, duration, status, scann
     }
 }
 
-module.exports = { runQuery, getTarget, calculateCost };
+module.exports = { runQuery, getTarget, calculateCost, invalidateCachedFile };

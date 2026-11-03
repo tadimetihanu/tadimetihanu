@@ -15,6 +15,10 @@ services:
         value: WHEN_REQUIRED
       - key: AWS_RESPONSE_CHECKSUM_VALIDATION
         value: WHEN_REQUIRED
+      - key: MALLOC_ARENA_MAX
+        value: "2"
+      - key: NODE_OPTIONS
+        value: "--expose-gc"
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET

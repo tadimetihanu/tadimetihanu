@@ -33,7 +33,7 @@ const os = require('os');
 const db = require('./db');
 const { listFiles, uploadFile, uploadStream } = require('./drivers/storage');
 const { encrypt, decrypt } = require('./utils/crypto');
-const { initDuckDB, runQuery, calculateCost } = require('./query/engine');
+const { initDuckDB, runQuery, calculateCost, invalidateCachedFile } = require('./query/engine');
 const { suggestQuery } = require('./query/ai');
 const { handleNl2Sql } = require('./nl2sql');
 const { authenticate, isAdmin, loginLimiter, SECRET_KEY } = require('./middleware/auth');
@@ -55,7 +55,7 @@ const app = express();
 app.set('trust proxy', 1);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
-const _uploadTmpDir = path.join(os.tmpdir(), 'ciq-uploads');
+const _uploadTmpDir = path.join(process.cwd(), 'data', '.upload_tmp');
 try { fs.mkdirSync(_uploadTmpDir, { recursive: true }); } catch (_) {}
 const diskUpload = multer({
     storage: multer.diskStorage({
@@ -96,7 +96,7 @@ app.use(cors({
 app.get('/api/ping', (req, res) => res.json({
     status: 'online',
     timestamp: new Date(),
-    version: '2.1.5-folder-upload-fix',
+    version: '2.1.6-duckdb-10m-oom-fix',
     metadataDb: db.getStatus ? db.getStatus() : { engine: db.isPostgres ? 'postgresql' : 'sqlite' }
 }));
 app.use(express.json());
@@ -604,6 +604,9 @@ function _normalizeObjectKey(rawKey) {
 
 async function _registerUploadedObjectInCatalog(targetId, objectKey, sizeBytes, nowIso) {
     try {
+        if (typeof invalidateCachedFile === 'function') {
+            invalidateCachedFile(targetId, objectKey);
+        }
         const lowerKey = objectKey.toLowerCase();
         const base = path.posix.basename(lowerKey);
         if (!objectKey || objectKey.endsWith('/')) return;
@@ -791,6 +794,8 @@ app.post('/api/iceberg/insert', authenticate, checkAccess('write'), async (req, 
 // ── QUERY & AI ROUTES ─────────────────────────────────────────
 
 app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, res) => {
+    req.setTimeout(300000);
+    res.setTimeout(300000);
     const { targetId } = req.params;
     const { sql } = req.body;
     const userId = req.user.user_id;
@@ -1546,6 +1551,9 @@ app.post('/api/rag/legal_query', authenticate, async (req, res) => {
 });
 
 const PORT = process.env.PORT || 4000;
+server.keepAliveTimeout = 120000;
+server.headersTimeout = 125000;
+server.requestTimeout = 300000;
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 CloudObjectIQ Enterprise running at http://localhost:${PORT}`);
 });
