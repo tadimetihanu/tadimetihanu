@@ -2,8 +2,11 @@ const fs = require('fs');
 const path = require('path');
 const { parseWithCtes } = require('./out_of_core');
 
-// Price per GiB scanned ($5.50 / GiB, enterprise cloud lakehouse standard)
-const COST_PER_GIB_USD = 5.50;
+// Cloud Lakehouse standard pricing: $5.00 USD per TiB (1 TiB = 1024^4 bytes)
+const COST_PER_TIB_USD = 5.00;
+const TIB_BYTES = 1024 * 1024 * 1024 * 1024; // 1,099,511,627,776 bytes
+const CURRENCY = 'USD';
+const PRICING_UNIT = '$5.00 / TiB';
 
 const SQL_RESERVED_WORDS = new Set([
     'WHERE', 'JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL', 'OUTER', 'CROSS', 'NATURAL',
@@ -330,29 +333,120 @@ async function _getParquetColumnStats(allSqlCmd, physPath, knownFileBytes) {
     }
 }
 
+async function _estimateSurvivingRowGroupRatio(allSqlCmd, safePath, cleanedScopes, numRowGroups) {
+    if (numRowGroups <= 1 || typeof allSqlCmd !== 'function') return 1.0;
+    try {
+        const combined = cleanedScopes.join(' ');
+        const whereMatch = combined.match(/\bWHERE\s+([^;)]+)/i);
+        if (!whereMatch) return 1.0;
+
+        const whereClause = whereMatch[1];
+        const eqMatch = whereClause.match(/(?:[A-Za-z0-9_$"]+\.)?([A-Za-z_][A-Za-z0-9_$]*)\s*=\s*('[^']+'|\d+)/i);
+        if (!eqMatch) return 1.0;
+
+        const filterCol = eqMatch[1].toLowerCase().replace(/^"+|"+$/g, '');
+        const filterValRaw = eqMatch[2].replace(/^'|'$/g, '');
+
+        const metaRows = await allSqlCmd(`
+            SELECT row_group_id, stats_min_value, stats_max_value
+            FROM parquet_metadata('${safePath}')
+            WHERE LOWER(path_in_schema) = '${filterCol}'
+        `);
+
+        if (!metaRows || metaRows.length === 0) return 1.0;
+
+        let surviving = 0;
+        let totalChecked = 0;
+        for (const rg of metaRows) {
+            const minV = rg.stats_min_value;
+            const maxV = rg.stats_max_value;
+            if (minV !== null && maxV !== null && minV !== undefined && maxV !== undefined) {
+                totalChecked++;
+                const valStr = String(filterValRaw);
+                const minStr = String(minV);
+                const maxStr = String(maxV);
+                if (valStr >= minStr && valStr <= maxStr) {
+                    surviving++;
+                }
+            } else {
+                surviving++;
+            }
+        }
+
+        if (totalChecked > 0 && totalChecked === metaRows.length) {
+            return Math.max(0.05, Math.min(1.0, surviving / metaRows.length));
+        }
+    } catch (_) {}
+    return 1.0;
+}
+
 /**
  * Computes accurate physical scanned bytes and cloud burn USD for a completed DuckDB query
  * using real Parquet per-column compressed metadata, row-group pruning, local SSD cache stats,
  * and metadata_catalog object sizes.
  */
-async function computeQueryScanMetrics({ originalSql, executableSql, rows, targetId, allSqlCmd, db }) {
+async function computeQueryScanMetrics({ originalSql, executableSql, rows, targetId, allSqlCmd, db, cacheReport, executionId }) {
     const rawOrig = String(originalSql || '');
     const rawExec = String(executableSql || rawOrig);
+    const execId = executionId || require('crypto').randomUUID();
 
     // Schema inspection (DESCRIBE) reads only file footer / schema metadata
     if (/^\s*DESCRIBE\b/i.test(rawOrig)) {
         const estimatedScan = 8192;
-        const estimatedCost = (estimatedScan / (1024 * 1024 * 1024)) * COST_PER_GIB_USD;
-        return { estimatedScan, estimatedCost };
+        const billedCostUsd = (estimatedScan / TIB_BYTES) * COST_PER_TIB_USD;
+        return {
+            executionId: execId,
+            estimatedScan,
+            logicalScannedBytes: estimatedScan,
+            totalDatasetBytes: estimatedScan,
+            pruningSavedPct: 0,
+            storageBytesDownloaded: 0,
+            cacheStatus: 'LOCAL',
+            cacheHits: 0,
+            cacheMisses: 0,
+            estimatedCost: billedCostUsd,
+            billedCostUsd,
+            onDemandCostUsd: billedCostUsd,
+            cacheSavingsUsd: 0,
+            currency: CURRENCY,
+            pricingUnit: PRICING_UNIT
+        };
     }
 
     const refs = _extractDataSourceRefs(rawExec);
     if (refs.length === 0) {
-        return { estimatedScan: 0, estimatedCost: 0 };
+        return {
+            executionId: execId,
+            estimatedScan: 0,
+            logicalScannedBytes: 0,
+            totalDatasetBytes: 0,
+            pruningSavedPct: 0,
+            storageBytesDownloaded: 0,
+            cacheStatus: 'LOCAL',
+            cacheHits: 0,
+            cacheMisses: 0,
+            estimatedCost: 0,
+            billedCostUsd: 0,
+            onDemandCostUsd: 0,
+            cacheSavingsUsd: 0,
+            currency: CURRENCY,
+            pricingUnit: PRICING_UNIT
+        };
     }
 
     const pureLimitN = refs.length === 1 ? _detectPureLimitPreview(rawExec) : null;
-    let totalScannedBytes = 0;
+    let totalLogicalScannedBytes = 0;
+    let totalDatasetBytes = 0;
+    let totalUncachedLogicalBytes = 0;
+    const perFileBreakdown = [];
+
+    const perFileCache = new Map();
+    if (cacheReport && Array.isArray(cacheReport.perFile)) {
+        for (const item of cacheReport.perFile) {
+            if (item.physPath) perFileCache.set(item.physPath, item);
+            if (item.objectKey) perFileCache.set(item.objectKey, item);
+        }
+    }
 
     for (const ref of refs) {
         const { physPath, aliases } = ref;
@@ -363,9 +457,13 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
         const catalogBytes = localBytes > 0 ? localBytes : await _lookupCatalogBytes(db, targetId, physPath);
         const knownBytes = Math.max(localBytes, catalogBytes);
 
+        let fileTotalBytes = knownBytes;
+        let fileLogicalScan = 0;
+
         if (isParquetSingle && typeof allSqlCmd === 'function') {
             const pqStats = await _getParquetColumnStats(allSqlCmd, physPath, knownBytes);
             if (pqStats && pqStats.colBytesMap.size > 0) {
+                fileTotalBytes = pqStats.physicalFileBytes;
                 const rawScopes = _getSqlScopesForPath(rawExec, physPath);
                 const cleanedScopes = rawScopes.map(_stripCommentsAndStrings);
                 const selectAll = cleanedScopes.some(sc => _hasWildcardSelectInScope(sc, aliases));
@@ -381,38 +479,99 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
                     }
                 }
 
-                // Apply pure LIMIT N row-group early stop (e.g. SELECT * FROM file.parquet LIMIT 100)
+                // Apply predicate pushdown row-group pruning estimation
+                const safePath = physPath.replace(/\\/g, '/').replace(/'/g, "''");
+                const survivingRatio = await _estimateSurvivingRowGroupRatio(allSqlCmd, safePath, cleanedScopes, pqStats.numRowGroups);
+                colScannedBytes = Math.round(colScannedBytes * survivingRatio);
+
+                // Apply pure LIMIT N row-group early stop
                 if (pureLimitN !== null && pqStats.totalRows > 0 && pqStats.numRowGroups > 1) {
                     const rowsPerRg = Math.max(1, Math.ceil(pqStats.totalRows / pqStats.numRowGroups));
                     const rgsRead = Math.min(pqStats.numRowGroups, Math.max(1, Math.ceil(pureLimitN / rowsPerRg)));
                     colScannedBytes = Math.round(colScannedBytes * (rgsRead / pqStats.numRowGroups));
                 }
 
-                const fileScan = Math.min(pqStats.physicalFileBytes, pqStats.footerBytes + colScannedBytes);
-                totalScannedBytes += fileScan;
-                continue;
+                fileLogicalScan = Math.min(pqStats.physicalFileBytes, pqStats.footerBytes + colScannedBytes);
             }
         }
 
-        // Non-Parquet (CSV/JSON/ORC/Iceberg/Globs) or fallback when parquet_metadata is unavailable
-        if (knownBytes > 0) {
-            if (pureLimitN !== null && /\.(csv|tsv|txt|json|ndjson)$/i.test(lowerPath)) {
-                // Streaming text reader stops early after buffering enough rows
-                const approxRowBytes = 256;
-                totalScannedBytes += Math.min(knownBytes, Math.max(65536, pureLimitN * approxRowBytes));
+        // Non-Parquet or fallback when parquet_metadata is unavailable
+        if (fileLogicalScan === 0) {
+            if (knownBytes > 0) {
+                if (pureLimitN !== null && /\.(csv|tsv|txt|json|ndjson)$/i.test(lowerPath)) {
+                    const approxRowBytes = 256;
+                    fileLogicalScan = Math.min(knownBytes, Math.max(65536, pureLimitN * approxRowBytes));
+                } else {
+                    fileLogicalScan = knownBytes;
+                }
+                fileTotalBytes = knownBytes;
             } else {
-                totalScannedBytes += knownBytes;
+                const payloadBytes = JSON.stringify(rows || [], (k, v) => typeof v === 'bigint' ? v.toString() : v).length * 2;
+                fileLogicalScan = Math.max(payloadBytes, 65536);
+                fileTotalBytes = fileLogicalScan;
             }
-        } else {
-            // Last-resort fallback based on serialized result payload
-            const payloadBytes = JSON.stringify(rows || [], (k, v) => typeof v === 'bigint' ? v.toString() : v).length * 2;
-            totalScannedBytes += Math.max(payloadBytes, 65536);
         }
+
+        totalLogicalScannedBytes += fileLogicalScan;
+        totalDatasetBytes += Math.max(fileTotalBytes, fileLogicalScan);
+
+        // Check cache status: if served from local SSD cache or local sample file, no on-demand cloud egress
+        const cachedItem = perFileCache.get(physPath) || perFileCache.get(path.posix.basename(physPath));
+        const isLocallyCached = cachedItem ? (cachedItem.cacheHit === true) : (localBytes > 0 && !/^(?:s3|r2|az|gdrive|https?):\/\//i.test(physPath));
+
+        if (!isLocallyCached) {
+            totalUncachedLogicalBytes += fileLogicalScan;
+        }
+
+        perFileBreakdown.push({
+            path: physPath,
+            logicalScan: fileLogicalScan,
+            totalBytes: fileTotalBytes,
+            isCached: isLocallyCached
+        });
     }
 
-    const estimatedScan = Math.max(0, Math.round(totalScannedBytes));
-    const estimatedCost = (estimatedScan / (1024 * 1024 * 1024)) * COST_PER_GIB_USD;
-    return { estimatedScan, estimatedCost };
+    const logicalScannedBytes = Math.max(0, Math.round(totalLogicalScannedBytes));
+    totalDatasetBytes = Math.max(totalDatasetBytes, logicalScannedBytes);
+
+    const pruningSavedPct = totalDatasetBytes > 0
+        ? Math.max(0, Math.min(99, Math.round(((totalDatasetBytes - logicalScannedBytes) / totalDatasetBytes) * 100)))
+        : 0;
+
+    const storageBytesDownloaded = cacheReport ? Number(cacheReport.bytesDownloaded || 0) : 0;
+    const cacheHits = cacheReport ? Number(cacheReport.hits || 0) : 0;
+    const cacheMisses = cacheReport ? Number(cacheReport.misses || 0) : 0;
+
+    let cacheStatus = 'LOCAL';
+    if (cacheReport && (cacheHits > 0 || cacheMisses > 0)) {
+        if (cacheHits > 0 && cacheMisses === 0) cacheStatus = 'HIT';
+        else if (cacheMisses > 0 && cacheHits === 0) cacheStatus = 'MISS';
+        else cacheStatus = 'PARTIAL';
+    }
+
+    const onDemandCostUsd = (logicalScannedBytes / TIB_BYTES) * COST_PER_TIB_USD;
+    // When served from local SSD cache, cloud storage scan charges are 0 (no double-charging)
+    const billedCostUsd = (totalUncachedLogicalBytes / TIB_BYTES) * COST_PER_TIB_USD;
+    const cacheSavingsUsd = Math.max(0, onDemandCostUsd - billedCostUsd);
+
+    return {
+        executionId: execId,
+        estimatedScan: logicalScannedBytes,
+        logicalScannedBytes,
+        totalDatasetBytes,
+        pruningSavedPct,
+        storageBytesDownloaded,
+        cacheStatus,
+        cacheHits,
+        cacheMisses,
+        estimatedCost: billedCostUsd,
+        billedCostUsd,
+        onDemandCostUsd,
+        cacheSavingsUsd,
+        currency: CURRENCY,
+        pricingUnit: PRICING_UNIT,
+        perFileBreakdown
+    };
 }
 
 /**
@@ -425,7 +584,15 @@ function calculateCost(sql, rows) {
     }
     const refs = _extractDataSourceRefs(String(sql || ''));
     if (refs.length === 0) {
-        return { estimatedScan: 0, estimatedCost: 0 };
+        return {
+            estimatedScan: 0,
+            estimatedCost: 0,
+            logicalScannedBytes: 0,
+            billedCostUsd: 0,
+            onDemandCostUsd: 0,
+            currency: CURRENCY,
+            pricingUnit: PRICING_UNIT
+        };
     }
     let sumLocal = 0;
     for (const r of refs) {
@@ -434,8 +601,16 @@ function calculateCost(sql, rows) {
     const estimatedScan = sumLocal > 0
         ? sumLocal
         : JSON.stringify(rows || [], (k, v) => typeof v === 'bigint' ? v.toString() : v).length * 2;
-    const estimatedCost = (estimatedScan / (1024 * 1024 * 1024)) * COST_PER_GIB_USD;
-    return { estimatedScan, estimatedCost };
+    const estimatedCost = (estimatedScan / TIB_BYTES) * COST_PER_TIB_USD;
+    return {
+        estimatedScan,
+        estimatedCost,
+        logicalScannedBytes: estimatedScan,
+        billedCostUsd: estimatedCost,
+        onDemandCostUsd: estimatedCost,
+        currency: CURRENCY,
+        pricingUnit: PRICING_UNIT
+    };
 }
 
 function invalidateParquetStatsCache() {

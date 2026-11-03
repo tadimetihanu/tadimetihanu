@@ -66,18 +66,23 @@ CREATE TABLE IF NOT EXISTS objects (
 
 CREATE TABLE IF NOT EXISTS query_history (
     id TEXT PRIMARY KEY,
+    execution_id TEXT,
     user_id TEXT,
     target_id TEXT,
     sql_query TEXT,
     duration_ms INTEGER,
     row_count INTEGER,
     cost_usd REAL,
+    on_demand_cost_usd REAL DEFAULT 0,
     scan_bytes INTEGER,
+    storage_downloaded_bytes INTEGER DEFAULT 0,
+    cache_status TEXT DEFAULT 'MISS',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS query_logs (
     log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    execution_id TEXT,
     user_id TEXT,
     target_id TEXT,
     query_text TEXT,
@@ -85,7 +90,10 @@ CREATE TABLE IF NOT EXISTS query_logs (
     execution_time_ms INTEGER DEFAULT 0,
     status TEXT DEFAULT 'success',
     data_scanned_bytes INTEGER DEFAULT 0,
+    storage_downloaded_bytes INTEGER DEFAULT 0,
+    cache_status TEXT DEFAULT 'MISS',
     calculated_cost_usd REAL DEFAULT 0,
+    on_demand_cost_usd REAL DEFAULT 0,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -218,18 +226,23 @@ CREATE TABLE IF NOT EXISTS objects (
 
 CREATE TABLE IF NOT EXISTS query_history (
     id VARCHAR(64) PRIMARY KEY DEFAULT md5(random()::text || clock_timestamp()::text),
+    execution_id VARCHAR(64),
     user_id VARCHAR(64),
     target_id VARCHAR(64),
     sql_query TEXT,
     duration_ms INTEGER,
     row_count BIGINT,
     cost_usd NUMERIC(12, 6),
+    on_demand_cost_usd NUMERIC(12, 6) DEFAULT 0,
     scan_bytes BIGINT,
+    storage_downloaded_bytes BIGINT DEFAULT 0,
+    cache_status VARCHAR(32) DEFAULT 'MISS',
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS query_logs (
     log_id SERIAL PRIMARY KEY,
+    execution_id VARCHAR(64),
     user_id VARCHAR(64),
     target_id VARCHAR(64),
     query_text TEXT,
@@ -237,7 +250,10 @@ CREATE TABLE IF NOT EXISTS query_logs (
     execution_time_ms INTEGER DEFAULT 0,
     status VARCHAR(32) DEFAULT 'success',
     data_scanned_bytes BIGINT DEFAULT 0,
+    storage_downloaded_bytes BIGINT DEFAULT 0,
+    cache_status VARCHAR(32) DEFAULT 'MISS',
     calculated_cost_usd NUMERIC(12, 6) DEFAULT 0,
+    on_demand_cost_usd NUMERIC(12, 6) DEFAULT 0,
     timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -321,7 +337,15 @@ const POSTGRES_MIGRATIONS = [
     `ALTER TABLE permissions ALTER COLUMN id SET DEFAULT md5(random()::text || clock_timestamp()::text)`,
     `ALTER TABLE metadata_catalog ADD COLUMN IF NOT EXISTS schema_json TEXT`,
     `ALTER TABLE metadata_catalog ADD COLUMN IF NOT EXISTS last_modified TEXT`,
-    `ALTER TABLE metadata_catalog ALTER COLUMN id SET DEFAULT md5(random()::text || clock_timestamp()::text)`
+    `ALTER TABLE metadata_catalog ALTER COLUMN id SET DEFAULT md5(random()::text || clock_timestamp()::text)`,
+    `ALTER TABLE query_history ADD COLUMN IF NOT EXISTS execution_id VARCHAR(64)`,
+    `ALTER TABLE query_history ADD COLUMN IF NOT EXISTS on_demand_cost_usd NUMERIC(12, 6) DEFAULT 0`,
+    `ALTER TABLE query_history ADD COLUMN IF NOT EXISTS storage_downloaded_bytes BIGINT DEFAULT 0`,
+    `ALTER TABLE query_history ADD COLUMN IF NOT EXISTS cache_status VARCHAR(32) DEFAULT 'MISS'`,
+    `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS execution_id VARCHAR(64)`,
+    `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS storage_downloaded_bytes BIGINT DEFAULT 0`,
+    `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS cache_status VARCHAR(32) DEFAULT 'MISS'`,
+    `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS on_demand_cost_usd NUMERIC(12, 6) DEFAULT 0`
 ];
 
 const DEFAULT_TARGETS = [

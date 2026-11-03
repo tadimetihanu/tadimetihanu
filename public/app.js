@@ -66,14 +66,97 @@ let _activeSlicers = {};
 // Restore notebooks from localStorage
 const _savedNotebooks = localStorage.getItem('ciq_notebooks');
 const _savedTabIdx    = parseInt(localStorage.getItem('ciq_activeTabIdx') || '0', 10);
-let _notebooks = _savedNotebooks ? JSON.parse(_savedNotebooks) : [{ id: 'tab_main', name: 'Main Query', sql: '', results: null }];
+let _notebooks = _savedNotebooks ? JSON.parse(_savedNotebooks) : [{ id: 'tab_main', name: 'Main Query', sql: '', results: null, meta: null, statusText: '' }];
 let _activeTabIdx = (!isNaN(_savedTabIdx) && _savedTabIdx < _notebooks.length) ? _savedTabIdx : 0;
 
 function saveNotebooks() {
-    const toSave = _notebooks.map(t => ({ id: t.id, name: t.name, sql: t.sql || '' }));
+    const toSave = _notebooks.map(t => ({
+        id: t.id,
+        name: t.name,
+        sql: t.sql || '',
+        meta: t.meta || null,
+        statusText: t.statusText || '',
+        results: (t.results && t.results.length <= 200) ? t.results : null
+    }));
     localStorage.setItem('ciq_notebooks', JSON.stringify(toSave));
     localStorage.setItem('ciq_activeTabIdx', String(_activeTabIdx));
 }
+
+// ── Per-Tab Telemetry & Isolation Renderer ─────────────────────
+window.renderTabTelemetry = (tab) => {
+    if (!tab) return;
+    const meter = document.getElementById('live-burn-meter');
+    const burnVal = document.getElementById('current-burn-val');
+    const scanVal = document.getElementById('current-scan-val');
+    const scanUnit = document.getElementById('current-scan-unit');
+    const cacheBadge = document.getElementById('current-cache-badge');
+    const pruneBadge = document.getElementById('current-prune-badge');
+    const execBadge = document.getElementById('current-exec-badge');
+    const status = document.getElementById('exec-status');
+
+    if (status) {
+        status.innerText = tab.statusText || (tab.isRunning ? '📡 Execution in progress...' : '');
+    }
+
+    if (tab.meta && meter) {
+        meter.style.display = 'inline-flex';
+        const billed = tab.meta.billedCostUsd !== undefined ? tab.meta.billedCostUsd : (tab.meta.estimatedCost || 0);
+        if (burnVal) burnVal.innerText = Number(billed).toFixed(6);
+
+        const formatted = window.formatScanVolume(tab.meta.logicalScannedBytes || tab.meta.estimatedScan || 0);
+        if (scanVal) scanVal.innerText = formatted.value;
+        if (scanUnit) scanUnit.innerText = formatted.unit;
+
+        if (cacheBadge) {
+            if (tab.meta.cacheStatus === 'HIT' || tab.meta.cacheStatus === 'LOCAL') {
+                cacheBadge.style.display = 'inline-block';
+                const saved = tab.meta.cacheSavingsUsd || 0;
+                cacheBadge.innerText = saved > 0
+                    ? `⚡ Cache Hit · Saved $${saved.toFixed(6)}`
+                    : `⚡ SSD Cached`;
+            } else {
+                cacheBadge.style.display = 'none';
+            }
+        }
+
+        if (pruneBadge) {
+            if (tab.meta.pruningSavedPct > 0) {
+                pruneBadge.style.display = 'inline-block';
+                pruneBadge.innerText = `✂️ -${tab.meta.pruningSavedPct}% Pruned`;
+            } else {
+                pruneBadge.style.display = 'none';
+            }
+        }
+
+        if (execBadge) {
+            const shortId = tab.meta.executionId ? tab.meta.executionId.slice(0, 8) : '—';
+            execBadge.innerText = `#${shortId}`;
+            execBadge.title = `Execution ID: ${tab.meta.executionId || 'N/A'}`;
+        }
+    } else if (meter) {
+        meter.style.display = 'none';
+    }
+
+    if (tab.results && tab.results.length > 0) {
+        window.renderResults(tab.results, false);
+    } else {
+        const tableHead = document.getElementById('table-head');
+        const tableBody = document.getElementById('table-body');
+        if (tableHead) tableHead.innerHTML = '';
+        if (tableBody) {
+            tableBody.innerHTML = `
+                <tr>
+                    <td colspan="100" style="text-align: center; padding: 100px; color: var(--text-muted);">
+                        Run a query to see results.
+                    </td>
+                </tr>`;
+        }
+        const exportBtns = document.getElementById('export-btns');
+        if (exportBtns) exportBtns.style.display = 'none';
+        const chartToggle = document.getElementById('chart-toggle-btn');
+        if (chartToggle) chartToggle.style.display = 'none';
+    }
+};
 
 // ── Global Status / Notification Engine ───────────────────────
 window.showStatus = (msg, type = 'info') => {
@@ -131,6 +214,11 @@ window.onload = () => {
         loadTargets();
         renderNotebookTabs();
 
+        const curTab = _notebooks[_activeTabIdx];
+        if (curTab) {
+            window.renderTabTelemetry(curTab);
+        }
+
         const editor = document.getElementById('query-editor');
         if (editor) {
             editor.addEventListener('input', () => {
@@ -153,7 +241,8 @@ window.renderNotebookTabs = () => {
     _notebooks.forEach((tab, idx) => {
         const btn = document.createElement('button');
         btn.className = `notebook-tab ${idx === _activeTabIdx ? 'active' : ''}`;
-        btn.innerHTML = `<span>📑</span> ${tab.name} ${idx > 0 ? `<small onclick="closeTab(${idx}, event)" style="margin-left:8px; opacity:0.6;">✕</small>` : ''}`;
+        const isRunning = tab.isRunning ? '⏳ ' : '📑 ';
+        btn.innerHTML = `<span>${isRunning}</span> ${tab.name} ${idx > 0 ? `<small onclick="closeTab(${idx}, event)" style="margin-left:8px; opacity:0.6;">✕</small>` : ''}`;
         btn.onclick = () => switchToTab(idx);
         container.appendChild(btn);
     });
@@ -166,23 +255,39 @@ window.renderNotebookTabs = () => {
     addBtn.onclick = addNotebookTab;
     container.appendChild(addBtn);
 
-    if (_notebooks[_activeTabIdx]) editor.value = _notebooks[_activeTabIdx].sql;
+    if (_notebooks[_activeTabIdx] && editor) {
+        editor.value = _notebooks[_activeTabIdx].sql || '';
+    }
 };
 
 window.addNotebookTab = () => {
-    _notebooks.push({ id: `tab_${Date.now()}`, name: `Query ${_notebooks.length}`, sql: '', results: null });
+    _notebooks.push({
+        id: `tab_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        name: `Query ${_notebooks.length + 1}`,
+        sql: '',
+        results: null,
+        meta: null,
+        statusText: '',
+        isRunning: false
+    });
     _activeTabIdx = _notebooks.length - 1;
     saveNotebooks();
     renderNotebookTabs();
+    window.renderTabTelemetry(_notebooks[_activeTabIdx]);
 };
 
 window.switchToTab = (idx) => {
-    _notebooks[_activeTabIdx].sql = document.getElementById('query-editor').value;
-    saveNotebooks();
+    if (_notebooks[_activeTabIdx]) {
+        _notebooks[_activeTabIdx].sql = document.getElementById('query-editor').value;
+    }
     _activeTabIdx = idx;
     saveNotebooks();
     renderNotebookTabs();
-    if (_notebooks[idx].results) renderResults(_notebooks[idx].results, false);
+    const curTab = _notebooks[idx];
+    if (curTab) {
+        document.getElementById('query-editor').value = curTab.sql || '';
+        window.renderTabTelemetry(curTab);
+    }
 };
 
 window.closeTab = (idx, e) => {
@@ -191,6 +296,11 @@ window.closeTab = (idx, e) => {
     if (_activeTabIdx >= _notebooks.length) _activeTabIdx = _notebooks.length - 1;
     saveNotebooks();
     renderNotebookTabs();
+    const curTab = _notebooks[_activeTabIdx];
+    if (curTab) {
+        document.getElementById('query-editor').value = curTab.sql || '';
+        window.renderTabTelemetry(curTab);
+    }
 };
 
 function renderAdminButton() {
@@ -384,40 +494,66 @@ window.showAdminTab = async function(tab) {
             const data = await apiFetch('/api/admin/logs');
             const sysData = await apiFetch('/api/admin/system_logs');
             if (data.success && sysData.success) {
+                const s = data.summary || {};
                 container.innerHTML = `
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-                        <h3 style="margin:0;">📊 Log Analytics (Security & Performance)</h3>
-                        <p style="font-size:0.75rem; color:var(--text-muted);">Real-time monitoring of data egress, query costs, and enterprise access patterns.</p>
-                    </div>
-
-                    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:20px; margin-bottom:25px;">
-                        <div style="background:var(--glass-heavy); padding:15px; border-radius:12px; border:1px solid var(--border); text-align:center;">
-                            <p style="margin:0; font-size:0.7rem; color:var(--text-muted); text-transform:uppercase;">Total Managed Egress</p>
-                            <h2 style="margin:5px 0 0;">${window.formatScanVolume(data.logs.reduce((acc, l) => acc + Number(l.data_scanned_bytes || 0), 0)).text}</h2>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:10px;">
+                        <div>
+                            <h3 style="margin:0;">📊 Log Analytics (Security, Telemetry & Performance)</h3>
+                            <p style="font-size:0.75rem; color:var(--text-muted); margin:4px 0 0;">Query isolation, actual scanned volume, cache hit rates, and zero-double-charge billing audit ($5.00 / TiB).</p>
                         </div>
-                        <div style="background:var(--glass-heavy); padding:15px; border-radius:12px; border:1px solid var(--border); text-align:center;">
-                            <p style="margin:0; font-size:0.7rem; color:var(--text-muted); text-transform:uppercase;">Estimated Cloud Cost</p>
-                            <h2 style="margin:5px 0 0; color:#fbbf24;">$${data.logs.reduce((acc, l) => acc + Number(l.calculated_cost_usd || 0), 0).toFixed(4)}</h2>
-                        </div>
-                        <div style="background:var(--glass-heavy); padding:15px; border-radius:12px; border:1px solid var(--border); text-align:center;">
-                            <p style="margin:0; font-size:0.7rem; color:var(--text-muted); text-transform:uppercase;">Enterprise Query Count</p>
-                            <h2 style="margin:5px 0 0; color:var(--accent);">${data.logs.length}</h2>
+                        <div style="display:flex; gap:8px;">
+                            <button class="btn btn-secondary" onclick="window.exportQueryHistoryCsv()" style="font-size:0.75rem; padding:6px 14px;">📥 Export CSV</button>
+                            <button class="btn btn-secondary" onclick="window.exportQueryHistoryPdf()" style="font-size:0.75rem; padding:6px 14px; background:#0f172a; color:#fff; border-color:#0f172a;">📄 Export PDF</button>
                         </div>
                     </div>
 
-                    <h4 style="margin-bottom:10px; color:var(--text);">Query Logs</h4>
+                    <div style="display:grid; grid-template-columns: repeat(6, 1fr); gap:12px; margin-bottom:25px;">
+                        <div style="background:var(--glass-heavy); padding:12px; border-radius:12px; border:1px solid var(--border); text-align:center;">
+                            <p style="margin:0; font-size:0.65rem; color:var(--text-muted); text-transform:uppercase;">Queries</p>
+                            <h3 style="margin:4px 0 0; color:var(--text);">${s.totalQueries || data.logs.length}</h3>
+                        </div>
+                        <div style="background:var(--glass-heavy); padding:12px; border-radius:12px; border:1px solid var(--border); text-align:center;">
+                            <p style="margin:0; font-size:0.65rem; color:var(--text-muted); text-transform:uppercase;">Avg Latency</p>
+                            <h3 style="margin:4px 0 0; color:var(--text);">${s.avgDurationMs || 0}ms <span style="font-size:0.65rem; color:var(--text-muted);">(${s.minDurationMs || 0}-${s.maxDurationMs || 0}ms)</span></h3>
+                        </div>
+                        <div style="background:var(--glass-heavy); padding:12px; border-radius:12px; border:1px solid var(--border); text-align:center;">
+                            <p style="margin:0; font-size:0.65rem; color:var(--text-muted); text-transform:uppercase;">Logical Scanned</p>
+                            <h3 style="margin:4px 0 0; color:var(--text);">${window.formatScanVolume(s.totalScannedBytes || 0).text}</h3>
+                        </div>
+                        <div style="background:var(--glass-heavy); padding:12px; border-radius:12px; border:1px solid var(--border); text-align:center;">
+                            <p style="margin:0; font-size:0.65rem; color:var(--text-muted); text-transform:uppercase;">Cache Hit Rate</p>
+                            <h3 style="margin:4px 0 0; color:#10b981;">${s.cacheHitRatePct || 0}%</h3>
+                        </div>
+                        <div style="background:var(--glass-heavy); padding:12px; border-radius:12px; border:1px solid var(--border); text-align:center;">
+                            <p style="margin:0; font-size:0.65rem; color:var(--text-muted); text-transform:uppercase;">Billed Burn</p>
+                            <h3 style="margin:4px 0 0; color:#fbbf24;">$${Number(s.totalBurnUsd || 0).toFixed(6)}</h3>
+                        </div>
+                        <div style="background:var(--glass-heavy); padding:12px; border-radius:12px; border:1px solid var(--border); text-align:center;">
+                            <p style="margin:0; font-size:0.65rem; color:var(--text-muted); text-transform:uppercase;">Cache Savings</p>
+                            <h3 style="margin:4px 0 0; color:#0284c7;">$${Number(s.totalSavingsUsd || 0).toFixed(6)}</h3>
+                        </div>
+                    </div>
+
+                    <h4 style="margin-bottom:10px; color:var(--text);">Execution History & Query Logs</h4>
                     <table class="dashboard-table" style="margin-bottom: 30px;">
-                        <thead><tr><th>Timestamp</th><th>User</th><th>Target</th><th>Status</th><th>Scanned</th><th>Scan Price</th><th>SQL Preview</th></tr></thead>
-                        <tbody>${data.logs.map(l => `
+                        <thead><tr><th>Exec ID</th><th>Timestamp</th><th>User</th><th>Target</th><th>Status</th><th>Latency</th><th>Scanned</th><th>Cache</th><th>Billed USD</th><th>SQL Preview</th></tr></thead>
+                        <tbody>${data.logs.map(l => {
+                            const shortExec = l.execution_id ? `#${l.execution_id.slice(0, 8)}` : '—';
+                            const isCached = l.cache_status === 'HIT' || l.cache_status === 'LOCAL';
+                            return `
                             <tr>
+                                <td style="font-family:monospace; font-size:0.65rem; color:#4f46e5; font-weight:700;" title="${l.execution_id || ''}">${shortExec}</td>
                                 <td style="font-size:0.6rem;">${new Date(l.timestamp).toLocaleString()}</td>
                                 <td style="font-weight:700;">${l.email || 'System'}</td>
                                 <td>${l.target_name || '-'}</td>
                                 <td><span style="color:${l.status === 'success' ? '#10b981' : '#ef4444'}">${l.status}</span></td>
+                                <td style="font-size:0.65rem; font-weight:600;">${l.duration}ms</td>
                                 <td style="font-weight:600;">${window.formatScanVolume(l.data_scanned_bytes || 0).text}</td>
-                                <td style="color:#fbbf24;">$${Number(l.calculated_cost_usd || 0).toFixed(6)}</td>
+                                <td><span style="padding:1px 5px; border-radius:4px; font-size:0.62rem; font-weight:700; ${isCached ? 'background:#dcfce7; color:#15803d;' : 'background:#f1f5f9; color:#64748b;'}">${l.cache_status || 'MISS'}</span></td>
+                                <td style="color:#fbbf24; font-weight:700;">$${Number(l.calculated_cost_usd || 0).toFixed(6)}</td>
                                 <td style="font-family:monospace; font-size:0.6rem; opacity:0.8;" title="${l.query_text || ''}">${(l.query_text || '').substring(0, 40)}...</td>
-                            </tr>`).join('')}
+                            </tr>`;
+                        }).join('')}
                         </tbody>
                     </table>
 
@@ -964,25 +1100,38 @@ window.pollBulkIndexStatus = async () => {
 };
 
 window.executeQuery = async function() {
-    const sql = document.getElementById('query-editor').value;
+    const editor = document.getElementById('query-editor');
+    const sql = editor ? editor.value : '';
     const status = document.getElementById('exec-status');
-    const tableHead = document.getElementById('table-head');
-    const tableBody = document.getElementById('table-body');
     if (!sql) return;
 
     const targetId = _activeTargetId || (_targets && _targets[0] ? _targets[0].target_id : null);
     if (!targetId) {
-        status.innerText = '❌ Error: Please select a storage target before executing queries.';
+        if (status) status.innerText = '❌ Error: Please select a storage target before executing queries.';
         return;
     }
     _activeTargetId = targetId;
 
-    status.innerText = '📡 Execution in progress...';
+    // Capture tab id at execution start to guarantee concurrent isolation
+    const targetTabId = _notebooks[_activeTabIdx]?.id;
+    const targetTab = _notebooks.find(t => t.id === targetTabId) || _notebooks[_activeTabIdx];
+    if (targetTab) {
+        targetTab.isRunning = true;
+        targetTab.statusText = '📡 Execution in progress...';
+    }
+    renderNotebookTabs();
+    if (status) status.innerText = '📡 Execution in progress...';
+
     try {
         const data = await apiFetch(`/api/query/${targetId}`, {
             method: 'POST',
             body: JSON.stringify({ sql })
         });
+
+        const destTab = _notebooks.find(t => t.id === targetTabId) || targetTab;
+        if (destTab) {
+            destTab.isRunning = false;
+        }
 
         if (data.offloaded) {
             showStatus(data.message, 'success');
@@ -1000,39 +1149,57 @@ window.executeQuery = async function() {
                 if (argsEl) argsEl.value = `--sql "${sql.replace(/"/g, '\\"')}"`;
                 if (targetEl && targetId) targetEl.value = targetId;
             }, 600);
-            status.innerText = '⚡ [Auto-Translate] Redirected to Spark';
+            if (destTab) destTab.statusText = '⚡ [Auto-Translate] Redirected to Spark';
+            if (_notebooks[_activeTabIdx]?.id === targetTabId && status) {
+                status.innerText = '⚡ [Auto-Translate] Redirected to Spark';
+            }
+            renderNotebookTabs();
             return;
         }
 
         if (data.success) {
-            status.innerText = `✅ Success: ${data.data.length} rows returned. (${data.meta.duration}ms)`;
-            
-            // 🎬 Show Live Burn
-            const meter = document.getElementById('live-burn-meter');
-            const burnVal = document.getElementById('current-burn-val');
-            const scanVal = document.getElementById('current-scan-val');
-            const scanUnit = document.getElementById('current-scan-unit');
-            if (meter && burnVal && scanVal) {
-                meter.style.display = 'inline-flex';
-                burnVal.innerText = (data.meta.estimatedCost || 0).toFixed(6);
-                const formattedScan = window.formatScanVolume(data.meta.estimatedScan || 0);
-                scanVal.innerText = scanUnit ? formattedScan.value : formattedScan.text;
-                if (scanUnit) scanUnit.innerText = formattedScan.unit;
-            }
+            const rowsCount = data.data ? data.data.length : 0;
+            const dur = data.meta ? data.meta.duration : 0;
+            const successText = `✅ Success: ${rowsCount} rows returned. (${dur}ms)`;
 
-            _notebooks[_activeTabIdx].results = data.data;
-            _notebooks[_activeTabIdx].sql = sql;
+            if (destTab) {
+                destTab.results = data.data;
+                destTab.sql = sql;
+                destTab.meta = data.meta;
+                destTab.statusText = successText;
+            }
             saveNotebooks();
-            window.renderResults(data.data);
+            renderNotebookTabs();
+
+            // Only update DOM if user is currently looking at this tab
+            if (_notebooks[_activeTabIdx]?.id === targetTabId) {
+                window.renderTabTelemetry(destTab);
+            }
         } else {
-            const meter = document.getElementById('live-burn-meter');
-            if (meter) meter.style.display = 'none';
-            status.innerText = `❌ Error: ${data.error || 'Query failed'}`;
+            const errText = `❌ Error: ${data.error || 'Query failed'}`;
+            if (destTab) {
+                destTab.statusText = errText;
+                destTab.meta = null;
+            }
+            saveNotebooks();
+            renderNotebookTabs();
+            if (_notebooks[_activeTabIdx]?.id === targetTabId) {
+                window.renderTabTelemetry(destTab);
+            }
         }
     } catch (err) {
-        const meter = document.getElementById('live-burn-meter');
-        if (meter) meter.style.display = 'none';
-        status.innerText = `❌ Error: ${err.message || 'Request failed'}`;
+        const destTab = _notebooks.find(t => t.id === targetTabId) || targetTab;
+        const errText = `❌ Error: ${err.message || 'Request failed'}`;
+        if (destTab) {
+            destTab.isRunning = false;
+            destTab.statusText = errText;
+            destTab.meta = null;
+        }
+        saveNotebooks();
+        renderNotebookTabs();
+        if (_notebooks[_activeTabIdx]?.id === targetTabId) {
+            window.renderTabTelemetry(destTab);
+        }
     }
 };
 
@@ -1884,23 +2051,238 @@ window.openProfile = async () => {
             document.getElementById('prof-email').innerText = data.user.email;
             document.getElementById('prof-role').innerText = data.user.role;
             document.getElementById('prof-stat-queries').innerText = data.stats.queries;
-            document.getElementById('prof-stat-compute').innerText = (data.stats.computeMs / 1000).toFixed(1) + 's';
-            document.getElementById('prof-stat-scanned').innerText = (data.stats.totalScannedMB || 0) + ' MB';
-            document.getElementById('prof-stat-burn').innerText = '$' + (data.stats.totalBurnUsd || '0.000000');
-            document.getElementById('prof-stat-active').innerText = data.stats.lastActive;
+            document.getElementById('prof-stat-compute').innerText = `${data.stats.avgDurationMs || Math.round(data.stats.computeMs / Math.max(1, data.stats.queries))}ms`;
+            document.getElementById('prof-stat-scanned').innerText = `${data.stats.totalScannedMB || '0.00'} MB`;
+            if (document.getElementById('prof-stat-cache-hit')) {
+                document.getElementById('prof-stat-cache-hit').innerText = `${data.stats.cacheHitRatePct || 0}%`;
+            }
+            document.getElementById('prof-stat-burn').innerText = `$${data.stats.totalBurnUsd || '0.000000'}`;
+            if (document.getElementById('prof-stat-saved')) {
+                document.getElementById('prof-stat-saved').innerText = `$${data.stats.totalSavingsUsd || '0.000000'}`;
+            }
+            if (document.getElementById('prof-stat-active')) {
+                document.getElementById('prof-stat-active').innerText = data.stats.lastActive;
+            }
             
             const history = document.getElementById('prof-history');
-            history.innerHTML = data.history.map(h => `
+            history.innerHTML = data.history.map(h => {
+                const execShort = h.execution_id ? `#${h.execution_id.slice(0, 8)}` : '—';
+                const isCached = h.cache_status === 'HIT' || h.cache_status === 'LOCAL';
+                const cacheBadge = isCached
+                    ? `<span style="color:#0284c7; background:rgba(2,132,199,0.1); padding:1px 6px; border-radius:4px; font-weight:700;">⚡ ${h.cache_status}</span>`
+                    : `<span style="color:#64748b; background:rgba(100,116,139,0.1); padding:1px 6px; border-radius:4px;">${h.cache_status || 'MISS'}</span>`;
+                return `
                 <div style="background:rgba(255,255,255,0.03); padding:12px; border-radius:10px; border:1px solid var(--border);">
-                    <code style="display:block; margin-bottom:5px; font-size:0.75rem;">${h.sql_query.substring(0, 100)}...</code>
-                    <div style="display:flex; justify-content:space-between; font-size:0.65rem; color:var(--text-muted);">
-                        <span>📊 ${h.row_count} rows | ⏱️ ${h.duration}ms | 📦 ${window.formatScanVolume(h.data_scanned_bytes || 0).text} | 💸 $${Number(h.calculated_cost_usd || 0).toFixed(6)}</span>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                        <span style="font-family:monospace; font-size:0.7rem; font-weight:700; color:#4f46e5;">${execShort}</span>
+                        ${cacheBadge}
+                    </div>
+                    <code style="display:block; margin-bottom:6px; font-size:0.75rem; word-break:break-all;">${h.sql_query.substring(0, 120)}...</code>
+                    <div style="display:flex; justify-content:space-between; font-size:0.65rem; color:var(--text-muted); flex-wrap:wrap; gap:4px;">
+                        <span>📊 ${h.row_count} rows | ⏱️ ${h.duration}ms | 📦 ${window.formatScanVolume(h.data_scanned_bytes || 0).text} | 💸 Billed: $${Number(h.calculated_cost_usd || 0).toFixed(6)}</span>
                         <span>${new Date(h.timestamp).toLocaleString()}</span>
                     </div>
-                </div>
-            `).join('');
+                </div>`;
+            }).join('');
         }
     } catch (err) { console.error('Profile load error', err); }
+};
+
+window.exportQueryHistoryCsv = () => {
+    const token = localStorage.getItem('ciq_token');
+    fetch('/api/query-history/export.csv', {
+        headers: { 'Authorization': `Bearer ${token}` }
+    })
+    .then(res => {
+        if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+        return res.blob();
+    })
+    .then(blob => {
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `cloudobjectiq_query_telemetry_${Date.now()}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
+    })
+    .catch(err => showStatus(`CSV Export error: ${err.message}`, 'error'));
+};
+
+window.exportQueryHistoryPdf = async () => {
+    try {
+        const data = await apiFetch('/api/user/profile');
+        if (!data.success) throw new Error(data.error);
+
+        const printWindow = window.open('', '_blank');
+        if (!printWindow) {
+            alert('Popup blocked. Please allow popups to view the PDF report.');
+            return;
+        }
+
+        const rowsHtml = (data.history || []).map(h => `
+            <tr>
+                <td style="font-family:monospace; font-size:10px;">${h.execution_id ? h.execution_id.slice(0, 8) : '—'}</td>
+                <td style="font-size:11px;">${new Date(h.timestamp).toLocaleString()}</td>
+                <td style="font-size:11px; font-family:monospace; max-width:250px; word-break:break-all;">${(h.sql_query || '').replace(/</g, '&lt;').slice(0, 80)}...</td>
+                <td style="text-align:right; font-size:11px;">${h.duration}ms</td>
+                <td style="text-align:right; font-size:11px;">${Number(h.row_count || 0).toLocaleString()}</td>
+                <td style="text-align:right; font-size:11px;">${window.formatScanVolume(h.data_scanned_bytes || 0).text}</td>
+                <td style="text-align:center; font-size:10px; font-weight:bold;">${h.cache_status || 'MISS'}</td>
+                <td style="text-align:right; font-size:11px; font-weight:bold;">$${Number(h.calculated_cost_usd || 0).toFixed(6)}</td>
+            </tr>
+        `).join('');
+
+        printWindow.document.write(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>CloudObjectIQ Query Telemetry Report</title>
+                <style>
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 30px; color: #0f172a; margin: 0; }
+                    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0f172a; padding-bottom: 15px; margin-bottom: 20px; }
+                    .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 25px; }
+                    .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; text-align: center; }
+                    .card small { font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: bold; }
+                    .card h3 { margin: 5px 0 0; font-size: 16px; color: #0f172a; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+                    th { background: #f1f5f9; padding: 8px 10px; text-align: left; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #cbd5e1; }
+                    td { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; }
+                    @media print { body { padding: 0; } }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <div>
+                        <h1 style="margin:0; font-size:22px; font-weight:800;">CloudObjectIQ Enterprise Telemetry Report</h1>
+                        <p style="margin:4px 0 0; color:#64748b; font-size:12px;">Standard Lakehouse Unit Pricing: $5.00 USD / TiB • User: ${data.user.email}</p>
+                    </div>
+                    <div style="text-align:right;">
+                        <button onclick="window.print()" style="padding:6px 14px; background:#0f172a; color:#fff; border:none; border-radius:6px; cursor:pointer; font-weight:bold;">🖨️ Print / Save as PDF</button>
+                        <div style="font-size:10px; color:#64748b; margin-top:4px;">Generated: ${new Date().toLocaleString()}</div>
+                    </div>
+                </div>
+
+                <div class="summary">
+                    <div class="card"><small>Total Queries</small><h3>${data.stats.queries}</h3></div>
+                    <div class="card"><small>Avg Latency</small><h3>${data.stats.avgDurationMs}ms</h3></div>
+                    <div class="card"><small>Logical Scanned</small><h3>${data.stats.totalScannedMB} MB</h3></div>
+                    <div class="card"><small>Total Burn (USD)</small><h3 style="color:#ef4444;">$${data.stats.totalBurnUsd}</h3></div>
+                </div>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Exec ID</th>
+                            <th>Timestamp</th>
+                            <th>SQL Query</th>
+                            <th style="text-align:right;">Latency</th>
+                            <th style="text-align:right;">Rows</th>
+                            <th style="text-align:right;">Logical Scan</th>
+                            <th style="text-align:center;">Cache</th>
+                            <th style="text-align:right;">Billed USD</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rowsHtml}</tbody>
+                </table>
+            </body>
+            </html>
+        `);
+        printWindow.document.close();
+    } catch (err) {
+        showStatus(`PDF generation error: ${err.message}`, 'error');
+    }
+};
+
+window.validateCurrentQuery = async () => {
+    const editor = document.getElementById('query-editor');
+    const sql = editor ? editor.value.trim() : '';
+    if (!sql) {
+        showStatus('Please enter a query in the editor first.', 'error');
+        return;
+    }
+    const targetId = _activeTargetId || (_targets && _targets[0] ? _targets[0].target_id : null);
+    if (!targetId) {
+        showStatus('Please select a cloud storage target first.', 'error');
+        return;
+    }
+
+    const modal = document.getElementById('validation-modal');
+    const loadingEl = document.getElementById('validation-loading');
+    const contentEl = document.getElementById('validation-content');
+    const overallEl = document.getElementById('val-overall-status');
+
+    if (modal) modal.style.display = 'flex';
+    if (loadingEl) loadingEl.style.display = 'block';
+    if (contentEl) contentEl.style.display = 'none';
+    if (overallEl) overallEl.innerText = '';
+
+    try {
+        const report = await apiFetch(`/api/validate-query/${targetId}`, {
+            method: 'POST',
+            body: JSON.stringify({ sql })
+        });
+
+        if (loadingEl) loadingEl.style.display = 'none';
+
+        if (report.success) {
+            if (contentEl) contentEl.style.display = 'flex';
+
+            // Run 1 Card
+            document.getElementById('val-run1-exec').innerText = report.run1?.executionId ? `#${report.run1.executionId.slice(0, 8)}` : 'Run 1';
+            document.getElementById('val-run1-dur').innerText = `${report.run1?.durationMs || 0}ms`;
+            document.getElementById('val-run1-scan').innerText = window.formatScanVolume(report.run1?.logicalScannedBytes || 0).text;
+            document.getElementById('val-run1-cost').innerText = `$${Number(report.run1?.billedCostUsd || 0).toFixed(6)}`;
+            document.getElementById('val-run1-status').innerText = report.run1?.cacheStatus || 'MISS';
+
+            // Run 2 Card
+            document.getElementById('val-run2-exec').innerText = report.run2?.executionId ? `#${report.run2.executionId.slice(0, 8)}` : 'Run 2';
+            document.getElementById('val-run2-dur').innerText = `${report.run2?.durationMs || 0}ms`;
+            document.getElementById('val-run2-scan').innerText = window.formatScanVolume(report.run2?.logicalScannedBytes || 0).text;
+            document.getElementById('val-run2-cost').innerText = `$${Number(report.run2?.billedCostUsd || 0).toFixed(6)}`;
+            document.getElementById('val-run2-status').innerText = `⚡ ${report.run2?.cacheStatus || 'HIT'}`;
+
+            // Verification checks
+            const checksList = document.getElementById('val-checks-list');
+            if (checksList && Array.isArray(report.groundTruthChecks)) {
+                checksList.innerHTML = report.groundTruthChecks.map(c => `
+                    <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:#f8fafc; border:1px solid ${c.verified ? '#bbf7d0' : '#fecaca'}; border-radius:8px;">
+                        <div>
+                            <div style="font-size:0.8rem; font-weight:700; color:#0f172a;">${c.verified ? '✅' : '❌'} ${c.name}</div>
+                            <div style="font-size:0.7rem; color:#64748b;">${c.details || ''}</div>
+                        </div>
+                        <span style="font-size:0.75rem; font-weight:800; color:${c.verified ? '#15803d' : '#dc2626'}; background:${c.verified ? '#dcfce7' : '#fee2e2'}; padding:2px 8px; border-radius:4px;">
+                            ${c.value}
+                        </span>
+                    </div>
+                `).join('');
+            }
+
+            if (overallEl) {
+                overallEl.innerText = report.allPassed
+                    ? '✅ 100% Validated against DuckDB Ground Truth & Lakehouse Standards'
+                    : '⚠️ Validation completed with warnings';
+                overallEl.style.color = report.allPassed ? '#10b981' : '#f59e0b';
+            }
+        } else {
+            if (contentEl) {
+                contentEl.style.display = 'flex';
+                contentEl.innerHTML = `<div style="padding:20px; color:#ef4444; background:#fef2f2; border:1px solid #fecaca; border-radius:8px;">❌ Validation failed: ${report.error || 'Unknown error'}</div>`;
+            }
+        }
+    } catch (err) {
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (contentEl) {
+            contentEl.style.display = 'flex';
+            contentEl.innerHTML = `<div style="padding:20px; color:#ef4444; background:#fef2f2; border:1px solid #fecaca; border-radius:8px;">❌ Validation error: ${err.message}</div>`;
+        }
+    }
+};
+
+window.closeValidationModal = () => {
+    const modal = document.getElementById('validation-modal');
+    if (modal) modal.style.display = 'none';
 };
 
 // ── File & Folder Uploads (Batched + Chunked + Recursive Drag-and-Drop) ──

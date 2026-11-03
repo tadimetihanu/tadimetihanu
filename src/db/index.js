@@ -367,7 +367,15 @@ async function ensureSqliteMigrations() {
         ['targets', 'krb_principal', 'TEXT'],
         ['targets', 'krb_keytab', 'TEXT'],
         ['metadata_catalog', 'schema_json', 'TEXT'],
-        ['metadata_catalog', 'last_modified', 'TEXT']
+        ['metadata_catalog', 'last_modified', 'TEXT'],
+        ['query_history', 'execution_id', 'TEXT'],
+        ['query_history', 'on_demand_cost_usd', 'REAL DEFAULT 0'],
+        ['query_history', 'storage_downloaded_bytes', 'INTEGER DEFAULT 0'],
+        ['query_history', 'cache_status', "TEXT DEFAULT 'MISS'"],
+        ['query_logs', 'execution_id', 'TEXT'],
+        ['query_logs', 'storage_downloaded_bytes', 'INTEGER DEFAULT 0'],
+        ['query_logs', 'cache_status', "TEXT DEFAULT 'MISS'"],
+        ['query_logs', 'on_demand_cost_usd', 'REAL DEFAULT 0']
     ];
     for (const [table, col, colType] of migrations) {
         try {

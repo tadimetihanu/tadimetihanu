@@ -33,7 +33,7 @@ const os = require('os');
 const db = require('./db');
 const { listFiles, uploadFile, uploadStream } = require('./drivers/storage');
 const { encrypt, decrypt } = require('./utils/crypto');
-const { initDuckDB, runQuery, calculateCost, invalidateCachedFile } = require('./query/engine');
+const { initDuckDB, runQuery, calculateCost, invalidateCachedFile, validateQueryAgainstDuckDB } = require('./query/engine');
 const { suggestQuery } = require('./query/ai');
 const { handleNl2Sql } = require('./nl2sql');
 const { authenticate, isAdmin, loginLimiter, SECRET_KEY } = require('./middleware/auth');
@@ -96,7 +96,7 @@ app.use(cors({
 app.get('/api/ping', (req, res) => res.json({
     status: 'online',
     timestamp: new Date(),
-    version: '2.1.8-accurate-scan-metrics',
+    version: '2.2.0-verified-telemetry-engine',
     metadataDb: db.getStatus ? db.getStatus() : { engine: db.isPostgres ? 'postgresql' : 'sqlite' }
 }));
 app.use(express.json());
@@ -254,29 +254,54 @@ app.get('/api/user/profile', authenticate, async (req, res) => {
     try {
         const userId = req.user.user_id;
 
-        // Fetch Query History
+        // Fetch Query History with full telemetry
         let history = [];
         let stats = {};
         try {
             history = await db.all(`
-                SELECT query_text AS sql_query, row_count, execution_time_ms AS duration, data_scanned_bytes, calculated_cost_usd, status, timestamp, target_id 
+                SELECT 
+                    execution_id,
+                    query_text AS sql_query, 
+                    row_count, 
+                    execution_time_ms AS duration, 
+                    data_scanned_bytes, 
+                    storage_downloaded_bytes,
+                    cache_status,
+                    calculated_cost_usd, 
+                    on_demand_cost_usd,
+                    status, 
+                    timestamp, 
+                    target_id 
                 FROM query_logs 
                 WHERE user_id = ? 
                 ORDER BY timestamp DESC 
-                LIMIT 25
+                LIMIT 50
             `, [userId]);
 
             stats = (await db.get(`
                 SELECT 
                     COUNT(*) as total_queries,
                     SUM(execution_time_ms) as total_compute_time,
+                    AVG(execution_time_ms) as avg_duration,
+                    MIN(execution_time_ms) as min_duration,
+                    MAX(execution_time_ms) as max_duration,
                     MAX(timestamp) as last_active,
                     SUM(data_scanned_bytes) as total_scanned_bytes,
-                    SUM(calculated_cost_usd) as total_burn_usd
+                    SUM(storage_downloaded_bytes) as total_downloaded_bytes,
+                    SUM(calculated_cost_usd) as total_burn_usd,
+                    SUM(on_demand_cost_usd) as total_on_demand_usd,
+                    SUM(CASE WHEN cache_status IN ('HIT', 'LOCAL') THEN 1 ELSE 0 END) as cache_hits
                 FROM query_logs 
                 WHERE user_id = ?
             `, [userId])) || {};
         } catch (e) {}
+
+        const totalQueries = Number(stats.total_queries || 0);
+        const cacheHits = Number(stats.cache_hits || 0);
+        const cacheHitRatePct = totalQueries > 0 ? Math.round((cacheHits / totalQueries) * 100) : 0;
+        const totalBurnUsd = Number(stats.total_burn_usd || 0);
+        const totalOnDemandUsd = Number(stats.total_on_demand_usd || totalBurnUsd);
+        const totalSavingsUsd = Math.max(0, totalOnDemandUsd - totalBurnUsd);
 
         res.json({ 
             success: true, 
@@ -286,14 +311,77 @@ app.get('/api/user/profile', authenticate, async (req, res) => {
                 joined: '2025-03-20' 
             }, 
             stats: {
-                queries: Number(stats.total_queries || 0),
+                queries: totalQueries,
                 computeMs: Number(stats.total_compute_time || 0),
+                avgDurationMs: Math.round(Number(stats.avg_duration || 0)),
+                minDurationMs: Math.round(Number(stats.min_duration || 0)),
+                maxDurationMs: Math.round(Number(stats.max_duration || 0)),
                 lastActive: stats.last_active || 'Never',
                 totalScannedMB: (Number(stats.total_scanned_bytes || 0) / (1024 * 1024)).toFixed(2),
-                totalBurnUsd: Number(stats.total_burn_usd || 0).toFixed(6)
+                totalDownloadedMB: (Number(stats.total_downloaded_bytes || 0) / (1024 * 1024)).toFixed(2),
+                totalBurnUsd: totalBurnUsd.toFixed(6),
+                totalOnDemandUsd: totalOnDemandUsd.toFixed(6),
+                totalSavingsUsd: totalSavingsUsd.toFixed(6),
+                cacheHitRatePct
             }, 
             history 
         });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// CSV Export for Query History & Audit Logs
+app.get('/api/query-history/export.csv', authenticate, async (req, res) => {
+    try {
+        const userId = req.user.user_id;
+        const isAdminUser = req.user.role === 'admin';
+        const querySql = isAdminUser
+            ? `SELECT q.execution_id, q.timestamp, u.email, t.target_name, q.status, q.execution_time_ms, q.row_count, q.data_scanned_bytes, q.storage_downloaded_bytes, q.cache_status, q.calculated_cost_usd, q.on_demand_cost_usd, q.query_text
+               FROM query_logs q
+               LEFT JOIN users u ON q.user_id = u.user_id
+               LEFT JOIN targets t ON q.target_id = t.target_id
+               ORDER BY q.timestamp DESC LIMIT 1000`
+            : `SELECT q.execution_id, q.timestamp, ? AS email, t.target_name, q.status, q.execution_time_ms, q.row_count, q.data_scanned_bytes, q.storage_downloaded_bytes, q.cache_status, q.calculated_cost_usd, q.on_demand_cost_usd, q.query_text
+               FROM query_logs q
+               LEFT JOIN targets t ON q.target_id = t.target_id
+               WHERE q.user_id = ?
+               ORDER BY q.timestamp DESC LIMIT 1000`;
+
+        const rows = isAdminUser
+            ? await db.all(querySql)
+            : await db.all(querySql, [req.user.email, userId]);
+
+        const headers = [
+            'execution_id', 'timestamp', 'user_email', 'target', 'status',
+            'duration_ms', 'row_count', 'logical_scanned_bytes', 'storage_downloaded_bytes',
+            'cache_status', 'billed_cost_usd', 'on_demand_cost_usd', 'pricing_unit', 'query_sql'
+        ];
+
+        let csv = headers.join(',') + '\r\n';
+        for (const r of rows) {
+            const cleanSql = String(r.query_text || '').replace(/"/g, '""').replace(/[\r\n]+/g, ' ');
+            csv += [
+                `"${r.execution_id || ''}"`,
+                `"${r.timestamp || ''}"`,
+                `"${r.email || ''}"`,
+                `"${r.target_name || ''}"`,
+                `"${r.status || ''}"`,
+                Number(r.execution_time_ms || 0),
+                Number(r.row_count || 0),
+                Number(r.data_scanned_bytes || 0),
+                Number(r.storage_downloaded_bytes || 0),
+                `"${r.cache_status || 'MISS'}"`,
+                Number(r.calculated_cost_usd || 0).toFixed(6),
+                Number(r.on_demand_cost_usd || 0).toFixed(6),
+                `"$5.00 / TiB"`,
+                `"${cleanSql}"`
+            ].join(',') + '\r\n';
+        }
+
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="cloudobjectiq_query_telemetry_${Date.now()}.csv"`);
+        res.send(csv);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -833,11 +921,29 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
     try {
         const results = await runQuery(userId, sql, targetId);
         const duration = Date.now() - startTime;
-        const { estimatedScan, estimatedCost } = results._scanMeta || calculateCost(sql, results);
+        const scanMeta = results._scanMeta || calculateCost(sql, results);
         res.json({ 
             success: true, 
             data: sanitizeBigInt(results),
-            meta: { duration, estimatedScan, estimatedCost }
+            meta: {
+                duration,
+                executionId: scanMeta.executionId || crypto.randomUUID(),
+                estimatedScan: scanMeta.logicalScannedBytes !== undefined ? scanMeta.logicalScannedBytes : (scanMeta.estimatedScan || 0),
+                logicalScannedBytes: scanMeta.logicalScannedBytes !== undefined ? scanMeta.logicalScannedBytes : (scanMeta.estimatedScan || 0),
+                totalDatasetBytes: scanMeta.totalDatasetBytes || (scanMeta.logicalScannedBytes || 0),
+                pruningSavedPct: scanMeta.pruningSavedPct || 0,
+                storageBytesDownloaded: scanMeta.storageBytesDownloaded || 0,
+                cacheStatus: scanMeta.cacheStatus || 'LOCAL',
+                cacheHits: scanMeta.cacheHits || 0,
+                cacheMisses: scanMeta.cacheMisses || 0,
+                estimatedCost: scanMeta.billedCostUsd !== undefined ? scanMeta.billedCostUsd : (scanMeta.estimatedCost || 0),
+                billedCostUsd: scanMeta.billedCostUsd !== undefined ? scanMeta.billedCostUsd : (scanMeta.estimatedCost || 0),
+                onDemandCostUsd: scanMeta.onDemandCostUsd !== undefined ? scanMeta.onDemandCostUsd : (scanMeta.estimatedCost || 0),
+                cacheSavingsUsd: scanMeta.cacheSavingsUsd || 0,
+                currency: scanMeta.currency || 'USD',
+                pricingUnit: scanMeta.pricingUnit || '$5.00 / TiB',
+                perFileBreakdown: scanMeta.perFileBreakdown || []
+            }
         });
     } catch (err) {
         // ── SELF-HEALING AI LOGIC ──────────────────────────────
@@ -849,14 +955,32 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
                     console.log(`✨ [AI-Fix] Re-executing repaired SQL: ${fixedSql}`);
                     const fixedResults = await runQuery(userId, fixedSql, targetId);
                     const duration = Date.now() - startTime;
-                    const { estimatedScan, estimatedCost } = fixedResults._scanMeta || calculateCost(fixedSql, fixedResults);
+                    const scanMeta = fixedResults._scanMeta || calculateCost(fixedSql, fixedResults);
                     return res.json({ 
                         success: true, 
                         data: sanitizeBigInt(fixedResults), 
                         isFixed: true,
                         originalSql: sql,
                         fixedSql: fixedSql,
-                        meta: { duration, estimatedScan, estimatedCost }
+                        meta: {
+                            duration,
+                            executionId: scanMeta.executionId || crypto.randomUUID(),
+                            estimatedScan: scanMeta.logicalScannedBytes !== undefined ? scanMeta.logicalScannedBytes : (scanMeta.estimatedScan || 0),
+                            logicalScannedBytes: scanMeta.logicalScannedBytes !== undefined ? scanMeta.logicalScannedBytes : (scanMeta.estimatedScan || 0),
+                            totalDatasetBytes: scanMeta.totalDatasetBytes || (scanMeta.logicalScannedBytes || 0),
+                            pruningSavedPct: scanMeta.pruningSavedPct || 0,
+                            storageBytesDownloaded: scanMeta.storageBytesDownloaded || 0,
+                            cacheStatus: scanMeta.cacheStatus || 'LOCAL',
+                            cacheHits: scanMeta.cacheHits || 0,
+                            cacheMisses: scanMeta.cacheMisses || 0,
+                            estimatedCost: scanMeta.billedCostUsd !== undefined ? scanMeta.billedCostUsd : (scanMeta.estimatedCost || 0),
+                            billedCostUsd: scanMeta.billedCostUsd !== undefined ? scanMeta.billedCostUsd : (scanMeta.estimatedCost || 0),
+                            onDemandCostUsd: scanMeta.onDemandCostUsd !== undefined ? scanMeta.onDemandCostUsd : (scanMeta.estimatedCost || 0),
+                            cacheSavingsUsd: scanMeta.cacheSavingsUsd || 0,
+                            currency: scanMeta.currency || 'USD',
+                            pricingUnit: scanMeta.pricingUnit || '$5.00 / TiB',
+                            perFileBreakdown: scanMeta.perFileBreakdown || []
+                        }
                     });
                 }
             } catch (fixErr) {
@@ -866,6 +990,21 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
 
         console.error(`❌ [Query] Error:`, err.message);
         res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/validate-query/:targetId', authenticate, checkAccess('read'), async (req, res) => {
+    req.setTimeout(300000);
+    res.setTimeout(300000);
+    const { targetId } = req.params;
+    const { sql } = req.body;
+    if (!sql) return res.status(400).json({ success: false, error: 'SQL query required' });
+    try {
+        const report = await validateQueryAgainstDuckDB(req.user.user_id, sql, targetId);
+        res.json(report);
+    } catch (err) {
+        console.error('Validation Error:', err);
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
@@ -1116,9 +1255,33 @@ app.get('/api/admin/logs', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     try {
         let logs = [];
+        let summary = {
+            totalQueries: 0,
+            avgDurationMs: 0,
+            minDurationMs: 0,
+            maxDurationMs: 0,
+            totalScannedBytes: 0,
+            totalDownloadedBytes: 0,
+            totalBurnUsd: 0,
+            totalOnDemandUsd: 0,
+            totalSavingsUsd: 0,
+            cacheHitRatePct: 0
+        };
         try {
             const rawLogs = await db.all(`
-                SELECT q.timestamp, u.email, t.target_name, q.status, q.execution_time_ms AS duration, q.data_scanned_bytes, q.calculated_cost_usd, q.query_text
+                SELECT 
+                    q.execution_id,
+                    q.timestamp, 
+                    u.email, 
+                    t.target_name, 
+                    q.status, 
+                    q.execution_time_ms AS duration, 
+                    q.data_scanned_bytes, 
+                    q.storage_downloaded_bytes,
+                    q.cache_status,
+                    q.calculated_cost_usd, 
+                    q.on_demand_cost_usd,
+                    q.query_text
                 FROM query_logs q
                 LEFT JOIN users u ON q.user_id = u.user_id
                 LEFT JOIN targets t ON q.target_id = t.target_id
@@ -1129,10 +1292,36 @@ app.get('/api/admin/logs', authenticate, async (req, res) => {
                 ...l,
                 duration: Number(l.duration || 0),
                 data_scanned_bytes: Number(l.data_scanned_bytes || 0),
-                calculated_cost_usd: Number(l.calculated_cost_usd || 0)
+                storage_downloaded_bytes: Number(l.storage_downloaded_bytes || 0),
+                calculated_cost_usd: Number(l.calculated_cost_usd || 0),
+                on_demand_cost_usd: Number(l.on_demand_cost_usd || l.calculated_cost_usd || 0),
+                cache_status: l.cache_status || 'MISS'
             }));
+
+            if (logs.length > 0) {
+                const totalDur = logs.reduce((acc, l) => acc + l.duration, 0);
+                const durs = logs.map(l => l.duration);
+                const hits = logs.filter(l => l.cache_status === 'HIT' || l.cache_status === 'LOCAL').length;
+                const totalScanned = logs.reduce((acc, l) => acc + l.data_scanned_bytes, 0);
+                const totalDown = logs.reduce((acc, l) => acc + l.storage_downloaded_bytes, 0);
+                const totalBurn = logs.reduce((acc, l) => acc + l.calculated_cost_usd, 0);
+                const totalOnDemand = logs.reduce((acc, l) => acc + l.on_demand_cost_usd, 0);
+
+                summary = {
+                    totalQueries: logs.length,
+                    avgDurationMs: Math.round(totalDur / logs.length),
+                    minDurationMs: Math.min(...durs),
+                    maxDurationMs: Math.max(...durs),
+                    totalScannedBytes: totalScanned,
+                    totalDownloadedBytes: totalDown,
+                    totalBurnUsd: totalBurn,
+                    totalOnDemandUsd: totalOnDemand,
+                    totalSavingsUsd: Math.max(0, totalOnDemand - totalBurn),
+                    cacheHitRatePct: Math.round((hits / logs.length) * 100)
+                };
+            }
         } catch (e) {}
-        res.json({ success: true, logs });
+        res.json({ success: true, logs, summary });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
