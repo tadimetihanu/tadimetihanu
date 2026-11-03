@@ -393,7 +393,7 @@ window.showAdminTab = async function(tab) {
                     <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:20px; margin-bottom:25px;">
                         <div style="background:var(--glass-heavy); padding:15px; border-radius:12px; border:1px solid var(--border); text-align:center;">
                             <p style="margin:0; font-size:0.7rem; color:var(--text-muted); text-transform:uppercase;">Total Managed Egress</p>
-                            <h2 style="margin:5px 0 0;">${(data.logs.reduce((acc, l) => acc + Number(l.data_scanned_bytes || 0), 0) / (1024 * 1024)).toFixed(1)} MB</h2>
+                            <h2 style="margin:5px 0 0;">${window.formatScanVolume(data.logs.reduce((acc, l) => acc + Number(l.data_scanned_bytes || 0), 0)).text}</h2>
                         </div>
                         <div style="background:var(--glass-heavy); padding:15px; border-radius:12px; border:1px solid var(--border); text-align:center;">
                             <p style="margin:0; font-size:0.7rem; color:var(--text-muted); text-transform:uppercase;">Estimated Cloud Cost</p>
@@ -407,13 +407,14 @@ window.showAdminTab = async function(tab) {
 
                     <h4 style="margin-bottom:10px; color:var(--text);">Query Logs</h4>
                     <table class="dashboard-table" style="margin-bottom: 30px;">
-                        <thead><tr><th>Timestamp</th><th>User</th><th>Target</th><th>Status</th><th>Scan Price</th><th>SQL Preview</th></tr></thead>
+                        <thead><tr><th>Timestamp</th><th>User</th><th>Target</th><th>Status</th><th>Scanned</th><th>Scan Price</th><th>SQL Preview</th></tr></thead>
                         <tbody>${data.logs.map(l => `
                             <tr>
                                 <td style="font-size:0.6rem;">${new Date(l.timestamp).toLocaleString()}</td>
                                 <td style="font-weight:700;">${l.email || 'System'}</td>
                                 <td>${l.target_name || '-'}</td>
                                 <td><span style="color:${l.status === 'success' ? '#10b981' : '#ef4444'}">${l.status}</span></td>
+                                <td style="font-weight:600;">${window.formatScanVolume(l.data_scanned_bytes || 0).text}</td>
                                 <td style="color:#fbbf24;">$${Number(l.calculated_cost_usd || 0).toFixed(6)}</td>
                                 <td style="font-family:monospace; font-size:0.6rem; opacity:0.8;" title="${l.query_text || ''}">${(l.query_text || '').substring(0, 40)}...</td>
                             </tr>`).join('')}
@@ -1010,10 +1011,13 @@ window.executeQuery = async function() {
             const meter = document.getElementById('live-burn-meter');
             const burnVal = document.getElementById('current-burn-val');
             const scanVal = document.getElementById('current-scan-val');
+            const scanUnit = document.getElementById('current-scan-unit');
             if (meter && burnVal && scanVal) {
                 meter.style.display = 'inline-flex';
                 burnVal.innerText = (data.meta.estimatedCost || 0).toFixed(6);
-                scanVal.innerText = ((data.meta.estimatedScan || 0) / (1024 * 1024)).toFixed(1);
+                const formattedScan = window.formatScanVolume(data.meta.estimatedScan || 0);
+                scanVal.innerText = scanUnit ? formattedScan.value : formattedScan.text;
+                if (scanUnit) scanUnit.innerText = formattedScan.unit;
             }
 
             _notebooks[_activeTabIdx].results = data.data;
@@ -1852,6 +1856,25 @@ window.testConnection = async () => {
     finally { btn.disabled = false; btn.innerText = '🔌 Test Connection'; }
 };
 
+window.formatScanVolume = function(rawBytes) {
+    const bytes = Math.max(0, Number(rawBytes || 0));
+    if (bytes === 0) return { value: '0.0', unit: 'MB', text: '0.0 MB' };
+    if (bytes >= 1024 * 1024 * 1024) {
+        const v = (bytes / (1024 * 1024 * 1024)).toFixed(2);
+        return { value: v, unit: 'GB', text: `${v} GB` };
+    }
+    if (bytes >= 10 * 1024 * 1024) {
+        const v = (bytes / (1024 * 1024)).toFixed(1);
+        return { value: v, unit: 'MB', text: `${v} MB` };
+    }
+    if (bytes >= 100 * 1024) {
+        const v = (bytes / (1024 * 1024)).toFixed(2);
+        return { value: v, unit: 'MB', text: `${v} MB` };
+    }
+    const v = (bytes / 1024).toFixed(1);
+    return { value: v, unit: 'KB', text: `${v} KB` };
+};
+
 // ── Profile & History ──
 window.openProfile = async () => {
     document.getElementById('profile-modal').style.display = 'flex';
@@ -1871,7 +1894,7 @@ window.openProfile = async () => {
                 <div style="background:rgba(255,255,255,0.03); padding:12px; border-radius:10px; border:1px solid var(--border);">
                     <code style="display:block; margin-bottom:5px; font-size:0.75rem;">${h.sql_query.substring(0, 100)}...</code>
                     <div style="display:flex; justify-content:space-between; font-size:0.65rem; color:var(--text-muted);">
-                        <span>📊 ${h.row_count} rows | ⏱️ ${h.duration}ms</span>
+                        <span>📊 ${h.row_count} rows | ⏱️ ${h.duration}ms | 📦 ${window.formatScanVolume(h.data_scanned_bytes || 0).text} | 💸 $${Number(h.calculated_cost_usd || 0).toFixed(6)}</span>
                         <span>${new Date(h.timestamp).toLocaleString()}</span>
                     </div>
                 </div>

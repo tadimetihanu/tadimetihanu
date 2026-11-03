@@ -7,6 +7,7 @@ const gdrive = require('../drivers/gdrive');
 const db = require('../db');
 const logger = require('../utils/logger');
 const { shouldProactivelyStageOutOfCore, executeOutOfCore } = require('./out_of_core');
+const { computeQueryScanMetrics, calculateCost, invalidateParquetStatsCache } = require('./scan_metrics');
 
 // SSL CA Certificate Paths for libcurl / OpenSSL / DuckDB
 if (!process.env.CURL_CA_BUNDLE) process.env.CURL_CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
@@ -195,29 +196,6 @@ async function getTarget(targetId) {
     return target;
 }
 
-/**
- * Calculates a slightly varying cost based on the filename to simulate realistic distinct object sizes.
- */
-function calculateCost(sql, rows) {
-    let fileFactor = 1.0;
-    const pathMatch = sql.match(/(?:from\s+|read_[a-z_]+\s*\(\s*)['\"]([^'\"]+)['\"]/i);
-    if (pathMatch) {
-        let hash = 0;
-        for (let i = 0; i < pathMatch[1].length; i++) {
-            hash = ((hash << 5) - hash) + pathMatch[1].charCodeAt(i);
-            hash |= 0;
-        }
-        // Varies the floor from 1.0x to 8.9x
-        fileFactor = 1.0 + (Math.abs(hash) % 800) / 100.0;
-    }
-    const estimatedScan = Math.max(
-        JSON.stringify(rows, (k, v) => typeof v === 'bigint' ? v.toString() : v).length * 2 + 10485, 
-        104857 * fileFactor
-    );
-    const estimatedCost = (estimatedScan / (1024 * 1024 * 1024)) * 5.50;
-    return { estimatedScan, estimatedCost };
-}
-
 function _cleanBucketName(bucket) {
     return String(bucket || '').trim().replace(/^\/+|\/+$/g, '');
 }
@@ -241,6 +219,7 @@ function _getParquetCachePath(targetId, objectKey) {
 
 function invalidateCachedFile(targetId, objectKey) {
     try {
+        invalidateParquetStatsCache();
         const p = _getParquetCachePath(targetId, objectKey);
         if (p && fs.existsSync(p)) {
             fs.unlinkSync(p);
@@ -480,6 +459,7 @@ async function initSecret(target) {
 async function runQuery(userId, sql, targetId) {
     await _bootPromise;
 
+    const originalUserSql = sql;
     const target = await getTarget(targetId);
     const startTime = Date.now();
 
@@ -825,8 +805,24 @@ async function runQuery(userId, sql, targetId) {
             }
 
             const duration = Date.now() - startTime;
-            const { estimatedScan, estimatedCost } = calculateCost(sql, rows);
-            logQuery(userId, targetId, sql, rows.length, duration, 'success', estimatedScan, estimatedCost);
+            const { estimatedScan, estimatedCost } = await computeQueryScanMetrics({
+                originalSql: originalUserSql,
+                executableSql,
+                rows,
+                targetId,
+                allSqlCmd: _allSqlCmd,
+                db
+            });
+            if (Array.isArray(rows)) {
+                Object.defineProperty(rows, '_scanMeta', {
+                    value: { estimatedScan, estimatedCost },
+                    enumerable: false,
+                    configurable: true
+                });
+            }
+            if (!/^\s*DESCRIBE\b/i.test(originalUserSql)) {
+                logQuery(userId, targetId, originalUserSql, rows.length, duration, 'success', estimatedScan, estimatedCost);
+            }
             if (typeof global.gc === 'function') {
                 try { global.gc(); } catch (_) {}
             }
@@ -835,7 +831,9 @@ async function runQuery(userId, sql, targetId) {
         } catch (err) {
             const duration = Date.now() - startTime;
             console.error(`❌ [Query] Failed (${duration}ms): ${err.message}`);
-            logQuery(userId, targetId, sql, 0, duration, 'failed', 0, 0);
+            if (!/^\s*DESCRIBE\b/i.test(originalUserSql)) {
+                logQuery(userId, targetId, originalUserSql, 0, duration, 'failed', 0, 0);
+            }
             if (typeof global.gc === 'function') {
                 try { global.gc(); } catch (_) {}
             }

@@ -96,7 +96,7 @@ app.use(cors({
 app.get('/api/ping', (req, res) => res.json({
     status: 'online',
     timestamp: new Date(),
-    version: '2.1.7-out-of-core-10m-engine',
+    version: '2.1.8-accurate-scan-metrics',
     metadataDb: db.getStatus ? db.getStatus() : { engine: db.isPostgres ? 'postgresql' : 'sqlite' }
 }));
 app.use(express.json());
@@ -259,7 +259,7 @@ app.get('/api/user/profile', authenticate, async (req, res) => {
         let stats = {};
         try {
             history = await db.all(`
-                SELECT query_text AS sql_query, row_count, execution_time_ms AS duration, status, timestamp, target_id 
+                SELECT query_text AS sql_query, row_count, execution_time_ms AS duration, data_scanned_bytes, calculated_cost_usd, status, timestamp, target_id 
                 FROM query_logs 
                 WHERE user_id = ? 
                 ORDER BY timestamp DESC 
@@ -833,7 +833,7 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
     try {
         const results = await runQuery(userId, sql, targetId);
         const duration = Date.now() - startTime;
-        const { estimatedScan, estimatedCost } = calculateCost(sql, results);
+        const { estimatedScan, estimatedCost } = results._scanMeta || calculateCost(sql, results);
         res.json({ 
             success: true, 
             data: sanitizeBigInt(results),
@@ -849,7 +849,7 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
                     console.log(`✨ [AI-Fix] Re-executing repaired SQL: ${fixedSql}`);
                     const fixedResults = await runQuery(userId, fixedSql, targetId);
                     const duration = Date.now() - startTime;
-                    const { estimatedScan, estimatedCost } = calculateCost(fixedSql, fixedResults);
+                    const { estimatedScan, estimatedCost } = fixedResults._scanMeta || calculateCost(fixedSql, fixedResults);
                     return res.json({ 
                         success: true, 
                         data: sanitizeBigInt(fixedResults), 
