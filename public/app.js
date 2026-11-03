@@ -2694,12 +2694,154 @@ window.clearEditor = () => {
     }
 };
 
-window.openSaveDialog = () => document.getElementById('save-query-bar').style.display = 'flex';
-window.closeSaveDialog = () => document.getElementById('save-query-bar').style.display = 'none';
-window.confirmSaveQuery = () => { alert("Query Saved (Local Session)"); window.closeSaveDialog(); };
+let _allSavedQueries = [];
 
-window.openSavedQueries = () => alert("Query Library is empty.");
-window.closeSavedQueries = () => {};
+window.openSaveDialog = () => {
+    const bar = document.getElementById('save-query-bar');
+    if (bar) bar.style.display = 'flex';
+    const input = document.getElementById('save-query-name');
+    if (input) {
+        input.focus();
+        input.select();
+    }
+};
+
+window.closeSaveDialog = () => {
+    const bar = document.getElementById('save-query-bar');
+    if (bar) bar.style.display = 'none';
+};
+
+window.confirmSaveQuery = async () => {
+    const nameInput = document.getElementById('save-query-name');
+    const queryName = nameInput ? nameInput.value.trim() : '';
+    let sql = '';
+    if (window.editor && typeof window.editor.getValue === 'function') {
+        sql = window.editor.getValue();
+    } else {
+        const textarea = document.getElementById('query-editor');
+        if (textarea) sql = textarea.value;
+    }
+
+    if (!sql || !sql.trim()) {
+        showToast('SQL editor is empty', 'error');
+        return;
+    }
+
+    try {
+        const res = await apiFetch('/api/saved-queries', {
+            method: 'POST',
+            body: JSON.stringify({
+                query_name: queryName || 'Untitled Query',
+                sql_query: sql.trim()
+            })
+        });
+
+        if (res && res.success) {
+            showToast(res.message || 'Query saved to library!', 'success');
+            if (nameInput) nameInput.value = '';
+            window.closeSaveDialog();
+        } else {
+            showToast(res?.error || 'Failed to save query', 'error');
+        }
+    } catch (err) {
+        showToast(`Save query failed: ${err.message}`, 'error');
+    }
+};
+
+window.openSavedQueries = async () => {
+    const modal = document.getElementById('saved-queries-modal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    const listEl = document.getElementById('saved-queries-list');
+    if (listEl) listEl.innerHTML = '<div style="text-align:center; padding:30px; color:#64748b;">⏳ Loading saved queries...</div>';
+
+    try {
+        const res = await apiFetch('/api/saved-queries');
+        _allSavedQueries = (res && Array.isArray(res.queries)) ? res.queries : [];
+        window.renderSavedQueriesList(_allSavedQueries);
+    } catch (err) {
+        if (listEl) listEl.innerHTML = `<div style="text-align:center; padding:30px; color:#ef4444;">Error loading saved queries: ${err.message}</div>`;
+    }
+};
+
+window.closeSavedQueries = () => {
+    const modal = document.getElementById('saved-queries-modal');
+    if (modal) modal.style.display = 'none';
+};
+
+window.renderSavedQueriesList = (queries) => {
+    const listEl = document.getElementById('saved-queries-list');
+    if (!listEl) return;
+
+    if (!queries || queries.length === 0) {
+        listEl.innerHTML = `
+            <div style="text-align:center; padding:40px 20px; color:#94a3b8;">
+                <div style="font-size:2rem; margin-bottom:10px;">📚</div>
+                <div style="font-weight:700; color:#475569; font-size:0.95rem;">No saved queries yet</div>
+                <p style="font-size:0.75rem; margin:6px 0 0;">Write a query in the SQL editor and click "💾 Save Query" to save it to your library.</p>
+            </div>`;
+        return;
+    }
+
+    listEl.innerHTML = queries.map(q => {
+        const preview = (q.sql_query || '').replace(/\s+/g, ' ').slice(0, 110);
+        const dateStr = q.created_at ? new Date(q.created_at).toLocaleDateString() : '';
+        return `
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:12px 16px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px;">
+                <div style="flex:1; min-width:0;">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span style="font-size:0.88rem; font-weight:700; color:#0f172a;">${q.query_name || 'Untitled'}</span>
+                        ${dateStr ? `<span style="font-size:0.7rem; color:#94a3b8;">${dateStr}</span>` : ''}
+                    </div>
+                    <pre style="margin:6px 0 0; font-family:'Menlo', monospace; font-size:0.74rem; color:#475569; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; background:#f1f5f9; padding:4px 8px; border-radius:4px;">${preview}...</pre>
+                </div>
+                <div style="display:flex; gap:6px; flex-shrink:0;">
+                    <button class="btn btn-primary" onclick="window.loadSavedQuery('${q.id}')" style="font-size:0.75rem; padding:5px 12px;">⚡ Load</button>
+                    <button class="btn btn-secondary" onclick="window.deleteSavedQuery('${q.id}')" style="font-size:0.75rem; padding:5px 9px; color:#ef4444; border-color:#fecaca;">🗑️</button>
+                </div>
+            </div>`;
+    }).join('');
+};
+
+window.loadSavedQuery = (queryId) => {
+    const q = _allSavedQueries.find(item => item.id === queryId);
+    if (!q || !q.sql_query) return;
+    if (window.editor && typeof window.editor.setValue === 'function') {
+        window.editor.setValue(q.sql_query);
+    } else {
+        const textarea = document.getElementById('query-editor');
+        if (textarea) textarea.value = q.sql_query;
+    }
+    showToast(`Loaded "${q.query_name}" into editor`, 'info');
+    window.closeSavedQueries();
+};
+
+window.deleteSavedQuery = async (queryId) => {
+    if (!confirm('Are you sure you want to delete this saved query?')) return;
+    try {
+        const res = await apiFetch(`/api/saved-queries/${queryId}`, { method: 'DELETE' });
+        if (res && res.success) {
+            showToast('Query deleted', 'success');
+            _allSavedQueries = _allSavedQueries.filter(q => q.id !== queryId);
+            window.renderSavedQueriesList(_allSavedQueries);
+        }
+    } catch (err) {
+        showToast(`Failed to delete: ${err.message}`, 'error');
+    }
+};
+
+window.filterSavedQueries = (term) => {
+    const lower = (term || '').toLowerCase();
+    if (!lower) {
+        window.renderSavedQueriesList(_allSavedQueries);
+        return;
+    }
+    const filtered = _allSavedQueries.filter(q => 
+        (q.query_name && q.query_name.toLowerCase().includes(lower)) ||
+        (q.sql_query && q.sql_query.toLowerCase().includes(lower))
+    );
+    window.renderSavedQueriesList(filtered);
+};
 
 window.pinCurrentTable = () => alert("Table Pinned to Dashboard");
 window.clearDashboard = () => { document.getElementById('main-dashboard').style.display = 'none'; };

@@ -1009,6 +1009,125 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
     }
 });
 
+// ── SAVED QUERIES API ──────────────────────────────────────────
+app.get('/api/saved-queries', authenticate, async (req, res) => {
+    try {
+        const userId = req.user.user_id;
+        const rows = await db.all(
+            `SELECT id, query_name, sql_query, description, created_at 
+             FROM saved_queries 
+             WHERE user_id = ? OR user_id IS NULL 
+             ORDER BY created_at DESC`,
+            [userId]
+        );
+
+        // If user has no saved queries yet, seed standard 10M benchmark templates
+        if (!rows || rows.length === 0) {
+            const defaults = [
+                {
+                    id: crypto.randomUUID(),
+                    query_name: '10M Multi-Table Join & Ranking',
+                    sql_query: `SELECT * FROM (
+    SELECT
+        r.region_name,
+        c.country,
+        p.product_category,
+        COUNT(DISTINCT o.order_id) AS total_orders,
+        SUM(o.quantity) AS units_sold,
+        ROUND(SUM(o.quantity * o.unit_price * (1 - o.discount)), 2) AS total_revenue
+    FROM read_parquet('10M/sales_orders.parquet') o
+    JOIN read_parquet('10M/customers.parquet') c ON o.customer_id = c.customer_id
+    JOIN read_parquet('10M/products.parquet') p ON o.product_id = p.product_id
+    JOIN read_parquet('10M/regions.parquet') r ON o.region_id = r.region_id
+    WHERE o.order_status = 'completed'
+    GROUP BY r.region_name, c.country, p.product_category
+    ORDER BY total_revenue DESC
+    LIMIT 100
+) t;`,
+                    description: 'Full 4-table star schema join across 10M sales, customers, products, and regions'
+                },
+                {
+                    id: crypto.randomUUID(),
+                    query_name: 'Sales Aggregation by Status (10M)',
+                    sql_query: `SELECT
+    order_status,
+    COUNT(*) AS total_orders,
+    SUM(quantity) AS total_units,
+    ROUND(SUM(quantity * unit_price * (1 - discount)), 2) AS total_revenue
+FROM read_parquet('10M/sales_orders.parquet')
+GROUP BY order_status
+ORDER BY total_revenue DESC;`,
+                    description: 'Order status breakdown across all 10M rows'
+                },
+                {
+                    id: crypto.randomUUID(),
+                    query_name: 'Customer Cohort Analysis',
+                    sql_query: `SELECT
+    strftime(c.signup_date, '%Y-%m') AS signup_cohort,
+    c.customer_segment,
+    COUNT(DISTINCT c.customer_id) AS cohort_customers,
+    COUNT(DISTINCT s.order_id) AS cohort_orders,
+    ROUND(SUM(s.quantity * s.unit_price * (1 - s.discount)), 2) AS total_revenue
+FROM read_parquet('10M/customers.parquet') c
+JOIN read_parquet('10M/sales_orders.parquet') s ON c.customer_id = s.customer_id
+WHERE s.order_status = 'completed'
+GROUP BY strftime(c.signup_date, '%Y-%m'), c.customer_segment
+ORDER BY signup_cohort DESC, total_revenue DESC
+LIMIT 100;`,
+                    description: 'Customer lifetime cohort revenue analysis'
+                }
+            ];
+
+            for (const d of defaults) {
+                try {
+                    await db.run(
+                        `INSERT INTO saved_queries (id, user_id, query_name, sql_query, description) VALUES (?, ?, ?, ?, ?)`,
+                        [d.id, userId, d.query_name, d.sql_query, d.description]
+                    );
+                } catch (_) {}
+            }
+
+            return res.json({ success: true, queries: defaults });
+        }
+
+        res.json({ success: true, queries: rows || [] });
+    } catch (err) {
+        console.error('[Saved Queries GET]', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.post('/api/saved-queries', authenticate, async (req, res) => {
+    try {
+        const userId = req.user.user_id;
+        const { query_name, sql_query, description } = req.body;
+        if (!sql_query || !sql_query.trim()) {
+            return res.status(400).json({ success: false, error: 'SQL query cannot be empty' });
+        }
+        const name = (query_name || '').trim() || `Query - ${new Date().toLocaleDateString()}`;
+        const queryId = crypto.randomUUID();
+        await db.run(
+            `INSERT INTO saved_queries (id, user_id, query_name, sql_query, description) VALUES (?, ?, ?, ?, ?)`,
+            [queryId, userId, name, sql_query.trim(), description || '']
+        );
+        res.json({ success: true, id: queryId, message: `Query "${name}" saved successfully!` });
+    } catch (err) {
+        console.error('[Saved Queries POST]', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.delete('/api/saved-queries/:id', authenticate, async (req, res) => {
+    try {
+        const userId = req.user.user_id;
+        const { id } = req.params;
+        await db.run(`DELETE FROM saved_queries WHERE id = ? AND (user_id = ? OR user_id IS NULL)`, [id, userId]);
+        res.json({ success: true, message: 'Saved query deleted' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 app.post('/api/cache/clear', authenticate, async (req, res) => {
     try {
         const { clearAllCaches } = require('./query/engine');
