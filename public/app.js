@@ -255,7 +255,7 @@ window.renderTabTelemetry = (tab) => {
         if (tableBody) {
             tableBody.innerHTML = `
                 <tr>
-                    <td colspan="100" style="text-align: center; padding: 100px; color: var(--text-muted);">
+                    <td colspan="100" style="text-align: center; padding: 40px; color: var(--text-muted);">
                         Run a query to see results.
                     </td>
                 </tr>`;
@@ -268,6 +268,7 @@ window.renderTabTelemetry = (tab) => {
 };
 
 // ── Global Status / Notification Engine ───────────────────────
+window.showToast = (msg, type = 'info') => window.showStatus(msg, type);
 window.showStatus = (msg, type = 'info') => {
     console.log(`[Status] ${type}: ${msg}`);
     const container = document.getElementById('status-notifications') || createStatusContainer();
@@ -2656,12 +2657,38 @@ window.uploadFiles = async (rawFiles) => {
 };
 
 // ── AI Assistant ──
+window.highlightAiSearchBox = () => {
+    const input = document.getElementById('ai-prompt');
+    if (!input) return;
+    input.focus();
+    input.placeholder = "🔍 Search here... e.g. What is the total quantity?";
+    input.classList.remove('ai-search-highlight');
+    void input.offsetWidth; // Force CSS animation restart
+    input.classList.add('ai-search-highlight');
+    input.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (typeof window.showStatus === 'function') {
+        window.showStatus('🔍 Search here! Type your question in the search box, then click Ask AI.', 'info');
+    }
+
+    const clearHighlight = () => {
+        input.classList.remove('ai-search-highlight');
+        input.removeEventListener('input', clearHighlight);
+    };
+    input.addEventListener('input', clearHighlight);
+};
+
 window.aiSuggest = async () => {
-    const prompt = document.getElementById('ai-prompt').value;
-    if (!prompt) return;
+    const promptInput = document.getElementById('ai-prompt');
+    const prompt = promptInput ? promptInput.value.trim() : '';
+    if (!prompt) {
+        window.highlightAiSearchBox();
+        return;
+    }
     const btn = document.getElementById('ai-btn');
-    btn.disabled = true;
-    btn.innerText = '⏳ Thinking...';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '⏳ Thinking...';
+    }
     try {
         const fileName = (_allFiles || []).map(f => f.name).join(', ');
         const currentSql = document.getElementById('query-editor')?.value || '';
@@ -2675,14 +2702,39 @@ window.aiSuggest = async () => {
                 currentSql
             })
         });
-        if (data.success) {
-            document.getElementById('query-editor').value = data.sql;
+        if (data.success && data.sql) {
+            const editorEl = document.getElementById('query-editor');
+            if (editorEl) editorEl.value = data.sql;
+            if (window.editor && typeof window.editor.setValue === 'function') {
+                window.editor.setValue(data.sql);
+            }
             if (_notebooks[_activeTabIdx]) _notebooks[_activeTabIdx].sql = data.sql;
             saveNotebooks();
+
+            if (typeof window.showStatus === 'function') {
+                window.showStatus('✨ AI query generated! Auto-executing...', 'success');
+            }
+
+            // Requirement: Auto execute the query and give results immediately
+            if (typeof window.executeQuery === 'function') {
+                await window.executeQuery();
+            }
         } else {
-            showStatus(data.error || 'AI query generation failed', 'error');
+            if (typeof window.showStatus === 'function') {
+                window.showStatus(data.error || 'AI query generation failed', 'error');
+            }
         }
-    } finally { btn.disabled = false; btn.innerText = 'Ask AI'; }
+    } catch (err) {
+        console.error('aiSuggest error:', err);
+        if (typeof window.showStatus === 'function') {
+            window.showStatus('AI generation failed: ' + (err.message || err), 'error');
+        }
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = 'Ask AI';
+        }
+    }
 };
 
 window.clearEditor = () => {

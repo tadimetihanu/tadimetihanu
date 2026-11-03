@@ -85,7 +85,7 @@ header {
     letter-spacing: -0.02em;
 }
 
-main { display: flex; padding: 30px; gap: 30px; }
+main { display: flex; padding: 14px 20px; gap: 16px; }
 
 .sidebar {
     width: 320px;
@@ -151,7 +151,7 @@ main { display: flex; padding: 30px; gap: 30px; }
 }
 .browser-list li:hover { border-color: var(--border); background: var(--glass-heavy); }
 
-.content-area { flex: 1; display: flex; flex-direction: column; gap: 30px; }
+.content-area { flex: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 
 .query-builder-card, .results-card {
     background: #ffffff;
@@ -632,3 +632,62 @@ td { padding: 12px 15px; border-bottom: 1px solid var(--border); }
     white-space: nowrap !important;
 }
 
+
+/* ── Compact Workspace Layout & Sticky AI Bar ── */
+.query-builder-card, .results-card {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.03);
+    border-radius: 14px;
+    padding: 0 !important;
+    position: relative;
+    overflow: hidden;
+}
+
+.table-container {
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: 350px;
+    margin-top: 0;
+    position: relative;
+}
+
+.table-container th {
+    position: sticky;
+    top: 0;
+    background: #f8fafc;
+    z-index: 10;
+    border-bottom: 2px solid var(--border);
+    padding: 10px 14px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+
+.table-container td {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+}
+
+/* ── AI Search Box Highlighting ── */
+@keyframes aiSearchPulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.7);
+        border-color: #6366f1;
+        background-color: #ffffff;
+    }
+    40% {
+        box-shadow: 0 0 0 6px rgba(99, 102, 241, 0.3);
+        border-color: #4f46e5;
+        background-color: rgba(99, 102, 241, 0.05);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
+        border-color: #6366f1;
+        background-color: #ffffff;
+    }
+}
+
+.ai-search-highlight {
+    animation: aiSearchPulse 1.2s ease-in-out 3 !important;
+    border: 2px solid #6366f1 !important;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25) !important;
+}
