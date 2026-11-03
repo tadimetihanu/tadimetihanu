@@ -393,7 +393,7 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
     // Schema inspection (DESCRIBE) reads only file footer / schema metadata
     if (/^\s*DESCRIBE\b/i.test(rawOrig)) {
         const estimatedScan = 8192;
-        const billedCostUsd = (estimatedScan / TIB_BYTES) * COST_PER_TIB_USD;
+        const onDemandCostUsd = (estimatedScan / TIB_BYTES) * COST_PER_TIB_USD;
         return {
             executionId: execId,
             estimatedScan,
@@ -404,10 +404,10 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
             cacheStatus: 'LOCAL',
             cacheHits: 0,
             cacheMisses: 0,
-            estimatedCost: billedCostUsd,
-            billedCostUsd,
-            onDemandCostUsd: billedCostUsd,
-            cacheSavingsUsd: 0,
+            estimatedCost: onDemandCostUsd,
+            billedCostUsd: 0,
+            onDemandCostUsd,
+            cacheSavingsUsd: onDemandCostUsd,
             currency: CURRENCY,
             pricingUnit: PRICING_UNIT
         };
@@ -564,7 +564,7 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
         cacheStatus,
         cacheHits,
         cacheMisses,
-        estimatedCost: billedCostUsd,
+        estimatedCost: onDemandCostUsd,
         billedCostUsd,
         onDemandCostUsd,
         cacheSavingsUsd,

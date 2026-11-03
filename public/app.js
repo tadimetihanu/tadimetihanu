@@ -100,8 +100,16 @@ window.renderTabTelemetry = (tab) => {
 
     if (tab.meta && meter) {
         meter.style.display = 'inline-flex';
-        const billed = tab.meta.billedCostUsd !== undefined ? tab.meta.billedCostUsd : (tab.meta.estimatedCost || 0);
-        if (burnVal) burnVal.innerText = Number(billed).toFixed(6);
+
+        // Live Burn: Standard on-demand workload scan burn rate ($5.00 / TiB of logical Parquet data processed)
+        const onDemand = Number(tab.meta.onDemandCostUsd !== undefined ? tab.meta.onDemandCostUsd : (tab.meta.estimatedCost || 0));
+        const billed = Number(tab.meta.billedCostUsd !== undefined ? tab.meta.billedCostUsd : 0);
+        const saved = Number(tab.meta.cacheSavingsUsd || Math.max(0, onDemand - billed) || 0);
+
+        if (burnVal) {
+            burnVal.innerText = onDemand > 0 ? onDemand.toFixed(6) : '0.000000';
+            burnVal.title = `Standard On-Demand Query Burn: ${onDemand.toFixed(6)} USD ($5.00/TiB)`;
+        }
 
         const formatted = window.formatScanVolume(tab.meta.logicalScannedBytes || tab.meta.estimatedScan || 0);
         if (scanVal) scanVal.innerText = formatted.value;
@@ -110,10 +118,16 @@ window.renderTabTelemetry = (tab) => {
         if (cacheBadge) {
             if (tab.meta.cacheStatus === 'HIT' || tab.meta.cacheStatus === 'LOCAL') {
                 cacheBadge.style.display = 'inline-block';
-                const saved = tab.meta.cacheSavingsUsd || 0;
-                cacheBadge.innerText = saved > 0
-                    ? `⚡ Cache Hit · Saved $${saved.toFixed(6)}`
-                    : `⚡ SSD Cached`;
+                if (saved > 0 && billed === 0) {
+                    cacheBadge.innerText = `⚡ 100% Cached · Saved ${saved.toFixed(6)}`;
+                    cacheBadge.title = `Local SSD Cache Hit: 100% cloud egress fee waived. Net Billed: $0.000000 USD`;
+                } else if (saved > 0) {
+                    cacheBadge.innerText = `⚡ Cache Hit · Saved ${saved.toFixed(6)}`;
+                    cacheBadge.title = `Cache Hit: Saved ${saved.toFixed(6)} USD. Net Billed: ${billed.toFixed(6)} USD`;
+                } else {
+                    cacheBadge.innerText = `⚡ SSD Cached`;
+                    cacheBadge.title = 'Served from Local Container Storage Cache';
+                }
             } else {
                 cacheBadge.style.display = 'none';
             }
