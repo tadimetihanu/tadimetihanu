@@ -83,6 +83,37 @@ function saveNotebooks() {
 }
 
 // ── Per-Tab Telemetry & Isolation Renderer ─────────────────────
+window.purgeDataCache = async () => {
+    const btn = document.getElementById('purge-cache-btn');
+    const originalText = btn ? btn.innerText : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '🧹 Purging...';
+    }
+    try {
+        const res = await apiFetch('/api/cache/clear', { method: 'POST' });
+        if (res && res.success) {
+            showToast(res.message || 'Cache purged successfully', 'success');
+            const tab = _notebooks[_activeTabIdx];
+            if (tab && tab.meta) {
+                tab.meta.cacheStatus = 'PURGED';
+                tab.meta.cacheSavingsUsd = 0;
+                tab.meta.billedCostUsd = tab.meta.onDemandCostUsd || tab.meta.estimatedCost || 0;
+                window.renderTabTelemetry(tab);
+            }
+        } else {
+            showToast(res?.error || 'Failed to purge cache', 'error');
+        }
+    } catch (e) {
+        showToast(`Cache purge failed: ${e.message}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = originalText;
+        }
+    }
+};
+
 window.renderTabTelemetry = (tab) => {
     if (!tab) return;
     const meter = document.getElementById('live-burn-meter');

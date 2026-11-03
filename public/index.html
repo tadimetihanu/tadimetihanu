@@ -641,6 +641,11 @@
                             title="Run Dual-Pass DuckDB Ground-Truth & Repeatability Benchmark">
                             🔬 Validate
                         </button>
+                        <button class="btn btn-secondary" onclick="window.purgeDataCache()" id="purge-cache-btn"
+                            style="background:rgba(239,68,68,0.08); border-color:rgba(239,68,68,0.25); color:#dc2626; white-space:nowrap; flex-shrink:0;"
+                            title="Purge SSD Parquet data cache & metadata stats to test cold queries from cloud storage">
+                            🧹 Purge Cache
+                        </button>
                         <!-- Live Burn Badge grouped on the EXACT same row right next to Validate -->
                         <div id="live-burn-meter" style="display:none; align-items:center; gap:8px; background:rgba(239, 68, 68, 0.08); border:1px solid rgba(239, 68, 68, 0.25); padding:5px 12px; border-radius:999px; white-space:nowrap; flex-shrink:0;">
                             <div id="burn-pulse-dot" style="width:8px; height:8px; background:#ef4444; border-radius:50%; box-shadow:0 0 8px rgba(239, 68, 68, 0.6); animation: burn-pulse 1.8s infinite;"></div>

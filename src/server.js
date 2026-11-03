@@ -1009,6 +1009,22 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
     }
 });
 
+app.post('/api/cache/clear', authenticate, async (req, res) => {
+    try {
+        const { clearAllCaches } = require('./query/engine');
+        const stats = clearAllCaches();
+        const mb = (stats.bytesFreed / (1024 * 1024)).toFixed(2);
+        res.json({
+            success: true,
+            filesRemoved: stats.filesRemoved,
+            bytesFreed: stats.bytesFreed,
+            message: `Cache purged successfully: ${stats.filesRemoved} files removed (${mb} MB freed)`
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 app.post('/api/validate-query/:targetId', authenticate, checkAccess('read'), async (req, res) => {
     req.setTimeout(300000);
     res.setTimeout(300000);

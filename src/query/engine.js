@@ -227,6 +227,47 @@ function invalidateCachedFile(targetId, objectKey) {
     } catch (_) {}
 }
 
+function clearAllCaches() {
+    let filesRemoved = 0;
+    let bytesFreed = 0;
+
+    try {
+        invalidateParquetStatsCache();
+    } catch (_) {}
+
+    try {
+        if (fs.existsSync(PARQUET_CACHE_DIR)) {
+            const allFiles = _collectCachedFiles(PARQUET_CACHE_DIR);
+            for (const f of allFiles) {
+                try {
+                    fs.unlinkSync(f.path);
+                    filesRemoved++;
+                    bytesFreed += f.size || 0;
+                } catch (_) {}
+            }
+        }
+    } catch (_) {}
+
+    try {
+        if (fs.existsSync(SPILL_DIR)) {
+            const spillFiles = _collectCachedFiles(SPILL_DIR);
+            for (const f of spillFiles) {
+                try {
+                    fs.unlinkSync(f.path);
+                    filesRemoved++;
+                    bytesFreed += f.size || 0;
+                } catch (_) {}
+            }
+        }
+    } catch (_) {}
+
+    if (typeof global.gc === 'function') {
+        try { global.gc(); } catch (_) {}
+    }
+
+    return { filesRemoved, bytesFreed };
+}
+
 function _collectCachedFiles(dir, out = []) {
     try {
         if (!fs.existsSync(dir)) return out;
@@ -1066,5 +1107,6 @@ module.exports = {
     getTarget,
     calculateCost,
     invalidateCachedFile,
+    clearAllCaches,
     validateQueryAgainstDuckDB
 };
