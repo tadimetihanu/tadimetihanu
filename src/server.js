@@ -96,7 +96,7 @@ app.use(cors({
 app.get('/api/ping', (req, res) => res.json({
     status: 'online',
     timestamp: new Date(),
-    version: '2.1.6-duckdb-10m-oom-fix',
+    version: '2.1.7-out-of-core-10m-engine',
     metadataDb: db.getStatus ? db.getStatus() : { engine: db.isPostgres ? 'postgresql' : 'sqlite' }
 }));
 app.use(express.json());

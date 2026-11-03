@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const gdrive = require('../drivers/gdrive');
 const db = require('../db');
 const logger = require('../utils/logger');
+const { shouldProactivelyStageOutOfCore, executeOutOfCore } = require('./out_of_core');
 
 // SSL CA Certificate Paths for libcurl / OpenSSL / DuckDB
 if (!process.env.CURL_CA_BUNDLE) process.env.CURL_CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
@@ -54,16 +55,17 @@ function computeDuckDBLimits() {
     let memoryLimit;
     let threads;
     if (containerMB <= 600) {
-        memoryLimit = '192MB';
-        threads = 2;
+        // On 512 MiB containers: 1 thread halves pinned 256 KiB radix partition blocks while 280MiB gives ~3x headroom per thread
+        memoryLimit = '280MiB';
+        threads = 1;
     } else if (containerMB <= 1200) {
-        memoryLimit = '512MB';
+        memoryLimit = '600MiB';
         threads = 2;
     } else if (containerMB <= 2500) {
-        memoryLimit = '1152MB';
-        threads = 4;
+        memoryLimit = '1280MiB';
+        threads = 2;
     } else {
-        memoryLimit = '2048MB';
+        memoryLimit = '2048MiB';
         threads = 4;
     }
     return {
@@ -73,7 +75,14 @@ function computeDuckDBLimits() {
     };
 }
 
-const engineDb = new duckdb.Database(':memory:');
+const _engineLimits = computeDuckDBLimits();
+const ENGINE_DB_PATH = path.join(SPILL_DIR, 'engine.duckdb');
+let engineDb;
+try {
+    engineDb = new duckdb.Database(ENGINE_DB_PATH);
+} catch (_) {
+    engineDb = new duckdb.Database(':memory:');
+}
 const conn = engineDb.connect();
 
 let _isBooted = false;
@@ -82,6 +91,10 @@ const _loadedExtensions = new Set();
 
 function _runSqlCmd(cmd) {
     return new Promise((res, rej) => conn.run(cmd, (e) => e ? rej(e) : res()));
+}
+
+function _allSqlCmd(cmd) {
+    return new Promise((res, rej) => conn.all(cmd, (e, rows) => e ? rej(e) : res(rows)));
 }
 
 async function ensureExtension(extName) {
@@ -103,13 +116,13 @@ async function ensureExtension(extName) {
 // ── Boot Sequence ─────────────────────────────────────────────
 async function boot() {
     console.log('🚀 [Boot] Initializing Cloud Query Engine...');
-    const limits = computeDuckDBLimits();
+    const limits = _engineLimits;
     const spillNorm = SPILL_DIR.replace(/\\/g, '/').replace(/'/g, "''");
 
     // 1. Apply critical memory, thread, and SSD spill-to-disk limits unconditionally
     const corePragmas = [
         `SET temp_directory='${spillNorm}'`,
-        `SET max_temp_directory_size='10GB'`,
+        `SET max_temp_directory_size='12GiB'`,
         `SET memory_limit='${limits.memoryLimit}'`,
         `SET threads=${limits.threads}`,
         `SET preserve_insertion_order=false`
@@ -122,8 +135,8 @@ async function boot() {
         }
     }
 
-    // Optional allocator tuning to return freed C++ pages to OS immediately
-    for (const optCmd of [`SET allocator_flush_threshold='16MB'`]) {
+    // Optional allocator & streaming buffer tuning to return freed C++ pages to OS immediately
+    for (const optCmd of [`SET allocator_flush_threshold='16MiB'`, `SET streaming_buffer_size='8MiB'`]) {
         try { await _runSqlCmd(optCmd); } catch (_) {}
     }
 
@@ -667,20 +680,31 @@ async function runQuery(userId, sql, targetId) {
             console.log(`🔍 [Query] Executing: ${executableSql.substring(0, 80)}...`);
 
             let rows;
+            let usedOutOfCore = false;
             try {
-                rows = await new Promise((res, rej) => {
-                    conn.all(executableSql, (err, rows) => {
-                        if (err) rej(err);
-                        else res(rows);
-                    });
-                });
+                if (shouldProactivelyStageOutOfCore(executableSql, _engineLimits.containerMB)) {
+                    usedOutOfCore = true;
+                    rows = await executeOutOfCore(_runSqlCmd, _allSqlCmd, executableSql, SPILL_DIR);
+                } else {
+                    rows = await _allSqlCmd(executableSql);
+                }
             } catch (queryErr) {
                 // Reset transaction state on failure before attempting any fallback query
                 await new Promise(r => conn.run('ROLLBACK', () => r()));
 
+                if (!usedOutOfCore && /out of memory|could not allocate block/i.test(queryErr.message)) {
+                    console.log('🧊 [Engine OOM Recovery] DuckDB hit memory ceiling; retrying via Out-of-Core SSD Spill Executor...');
+                    try { await _runSqlCmd('SET threads=1'); } catch (_) {}
+                    try {
+                        rows = await executeOutOfCore(_runSqlCmd, _allSqlCmd, executableSql, SPILL_DIR);
+                    } finally {
+                        if (_engineLimits.threads > 1) {
+                            try { await _runSqlCmd(`SET threads=${_engineLimits.threads}`); } catch (_) {}
+                        }
+                    }
                 // If Azure direct connection failed (e.g. SSL CA error or Azure C++ driver issue),
                 // fall back to downloading via Node.js Azure SDK and running query locally!
-                if ((target.provider_type === 'azure' || target.provider_type === 'adls') &&
+                } else if ((target.provider_type === 'azure' || target.provider_type === 'adls') &&
                     (queryErr.message.includes('SSL CA cert') || queryErr.message.includes('Fail to get a new connection') || queryErr.message.includes('AzureStorageFileSystem'))) {
                     
                     console.log('🔄 [Engine Fallback] Direct Azure DuckDB query failed with SSL/connection error. Falling back to Azure Blob SDK...');

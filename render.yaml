@@ -18,7 +18,7 @@ services:
       - key: MALLOC_ARENA_MAX
         value: "2"
       - key: NODE_OPTIONS
-        value: "--expose-gc"
+        value: "--max-semi-space-size=4 --expose-gc"
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET

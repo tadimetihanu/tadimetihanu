@@ -23,7 +23,7 @@ ENV SSL_CERT_DIR=/etc/ssl/certs
 ENV AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED
 ENV AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED
 ENV MALLOC_ARENA_MAX=2
-ENV NODE_OPTIONS=--expose-gc
+ENV NODE_OPTIONS="--max-semi-space-size=4 --expose-gc"
 
 RUN mkdir -p /app/data/.duckdb_spill /app/data/.parquet_cache /app/data/.upload_tmp
 
