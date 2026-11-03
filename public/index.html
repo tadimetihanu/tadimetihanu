@@ -329,10 +329,10 @@
                     <button class="type-chip" onclick="window.filterByType('json')">📦 JSON</button>
                 </div>
                 <ul id="browser-list" class="browser-list" style="margin-bottom: 20px;"></ul>
-                <div class="upload-area" style="border:1px dashed var(--border); border-radius:12px; padding:15px; text-align:center;" ondragover="event.preventDefault(); this.style.borderColor='#0284c7';" ondragleave="this.style.borderColor='var(--border)';" ondrop="event.preventDefault(); this.style.borderColor='var(--border)'; if(event.dataTransfer && event.dataTransfer.files) uploadFiles(event.dataTransfer.files);">
-                    <p style="margin: 0; font-size: 0.75rem;">Drop files to upload</p>
-                    <input id="file-input" type="file" multiple style="display:none" onchange="uploadFiles(this.files)">
-                    <input id="folder-input" type="file" webkitdirectory directory multiple style="display:none" onchange="uploadFiles(this.files)">
+                <div class="upload-area" style="border:1px dashed var(--border); border-radius:12px; padding:15px; text-align:center;" ondragover="event.preventDefault(); this.style.borderColor='#0284c7';" ondragleave="this.style.borderColor='var(--border)';" ondrop="window.handleUploadDrop(event, this)">
+                    <p style="margin: 0; font-size: 0.75rem;">Drop files or folders to upload</p>
+                    <input id="file-input" type="file" multiple style="display:none" onchange="window.uploadFiles(this.files)">
+                    <input id="folder-input" type="file" webkitdirectory directory multiple style="display:none" onchange="window.uploadFiles(this.files)">
                     <div style="display:flex; gap:8px; justify-content:center; margin-top:8px;">
                         <button class="ghost-btn" style="font-size:0.7rem;" onclick="document.getElementById('file-input').click()">📁 Files</button>
                         <button class="ghost-btn" style="font-size:0.7rem;" onclick="document.getElementById('folder-input').click()">📂 Folder</button>
@@ -1114,6 +1114,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=13"></script>
+    <script src="app.js?v=15"></script>
 </body>
 </html>

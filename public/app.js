@@ -1880,9 +1880,122 @@ window.openProfile = async () => {
     } catch (err) { console.error('Profile load error', err); }
 };
 
-// ── File Uploads ──
-window.uploadFiles = async (files) => {
-    if (!files || files.length === 0) return;
+// ── File & Folder Uploads (Batched + Chunked + Recursive Drag-and-Drop) ──
+async function _readEntryFilesRecursive(entry, parentPath = '') {
+    if (!entry) return [];
+    if (entry.isFile) {
+        return new Promise((resolve) => {
+            entry.file(
+                (file) => {
+                    const relPath = parentPath ? `${parentPath}/${file.name}` : (entry.fullPath ? entry.fullPath.replace(/^\/+/, '') : file.name);
+                    resolve([{ file, relativePath: relPath }]);
+                },
+                () => resolve([])
+            );
+        });
+    }
+    if (entry.isDirectory) {
+        const dirPath = parentPath ? `${parentPath}/${entry.name}` : entry.name;
+        const reader = entry.createReader();
+        const allEntries = [];
+        const readBatch = () => new Promise((resolve) => {
+            reader.readEntries((entries) => resolve(entries || []), () => resolve([]));
+        });
+        let batch = await readBatch();
+        while (batch.length > 0) {
+            allEntries.push(...batch);
+            batch = await readBatch();
+        }
+        const nested = await Promise.all(allEntries.map(child => _readEntryFilesRecursive(child, dirPath)));
+        return nested.flat();
+    }
+    return [];
+}
+
+window.handleUploadDrop = async (event, el) => {
+    event.preventDefault();
+    if (el) el.style.borderColor = 'var(--border)';
+    const dt = event.dataTransfer;
+    if (!dt) return;
+
+    if (dt.items && dt.items.length > 0 && typeof dt.items[0].webkitGetAsEntry === 'function') {
+        const entries = [];
+        for (let i = 0; i < dt.items.length; i++) {
+            const item = dt.items[i];
+            if (item.kind === 'file') {
+                const entry = item.webkitGetAsEntry();
+                if (entry) entries.push(entry);
+            }
+        }
+        if (entries.length > 0) {
+            const status = document.getElementById('upload-status');
+            if (status) status.innerText = '⏳ Scanning dropped folder...';
+            const collected = (await Promise.all(entries.map(e => _readEntryFilesRecursive(e, '')))).flat();
+            if (collected.length > 0) {
+                return window.uploadFiles(collected);
+            }
+        }
+    }
+
+    if (dt.files && dt.files.length > 0) {
+        return window.uploadFiles(dt.files);
+    }
+};
+
+async function _parseUploadResponse(res) {
+    const text = await res.text();
+    try {
+        return JSON.parse(text);
+    } catch (_) {
+        if (res.status === 413) {
+            return { success: false, error: 'Payload too large (HTTP 413). Retrying or splitting required.' };
+        }
+        if (res.status === 502 || res.status === 504 || res.status === 524) {
+            return { success: false, error: `Gateway timeout/overload (HTTP ${res.status}).` };
+        }
+        return { success: false, error: `Server returned HTTP ${res.status}` };
+    }
+}
+
+async function _uploadLargeFileChunked(targetId, file, relativePath, statusEl, fileIdxLabel) {
+    const CHUNK_SIZE = 20 * 1024 * 1024; // 20 MB per chunk (well below Cloudflare 100 MB limit)
+    const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+    const uploadId = (window.crypto && window.crypto.randomUUID)
+        ? window.crypto.randomUUID()
+        : `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const start = chunkIndex * CHUNK_SIZE;
+        const end = Math.min(file.size, start + CHUNK_SIZE);
+        const blob = file.slice(start, end);
+        const pct = Math.round(((chunkIndex + 1) / totalChunks) * 100);
+        if (statusEl) {
+            statusEl.innerText = `⏳ Uploading ${fileIdxLabel} (${pct}%)...`;
+        }
+
+        const fd = new FormData();
+        fd.append('chunk', blob, file.name || 'part.bin');
+        fd.append('uploadId', uploadId);
+        fd.append('relativePath', relativePath);
+        fd.append('chunkIndex', String(chunkIndex));
+        fd.append('totalChunks', String(totalChunks));
+        fd.append('totalSize', String(file.size));
+        fd.append('mimeType', file.type || 'application/octet-stream');
+
+        const res = await fetch(`/api/upload-chunk/${targetId}`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('ciq_token')}` },
+            body: fd
+        });
+        const data = await _parseUploadResponse(res);
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || `Chunk ${chunkIndex + 1}/${totalChunks} failed (HTTP ${res.status})`);
+        }
+    }
+}
+
+window.uploadFiles = async (rawFiles) => {
+    if (!rawFiles || rawFiles.length === 0) return;
     const status = document.getElementById('upload-status');
     const targetId = _activeTargetId || (_targets && _targets[0] ? _targets[0].target_id : null);
     if (!targetId) {
@@ -1891,40 +2004,133 @@ window.uploadFiles = async (files) => {
         return;
     }
     _activeTargetId = targetId;
-    status.innerText = `⏳ Uploading ${files.length} file(s)...`;
-    
-    const formData = new FormData();
-    for (const f of files) {
-        formData.append('files', f);
-        formData.append('paths', f.webkitRelativePath || f.name);
+
+    // Snapshot files immediately BEFORE resetting <input> elements so FileList stays intact
+    const rawArray = Array.from(rawFiles);
+    const fileIn = document.getElementById('file-input');
+    const folderIn = document.getElementById('folder-input');
+    if (fileIn) fileIn.value = '';
+    if (folderIn) folderIn.value = '';
+
+    const ignoredOsFiles = new Set(['.ds_store', 'thumbs.db', 'desktop.ini']);
+    const queue = [];
+
+    for (const item of rawArray) {
+        const file = item && item.file instanceof File ? item.file : item;
+        if (!file || typeof file.slice !== 'function') continue;
+        const relPath = String(
+            (item && item.relativePath) || file.webkitRelativePath || file.name || ''
+        ).replace(/\\/g, '/').replace(/^\/+/, '');
+        if (!relPath) continue;
+        const baseName = relPath.split('/').pop().toLowerCase();
+        if (ignoredOsFiles.has(baseName) || baseName.startsWith('~$')) continue;
+
+        // Verify browser can read at least 1 byte (skips raw directory handles or OS-locked files)
+        try {
+            await file.slice(0, 1).arrayBuffer();
+        } catch (_) {
+            console.warn(`[Upload] Skipping unreadable/directory entry: ${relPath}`);
+            continue;
+        }
+        queue.push({ file, relativePath: relPath });
     }
 
-    let clearDelay = 5000;
+    if (queue.length === 0) {
+        status.innerText = '❌ Error: Folder is empty or contains no readable files';
+        showStatus('Folder contains no readable files (use 📂 Folder button or drop a non-empty folder)', 'error');
+        setTimeout(() => { status.innerText = ''; }, 8000);
+        return;
+    }
+
+    const LARGE_FILE_THRESHOLD = 20 * 1024 * 1024; // >20 MB uses chunked upload
+    const MAX_BATCH_FILES = 5;
+    const MAX_BATCH_BYTES = 20 * 1024 * 1024; // Keep each HTTP request <= 20 MB
+
+    let uploadedCount = 0;
+    const errors = [];
+    let clearDelay = 6000;
+
+    status.innerText = `⏳ Uploading 0 / ${queue.length} file(s)...`;
+
     try {
-        const res = await fetch(`/api/upload/${targetId}`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${localStorage.getItem('ciq_token')}` },
-            body: formData
-        });
-        const data = await res.json();
-        if (data.success) {
-            status.innerText = `✅ Uploaded ${data.uploaded.length} file(s)`;
-            showStatus(`Uploaded ${data.uploaded.length} file(s)`, 'success');
+        let batch = [];
+        let batchBytes = 0;
+
+        const flushBatch = async () => {
+            if (batch.length === 0) return;
+            const currentBatch = batch;
+            batch = [];
+            batchBytes = 0;
+
+            status.innerText = `⏳ Uploading ${Math.min(uploadedCount + currentBatch.length, queue.length)} / ${queue.length} file(s)...`;
+            const formData = new FormData();
+            for (const entry of currentBatch) {
+                const cleanName = entry.file.name || entry.relativePath.split('/').pop() || 'file.bin';
+                formData.append('files', entry.file, cleanName);
+                formData.append('paths', entry.relativePath);
+            }
+
+            const res = await fetch(`/api/upload/${targetId}`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('ciq_token')}` },
+                body: formData
+            });
+            const data = await _parseUploadResponse(res);
+            if (res.ok && data.success) {
+                uploadedCount += (data.uploaded ? data.uploaded.length : currentBatch.length);
+            } else {
+                errors.push(data.error || `Batch failed (HTTP ${res.status})`);
+            }
+        };
+
+        for (let i = 0; i < queue.length; i++) {
+            const entry = queue[i];
+            if (entry.file.size > LARGE_FILE_THRESHOLD) {
+                await flushBatch();
+                try {
+                    await _uploadLargeFileChunked(
+                        targetId,
+                        entry.file,
+                        entry.relativePath,
+                        status,
+                        `${i + 1}/${queue.length}: ${entry.file.name}`
+                    );
+                    uploadedCount++;
+                } catch (chunkErr) {
+                    errors.push(`${entry.relativePath}: ${chunkErr.message}`);
+                }
+                continue;
+            }
+
+            if (batch.length >= MAX_BATCH_FILES || (batch.length > 0 && (batchBytes + entry.file.size) > MAX_BATCH_BYTES)) {
+                await flushBatch();
+            }
+            batch.push(entry);
+            batchBytes += entry.file.size;
+        }
+        await flushBatch();
+
+        if (uploadedCount > 0 && errors.length === 0) {
+            status.innerText = `✅ Uploaded ${uploadedCount} file(s)`;
+            showStatus(`Uploaded ${uploadedCount} file(s)`, 'success');
+            loadFiles();
+        } else if (uploadedCount > 0 && errors.length > 0) {
+            clearDelay = 15000;
+            status.innerText = `⚠️ Uploaded ${uploadedCount}/${queue.length} (${errors[0]})`;
+            showStatus(`Uploaded ${uploadedCount}/${queue.length} files. Error: ${errors[0]}`, 'error');
             loadFiles();
         } else {
             clearDelay = 15000;
-            status.innerText = `❌ Error: ${data.error}`;
-            showStatus(data.error || 'Upload failed', 'error');
+            const firstErr = errors[0] || 'Upload failed';
+            status.innerText = `❌ Error: ${firstErr}`;
+            showStatus(firstErr, 'error');
         }
     } catch (err) {
         clearDelay = 15000;
-        status.innerText = '❌ Request failed';
-        showStatus('Upload request failed', 'error');
+        const msg = err && err.message ? err.message : 'Network error during upload';
+        status.innerText = `❌ Error: ${msg}`;
+        showStatus(`Upload failed: ${msg}`, 'error');
     } finally {
-        const fileIn = document.getElementById('file-input');
-        const folderIn = document.getElementById('folder-input');
-        if (fileIn) fileIn.value = '';
-        if (folderIn) folderIn.value = '';
         setTimeout(() => { status.innerText = ''; }, clearDelay);
     }
 };

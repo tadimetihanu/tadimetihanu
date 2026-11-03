@@ -438,18 +438,25 @@ async function uploadStream(targetId, filename, stream, mimetype, sizeHint) {
 
     if (target.provider_type === 'azure' || target.provider_type === 'adls') {
         const blobService = getAzureClient(target);
-        const containerClient = blobService.getContainerClient(target.bucket);
+        const containerName = _cleanBucketName(target.bucket);
+        const containerClient = blobService.getContainerClient(containerName);
         try { await containerClient.createIfNotExists(); } catch (e) {}
-        const blockBlob = containerClient.getBlockBlobClient(filename);
+        const blockBlob = containerClient.getBlockBlobClient(cleanKey);
         
         await blockBlob.uploadStream(stream, 4 * 1024 * 1024, 4, {
             blobHTTPHeaders: { blobContentType: mimetype || 'application/octet-stream' }
         });
-        return { container: target.bucket, key: filename };
+        return { container: containerName, key: cleanKey };
+    }
+
+    if (target.provider_type === 'databricks') {
+        const chunks = [];
+        for await (const ch of stream) chunks.push(Buffer.isBuffer(ch) ? ch : Buffer.from(ch));
+        return await uploadFile(targetId, cleanKey, Buffer.concat(chunks), mimetype);
     }
 
     if (target.provider_type === 'gdrive' || target.provider_type === 'googledrive') {
-        return await gdrive.uploadStream(target, filename, stream, mimetype);
+        return await gdrive.uploadStream(target, cleanKey, stream, mimetype);
     }
 
     throw new Error(`Upload stream not implemented for ${target.provider_type}`);

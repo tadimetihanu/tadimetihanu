@@ -29,8 +29,9 @@ const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const MicrosoftStrategy = require('passport-microsoft').Strategy;
 const session = require('express-session');
+const os = require('os');
 const db = require('./db');
-const { listFiles, uploadFile } = require('./drivers/storage');
+const { listFiles, uploadFile, uploadStream } = require('./drivers/storage');
 const { encrypt, decrypt } = require('./utils/crypto');
 const { initDuckDB, runQuery, calculateCost } = require('./query/engine');
 const { suggestQuery } = require('./query/ai');
@@ -54,6 +55,38 @@ const app = express();
 app.set('trust proxy', 1);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
+const _uploadTmpDir = path.join(os.tmpdir(), 'ciq-uploads');
+try { fs.mkdirSync(_uploadTmpDir, { recursive: true }); } catch (_) {}
+const diskUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+            try { fs.mkdirSync(_uploadTmpDir, { recursive: true }); } catch (_) {}
+            cb(null, _uploadTmpDir);
+        },
+        filename: (req, file, cb) => {
+            cb(null, `up_${Date.now()}_${crypto.randomUUID()}`);
+        }
+    }),
+    limits: {
+        fileSize: 512 * 1024 * 1024,
+        files: 250,
+        fields: 500,
+        parts: 800
+    }
+});
+
+function handleMulterUpload(mw) {
+    return (req, res, next) => {
+        mw(req, res, (err) => {
+            if (err) {
+                console.error(`❌ [Multer] Upload parse error:`, err.message);
+                return res.status(400).json({ success: false, error: `Upload error: ${err.message}` });
+            }
+            next();
+        });
+    };
+}
+
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
@@ -63,7 +96,7 @@ app.use(cors({
 app.get('/api/ping', (req, res) => res.json({
     status: 'online',
     timestamp: new Date(),
-    version: '2.1.4-r2-upload-fix',
+    version: '2.1.5-folder-upload-fix',
     metadataDb: db.getStatus ? db.getStatus() : { engine: db.isPostgres ? 'postgresql' : 'sqlite' }
 }));
 app.use(express.json());
@@ -557,10 +590,58 @@ app.post('/api/admin/test-connection', authenticate, isAdmin, async (req, res) =
     }
 });
 
-app.post('/api/upload/:targetId', authenticate, checkAccess('write'), upload.array('files'), async (req, res) => {
+function _normalizeObjectKey(rawKey) {
+    const normalized = String(rawKey || '')
+        .replace(/\\/g, '/')
+        .replace(/\/+/g, '/')
+        .trim()
+        .replace(/^\/+/, '');
+    return normalized
+        .split('/')
+        .filter(seg => seg && seg !== '.' && seg !== '..')
+        .join('/');
+}
+
+async function _registerUploadedObjectInCatalog(targetId, objectKey, sizeBytes, nowIso) {
+    try {
+        const lowerKey = objectKey.toLowerCase();
+        const base = path.posix.basename(lowerKey);
+        if (!objectKey || objectKey.endsWith('/')) return;
+        if (['_success', '_metadata', '_common_metadata', 'version-hint.text'].includes(base)) return;
+        if (['.crc', '.tmp', '.pending'].some(ext => lowerKey.endsWith(ext))) return;
+        if (base.startsWith('.')) return;
+
+        let catalogPath = objectKey;
+        let ext = (objectKey.split('.').pop() || 'bin').toLowerCase();
+        const icebergMatch = objectKey.match(/^(.*?\.iceberg)(?:\/|$)/i);
+        if (icebergMatch) {
+            catalogPath = icebergMatch[1];
+            ext = 'iceberg';
+        } else {
+            const parts = objectKey.split('/');
+            if (parts.length >= 2 && (parts.includes('metadata') || parts.includes('data')) && lowerKey.includes('metadata/')) {
+                catalogPath = `${parts[0]}.iceberg`;
+                ext = 'iceberg';
+            }
+        }
+
+        const catId = crypto.createHash('md5').update(`${targetId}_${catalogPath}`).digest('hex');
+        await db.run(`
+            INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [catId, targetId, catalogPath, path.posix.basename(catalogPath), Number(sizeBytes || 0), ext, nowIso]);
+    } catch (catErr) {
+        console.warn(`[Upload Catalog Sync Notice] ${catErr.message}`);
+    }
+}
+
+app.post('/api/upload/:targetId', authenticate, checkAccess('write'), handleMulterUpload(diskUpload.array('files')), async (req, res) => {
+    const tempFiles = (req.files || []).map(f => f.path).filter(Boolean);
     try {
         const { targetId } = req.params;
-        if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No files uploaded' });
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ success: false, error: 'No files uploaded' });
+        }
 
         const relPaths = Array.isArray(req.body?.paths)
             ? req.body.paths
@@ -568,26 +649,30 @@ app.post('/api/upload/:targetId', authenticate, checkAccess('write'), upload.arr
 
         const results = [];
         const nowIso = new Date().toISOString();
-        for (let i = 0; i < req.files.length; i++) {
-            const file = req.files[i];
-            const targetKey = (relPaths[i] || file.originalname || '').trim().replace(/^\/+/, '');
-            const result = await uploadFile(targetId, targetKey, file.buffer, file.mimetype);
-            results.push(result);
 
-            // Register uploaded object in metadata_catalog so it is immediately queryable in DuckDB
-            try {
-                const catId = crypto.createHash('md5').update(`${targetId}_${result.key}`).digest('hex');
-                const ext = (result.key.toLowerCase().endsWith('.iceberg') || result.key.toLowerCase().includes('.iceberg'))
-                    ? 'iceberg'
-                    : (result.key.split('.').pop() || 'bin').toLowerCase();
-                await db.run(`
-                    INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `, [catId, targetId, result.key, path.basename(result.key), file.size || file.buffer.length || 0, ext, nowIso]);
-            } catch (catErr) {
-                console.warn(`[Upload Catalog Sync Notice] ${catErr.message}`);
+        const CONCURRENCY = 3;
+        for (let idx = 0; idx < req.files.length; idx += CONCURRENCY) {
+            const slice = req.files.slice(idx, idx + CONCURRENCY);
+            const batchResults = await Promise.all(slice.map(async (file, offset) => {
+                const i = idx + offset;
+                const targetKey = _normalizeObjectKey(relPaths[i] || file.originalname);
+                if (!targetKey) return null;
+
+                let result;
+                if ((file.size || 0) > 10 * 1024 * 1024) {
+                    result = await uploadStream(targetId, targetKey, fs.createReadStream(file.path), file.mimetype, file.size);
+                } else {
+                    const buf = fs.readFileSync(file.path);
+                    result = await uploadFile(targetId, targetKey, buf, file.mimetype);
+                }
+                await _registerUploadedObjectInCatalog(targetId, result.key || targetKey, file.size || 0, nowIso);
+                return result;
+            }));
+            for (const r of batchResults) {
+                if (r) results.push(r);
             }
         }
+
         res.json({ success: true, uploaded: results });
     } catch (err) {
         console.error(`❌ [Upload-API] Error for target ${req.params.targetId}:`, err.message);
@@ -599,6 +684,71 @@ app.post('/api/upload/:targetId', authenticate, checkAccess('write'), upload.arr
             success: false,
             error: err.message
         });
+    } finally {
+        for (const p of tempFiles) {
+            try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch (_) {}
+        }
+    }
+});
+
+app.post('/api/upload-chunk/:targetId', authenticate, checkAccess('write'), handleMulterUpload(diskUpload.single('chunk')), async (req, res) => {
+    const chunkTempPath = req.file?.path;
+    let stagingPath = null;
+    let isFinalChunk = false;
+    try {
+        const { targetId } = req.params;
+        if (!req.file) return res.status(400).json({ success: false, error: 'Missing file chunk' });
+
+        const uploadId = String(req.body?.uploadId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+        const targetKey = _normalizeObjectKey(req.body?.relativePath || req.file.originalname);
+        const chunkIndex = Number(req.body?.chunkIndex || 0);
+        const totalChunks = Number(req.body?.totalChunks || 1);
+        const totalSize = Number(req.body?.totalSize || 0);
+        const mimeType = req.body?.mimeType || req.file.mimetype || 'application/octet-stream';
+
+        if (!uploadId || !targetKey) {
+            return res.status(400).json({ success: false, error: 'Invalid chunk metadata' });
+        }
+
+        stagingPath = path.join(_uploadTmpDir, `staging_${uploadId}`);
+        if (chunkIndex === 0 && fs.existsSync(stagingPath)) {
+            try { fs.unlinkSync(stagingPath); } catch (_) {}
+        }
+
+        const chunkBuf = fs.readFileSync(chunkTempPath);
+        fs.appendFileSync(stagingPath, chunkBuf);
+
+        isFinalChunk = (chunkIndex + 1) >= totalChunks;
+        if (!isFinalChunk) {
+            return res.json({ success: true, completed: false, chunkIndex });
+        }
+
+        const stat = fs.statSync(stagingPath);
+        let result;
+        if (stat.size > 10 * 1024 * 1024) {
+            result = await uploadStream(targetId, targetKey, fs.createReadStream(stagingPath), mimeType, stat.size);
+        } else {
+            result = await uploadFile(targetId, targetKey, fs.readFileSync(stagingPath), mimeType);
+        }
+        await _registerUploadedObjectInCatalog(targetId, result.key || targetKey, totalSize || stat.size, new Date().toISOString());
+
+        res.json({ success: true, completed: true, uploaded: [result] });
+    } catch (err) {
+        console.error(`❌ [Upload-Chunk-API] Error for target ${req.params.targetId}:`, err.message);
+        if (stagingPath && fs.existsSync(stagingPath)) {
+            try { fs.unlinkSync(stagingPath); } catch (_) {}
+        }
+        res.status(err.$metadata?.httpStatusCode === 403 || /access denied/i.test(err.message) ? 403 : 500).json({
+            success: false,
+            error: err.message
+        });
+    } finally {
+        if (chunkTempPath && fs.existsSync(chunkTempPath)) {
+            try { fs.unlinkSync(chunkTempPath); } catch (_) {}
+        }
+        if (isFinalChunk && stagingPath && fs.existsSync(stagingPath)) {
+            try { fs.unlinkSync(stagingPath); } catch (_) {}
+        }
     }
 });
 
