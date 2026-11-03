@@ -11,6 +11,10 @@ services:
         value: https://app.cloudobjectiq.com
       - key: RENDER_POSTGRES_ID
         value: dpg-dbk8g0etlv9c73f5kitg-a
+      - key: AWS_REQUEST_CHECKSUM_CALCULATION
+        value: WHEN_REQUIRED
+      - key: AWS_RESPONSE_CHECKSUM_VALIDATION
+        value: WHEN_REQUIRED
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET

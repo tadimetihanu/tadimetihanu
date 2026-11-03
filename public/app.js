@@ -1060,7 +1060,13 @@ async function loadTargets() {
         if (data.success) {
             _targets = data.targets;
             renderTargets();
-            if (_targets.length > 0 && !_activeTargetId) selectTarget(_targets[0].target_id);
+            if (_targets.length > 0 && !_activeTargetId) {
+                const isRemoteHost = !['localhost', '127.0.0.1'].includes(window.location.hostname);
+                const preferred = isRemoteHost
+                    ? (_targets.find(t => t.is_active && t.endpoint && !/localhost|127\.0\.0\.1/i.test(t.endpoint)) || _targets[0])
+                    : _targets[0];
+                selectTarget(preferred.target_id);
+            }
         }
     } catch (err) {
         console.error('Failed to load targets:', err);
@@ -1878,13 +1884,24 @@ window.openProfile = async () => {
 window.uploadFiles = async (files) => {
     if (!files || files.length === 0) return;
     const status = document.getElementById('upload-status');
+    const targetId = _activeTargetId || (_targets && _targets[0] ? _targets[0].target_id : null);
+    if (!targetId) {
+        status.innerText = '❌ Error: Please select a Cloud Target first';
+        showStatus('Please select a Cloud Target first', 'error');
+        return;
+    }
+    _activeTargetId = targetId;
     status.innerText = `⏳ Uploading ${files.length} file(s)...`;
     
     const formData = new FormData();
-    for (const f of files) formData.append('files', f);
+    for (const f of files) {
+        formData.append('files', f);
+        formData.append('paths', f.webkitRelativePath || f.name);
+    }
 
+    let clearDelay = 5000;
     try {
-        const res = await fetch(`/api/upload/${_activeTargetId}`, {
+        const res = await fetch(`/api/upload/${targetId}`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${localStorage.getItem('ciq_token')}` },
             body: formData
@@ -1892,12 +1909,24 @@ window.uploadFiles = async (files) => {
         const data = await res.json();
         if (data.success) {
             status.innerText = `✅ Uploaded ${data.uploaded.length} file(s)`;
+            showStatus(`Uploaded ${data.uploaded.length} file(s)`, 'success');
             loadFiles();
         } else {
+            clearDelay = 15000;
             status.innerText = `❌ Error: ${data.error}`;
+            showStatus(data.error || 'Upload failed', 'error');
         }
-    } catch (err) { status.innerText = '❌ Request failed'; }
-    finally { setTimeout(() => status.innerText = '', 5000); }
+    } catch (err) {
+        clearDelay = 15000;
+        status.innerText = '❌ Request failed';
+        showStatus('Upload request failed', 'error');
+    } finally {
+        const fileIn = document.getElementById('file-input');
+        const folderIn = document.getElementById('folder-input');
+        if (fileIn) fileIn.value = '';
+        if (folderIn) folderIn.value = '';
+        setTimeout(() => { status.innerText = ''; }, clearDelay);
+    }
 };
 
 // ── AI Assistant ──
@@ -2052,15 +2081,19 @@ window.fillDemoGDrive = () => {
 };
 
 window.saveTarget = async (id) => {
+    const accessVal = (document.getElementById('tgt-access').value || '').trim();
+    const secretVal = (document.getElementById('tgt-secret').value || '').trim();
     const payload = {
-        target_name: document.getElementById('tgt-name').value,
-        provider_type: document.getElementById('tgt-type').value,
-        endpoint: document.getElementById('tgt-endpoint').value,
-        bucket: document.getElementById('tgt-bucket').value,
-        credentials: `${document.getElementById('tgt-access').value}:${document.getElementById('tgt-secret').value}`,
-        region: document.getElementById('tgt-region').value,
-        krb_principal: document.getElementById('tgt-principal')?.value || '',
-        krb_keytab: document.getElementById('tgt-keytab')?.value || ''
+        target_name: (document.getElementById('tgt-name').value || '').trim(),
+        provider_type: (document.getElementById('tgt-type').value || '').trim(),
+        endpoint: (document.getElementById('tgt-endpoint').value || '').trim(),
+        bucket: (document.getElementById('tgt-bucket').value || '').trim(),
+        access_key: accessVal,
+        secret_key: secretVal,
+        credentials: `${accessVal}:${secretVal}`,
+        region: (document.getElementById('tgt-region').value || '').trim(),
+        krb_principal: (document.getElementById('tgt-principal')?.value || '').trim(),
+        krb_keytab: (document.getElementById('tgt-keytab')?.value || '').trim()
     };
 
     try {

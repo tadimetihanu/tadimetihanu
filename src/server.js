@@ -63,7 +63,7 @@ app.use(cors({
 app.get('/api/ping', (req, res) => res.json({
     status: 'online',
     timestamp: new Date(),
-    version: '2.1.3-pg-metadata',
+    version: '2.1.4-r2-upload-fix',
     metadataDb: db.getStatus ? db.getStatus() : { engine: db.isPostgres ? 'postgresql' : 'sqlite' }
 }));
 app.use(express.json());
@@ -562,14 +562,43 @@ app.post('/api/upload/:targetId', authenticate, checkAccess('write'), upload.arr
         const { targetId } = req.params;
         if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No files uploaded' });
 
+        const relPaths = Array.isArray(req.body?.paths)
+            ? req.body.paths
+            : (req.body?.paths ? [req.body.paths] : []);
+
         const results = [];
-        for (const file of req.files) {
-            const result = await uploadFile(targetId, file.originalname, file.buffer, file.mimetype);
+        const nowIso = new Date().toISOString();
+        for (let i = 0; i < req.files.length; i++) {
+            const file = req.files[i];
+            const targetKey = (relPaths[i] || file.originalname || '').trim().replace(/^\/+/, '');
+            const result = await uploadFile(targetId, targetKey, file.buffer, file.mimetype);
             results.push(result);
+
+            // Register uploaded object in metadata_catalog so it is immediately queryable in DuckDB
+            try {
+                const catId = crypto.createHash('md5').update(`${targetId}_${result.key}`).digest('hex');
+                const ext = (result.key.toLowerCase().endsWith('.iceberg') || result.key.toLowerCase().includes('.iceberg'))
+                    ? 'iceberg'
+                    : (result.key.split('.').pop() || 'bin').toLowerCase();
+                await db.run(`
+                    INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                `, [catId, targetId, result.key, path.basename(result.key), file.size || file.buffer.length || 0, ext, nowIso]);
+            } catch (catErr) {
+                console.warn(`[Upload Catalog Sync Notice] ${catErr.message}`);
+            }
         }
         res.json({ success: true, uploaded: results });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(`❌ [Upload-API] Error for target ${req.params.targetId}:`, err.message);
+        logger.logError('STORAGE', `Upload failed for target ${req.params.targetId}: ${err.message}`, {
+            targetId: req.params.targetId,
+            code: err.Code || err.code || err.name
+        });
+        res.status(err.$metadata?.httpStatusCode === 403 || /access denied/i.test(err.message) ? 403 : 500).json({
+            success: false,
+            error: err.message
+        });
     }
 });
 

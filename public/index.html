@@ -329,7 +329,7 @@
                     <button class="type-chip" onclick="window.filterByType('json')">📦 JSON</button>
                 </div>
                 <ul id="browser-list" class="browser-list" style="margin-bottom: 20px;"></ul>
-                <div class="upload-area" style="border:1px dashed var(--border); border-radius:12px; padding:15px; text-align:center;">
+                <div class="upload-area" style="border:1px dashed var(--border); border-radius:12px; padding:15px; text-align:center;" ondragover="event.preventDefault(); this.style.borderColor='#0284c7';" ondragleave="this.style.borderColor='var(--border)';" ondrop="event.preventDefault(); this.style.borderColor='var(--border)'; if(event.dataTransfer && event.dataTransfer.files) uploadFiles(event.dataTransfer.files);">
                     <p style="margin: 0; font-size: 0.75rem;">Drop files to upload</p>
                     <input id="file-input" type="file" multiple style="display:none" onchange="uploadFiles(this.files)">
                     <input id="folder-input" type="file" webkitdirectory directory multiple style="display:none" onchange="uploadFiles(this.files)">

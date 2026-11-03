@@ -24,22 +24,80 @@ function _ensureProtocol(url) {
 }
 
 // ── Client Builders ─────────────────────────────────────────────
+function _isR2Target(target) {
+    const pType = (target.provider_type || '').trim().toLowerCase();
+    const ep = (target.endpoint || '').trim().toLowerCase();
+    return pType === 'r2' || pType === 'cloudflare' || ep.includes('r2.cloudflarestorage.com');
+}
+
+function _cleanBucketName(bucket) {
+    return (bucket || '').trim().replace(/^\/+|\/+$/g, '');
+}
+
 function getS3Client(target) {
-    const isR2 = target.provider_type === 'r2' || target.provider_type === 'cloudflare' || (target.endpoint || '').includes('r2.cloudflarestorage.com');
+    const isR2 = _isR2Target(target);
+    const bucketName = _cleanBucketName(target.bucket);
     let ep = (target.endpoint || '').trim().replace(/\/+$/, '');
     if (ep && !ep.startsWith('http://') && !ep.startsWith('https://')) {
-        ep = (isR2 ? 'https://' : 'http://') + ep;
+        const isLocal = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(ep);
+        ep = ((isR2 || !isLocal) ? 'https://' : 'http://') + ep;
     }
 
-    return new S3Client({
-        endpoint:    ep,
-        region:      (target.region || '').trim() || (isR2 ? 'auto' : 'us-east-1'),
+    // Strip accidental trailing /<bucket> from endpoint so forcePathStyle doesn't double the bucket path
+    if (bucketName && ep.toLowerCase().endsWith('/' + bucketName.toLowerCase())) {
+        ep = ep.slice(0, -(bucketName.length + 1)).replace(/\/+$/, '');
+    }
+
+    // Normalize virtual-hosted R2 URLs (<bucket>.<account>.r2.cloudflarestorage.com) to account root URL
+    if (isR2 && bucketName) {
+        const escapedBucket = bucketName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const vhostRe = new RegExp(`^(https?:\\/\\/)${escapedBucket}\\.([a-z0-9-]+\\.(?:eu\\.|fedramp\\.)?r2\\.cloudflarestorage\\.com)$`, 'i');
+        ep = ep.replace(vhostRe, '$1$2');
+    }
+
+    let region = (target.region || '').trim();
+    if (isR2) {
+        const validR2Regions = new Set(['auto', 'wnam', 'enam', 'weur', 'eeur', 'apac', 'oc']);
+        if (!region || !validR2Regions.has(region.toLowerCase())) {
+            region = 'auto';
+        }
+    } else if (!region) {
+        region = 'us-east-1';
+    }
+
+    const clientConfig = {
+        region,
         credentials: { 
             accessKeyId: (target.access_key || '').trim(), 
             secretAccessKey: (target.secret_key || '').trim()
         },
         forcePathStyle: true,
-    });
+        // Disable AWS SDK v3.729+ automatic CRC32 request checksums that break Cloudflare R2 & S3-compatible PutObject
+        requestChecksumCalculation: 'WHEN_REQUIRED',
+        responseChecksumValidation: 'WHEN_REQUIRED',
+    };
+    if (ep) clientConfig.endpoint = ep;
+
+    return new S3Client(clientConfig);
+}
+
+function _formatS3WriteError(err, target, bucketName) {
+    const rawMsg = (err && err.message) ? err.message : String(err);
+    const code = (err && (err.Code || err.code || err.name)) || '';
+    const status = err && err.$metadata && err.$metadata.httpStatusCode;
+    if (code === 'AccessDenied' || status === 403 || /access denied/i.test(rawMsg)) {
+        if (_isR2Target(target)) {
+            return new Error(
+                `Access Denied uploading to R2 bucket '${bucketName}' (${target.target_name}). ` +
+                `Please verify in Cloudflare Dashboard → R2 → Manage R2 API Tokens that this token has 'Object Read & Write' permission (not 'Object Read only') and is scoped to bucket '${bucketName}'.`
+            );
+        }
+        return new Error(
+            `Access Denied uploading to bucket '${bucketName}' (${target.target_name}). ` +
+            `Verify that the Access Key has write (s3:PutObject) permissions on bucket '${bucketName}'.`
+        );
+    }
+    return err;
 }
 
 function getAzureClient(target) {
@@ -93,12 +151,16 @@ async function testConnection(config) {
             return await gdrive.testConnection(config);
         } else if (config.type === 's3' || config.type === 'r2' || config.type === 'cloudflare') {
             const S3 = require('@aws-sdk/client-s3');
-            const ep = _ensureProtocol(config.endpoint);
-            const client = new S3.S3Client({
-                endpoint: ep, region: (config.type === 'r2' || config.type === 'cloudflare' ? 'auto' : 'us-east-1'), forcePathStyle: true,
-                credentials: { accessKeyId: config.credentials.split(':')[0], secretAccessKey: config.credentials.split(':')[1] }
+            const [ak = '', sk = ''] = (config.credentials || '').split(':');
+            const client = getS3Client({
+                provider_type: config.type,
+                endpoint: config.endpoint,
+                bucket: config.bucket,
+                region: config.region,
+                access_key: ak,
+                secret_key: sk
             });
-            await client.send(new S3.HeadBucketCommand({ Bucket: config.bucket }));
+            await client.send(new S3.HeadBucketCommand({ Bucket: _cleanBucketName(config.bucket) }));
             return { success: true };
         } else if (config.type === 'azure' || config.type === 'adls') {
             const Azure = require('@azure/storage-blob');
@@ -122,9 +184,9 @@ async function listFiles(targetId) {
 
     try {
         let results = [];
-        if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
+        if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare' || _isR2Target(target)) {
             const s3 = getS3Client(target);
-            const bucketName = (target.bucket || '').trim();
+            const bucketName = _cleanBucketName(target.bucket);
             let continuationToken = undefined;
             do {
                 const cmd = new ListObjectsV2Command({ Bucket: bucketName, ContinuationToken: continuationToken });
@@ -277,26 +339,39 @@ async function listFiles(targetId) {
 
 async function uploadFile(targetId, filename, buffer, mimetype) {
     const target = await getTarget(targetId);
+    const cleanKey = String(filename || '').trim().replace(/^\/+/, '');
 
-    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
+    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare' || _isR2Target(target)) {
         const s3 = getS3Client(target);
+        const bucketName = _cleanBucketName(target.bucket);
+        if (!bucketName) {
+            throw new Error(`Target '${target.target_name}' has no bucket configured. Please set a bucket name in Admin Center.`);
+        }
         const cmd = new PutObjectCommand({
-            Bucket: target.bucket, Key: filename,
-            Body: buffer, ContentType: mimetype || 'application/octet-stream',
+            Bucket: bucketName,
+            Key: cleanKey,
+            Body: buffer,
+            ContentLength: buffer ? buffer.length : undefined,
+            ContentType: mimetype || 'application/octet-stream',
         });
-        await s3.send(cmd);
-        return { bucket: target.bucket, key: filename };
+        try {
+            await s3.send(cmd);
+        } catch (err) {
+            throw _formatS3WriteError(err, target, bucketName);
+        }
+        return { bucket: bucketName, key: cleanKey };
     }
 
     if (target.provider_type === 'azure' || target.provider_type === 'adls') {
         const blobService = getAzureClient(target);
-        const containerClient = blobService.getContainerClient(target.bucket);
+        const containerName = _cleanBucketName(target.bucket);
+        const containerClient = blobService.getContainerClient(containerName);
         try { await containerClient.createIfNotExists(); } catch (e) {}
-        const blockBlob = containerClient.getBlockBlobClient(filename);
+        const blockBlob = containerClient.getBlockBlobClient(cleanKey);
         await blockBlob.upload(buffer, buffer.length, {
             blobHTTPHeaders: { blobContentType: mimetype || 'application/octet-stream' },
         });
-        return { container: target.bucket, key: filename };
+        return { container: containerName, key: cleanKey };
     }
 
     if (target.provider_type === 'databricks') {
@@ -304,7 +379,7 @@ async function uploadFile(targetId, filename, buffer, mimetype) {
         const token = target.access_key;
         let destPath = target.bucket || '/';
         if (!destPath.endsWith('/')) destPath += '/';
-        destPath += filename;
+        destPath += cleanKey;
         
         const res = await fetch(`${ep}/api/2.0/dbfs/put`, {
             method: 'POST',
@@ -326,7 +401,7 @@ async function uploadFile(targetId, filename, buffer, mimetype) {
     }
 
     if (target.provider_type === 'gdrive' || target.provider_type === 'googledrive') {
-        return await gdrive.uploadFile(target, filename, buffer, mimetype);
+        return await gdrive.uploadFile(target, cleanKey, buffer, mimetype);
     }
 
     throw new Error(`Upload not implemented for ${target.provider_type}`);
@@ -334,16 +409,18 @@ async function uploadFile(targetId, filename, buffer, mimetype) {
 
 async function uploadStream(targetId, filename, stream, mimetype, sizeHint) {
     const target = await getTarget(targetId);
+    const cleanKey = String(filename || '').trim().replace(/^\/+/, '');
 
-    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
+    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare' || _isR2Target(target)) {
         const { Upload } = require('@aws-sdk/lib-storage');
         const s3 = getS3Client(target);
+        const bucketName = _cleanBucketName(target.bucket);
         
         const parallelUploads3 = new Upload({
             client: s3,
             params: {
-                Bucket: target.bucket,
-                Key: filename,
+                Bucket: bucketName,
+                Key: cleanKey,
                 Body: stream,
                 ContentType: mimetype || 'application/octet-stream'
             },
@@ -351,8 +428,12 @@ async function uploadStream(targetId, filename, stream, mimetype, sizeHint) {
             queueSize: 4
         });
         
-        await parallelUploads3.done();
-        return { bucket: target.bucket, key: filename };
+        try {
+            await parallelUploads3.done();
+        } catch (err) {
+            throw _formatS3WriteError(err, target, bucketName);
+        }
+        return { bucket: bucketName, key: cleanKey };
     }
 
     if (target.provider_type === 'azure' || target.provider_type === 'adls') {
@@ -401,10 +482,10 @@ async function downloadFile(targetId, filename, destPath) {
         cleanFilename = cleanFilename.substring(1);
     }
 
-    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
+    if (target.provider_type === 'minio' || target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare' || _isR2Target(target)) {
         const { GetObjectCommand } = require('@aws-sdk/client-s3');
         const s3 = getS3Client(target);
-        const cmd = new GetObjectCommand({ Bucket: target.bucket, Key: cleanFilename });
+        const cmd = new GetObjectCommand({ Bucket: _cleanBucketName(target.bucket), Key: cleanFilename });
         const res = await s3.send(cmd);
         
         const destStream = fs.createWriteStream(destPath);

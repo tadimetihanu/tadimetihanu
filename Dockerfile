@@ -20,6 +20,8 @@ COPY . .
 ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_DIR=/etc/ssl/certs
+ENV AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED
+ENV AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED
 
 EXPOSE 3001
 CMD ["node", "src/server.js"]
