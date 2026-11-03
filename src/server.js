@@ -1042,6 +1042,23 @@ function heuristicRepairBinderError(sql, errorMessage) {
     repaired = repaired.replace(/\br\s*\.\s*product_id\b/gi, 's.product_id');
     repaired = repaired.replace(/\br\s*\.\s*order_id\b/gi, 's.order_id');
 
+    // Dimension attribute cross-alias typos (10M benchmark dataset):
+    // Country belongs to customers (c)
+    repaired = repaired.replace(/\br\s*\.\s*country\b/gi, 'c.country');
+    repaired = repaired.replace(/\bp\s*\.\s*country\b/gi, 'c.country');
+    repaired = repaired.replace(/\bs\s*\.\s*country\b/gi, 'c.country');
+
+    // Region name/code belongs to regions (r)
+    repaired = repaired.replace(/\bc\s*\.\s*region_name\b/gi, 'r.region_name');
+    repaired = repaired.replace(/\bs\s*\.\s*region_name\b/gi, 'r.region_name');
+    repaired = repaired.replace(/\bc\s*\.\s*region_code\b/gi, 'r.region_code');
+    repaired = repaired.replace(/\bs\s*\.\s*region_code\b/gi, 'r.region_code');
+
+    // Customer segment belongs to customers (c)
+    repaired = repaired.replace(/\br\s*\.\s*customer_segment\b/gi, 'c.customer_segment');
+    repaired = repaired.replace(/\bp\s*\.\s*customer_segment\b/gi, 'c.customer_segment');
+    repaired = repaired.replace(/\bs\s*\.\s*customer_segment\b/gi, 'c.customer_segment');
+
     // 2. Candidate bindings from DuckDB
     const tableColMatch = errorMessage.match(/Table\s+["']?([a-zA-Z0-9_]+)["']?\s+does not have a column named\s+["']?([a-zA-Z0-9_]+)["']/i);
     const candidateMatch = errorMessage.match(/Candidate bindings:\s*:?\s*["']?([a-zA-Z0-9_]+)["']?/i);
@@ -1052,7 +1069,8 @@ function heuristicRepairBinderError(sql, errorMessage) {
         const candidate = candidateMatch[1];
 
         // Never replace an ID column with a non-ID column (e.g. region_id -> signup_date)
-        const isIdMismatch = badCol.endsWith('_id') && !candidate.endsWith('_id');
+        // Never replace a non-ID column with an ID column (e.g. country -> region_id)
+        const isIdMismatch = (badCol.endsWith('_id') && !candidate.endsWith('_id')) || (!badCol.endsWith('_id') && candidate.endsWith('_id'));
         if (!isIdMismatch) {
             const qualifiedRegex = new RegExp(`\\b${tbl}\\s*\\.\\s*${badCol}\\b`, 'gi');
             repaired = repaired.replace(qualifiedRegex, `${tbl}.${candidate}`);
@@ -1062,7 +1080,7 @@ function heuristicRepairBinderError(sql, errorMessage) {
         if (colMatch) {
             const badCol = colMatch[1];
             const candidate = candidateMatch[1];
-            const isIdMismatch = badCol.endsWith('_id') && !candidate.endsWith('_id');
+            const isIdMismatch = (badCol.endsWith('_id') && !candidate.endsWith('_id')) || (!badCol.endsWith('_id') && candidate.endsWith('_id'));
             if (!isIdMismatch) {
                 const colRegex = new RegExp(`\\b${badCol}\\b`, 'gi');
                 repaired = repaired.replace(colRegex, candidate);
