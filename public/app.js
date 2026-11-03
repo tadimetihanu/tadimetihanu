@@ -101,14 +101,69 @@ window.renderTabTelemetry = (tab) => {
     if (tab.meta && meter) {
         meter.style.display = 'inline-flex';
 
-        // Live Burn: Standard on-demand workload scan burn rate ($5.00 / TiB of logical Parquet data processed)
+        // Cost Accounting Distinction:
+        // 1. onDemand: Theoretical market baseline cost ($5.00/TiB) if un-cached
+        // 2. billed: Actual out-of-pocket cloud storage egress fee for this run ($0.00 on cache hit)
+        // 3. saved: Dollar savings realized (onDemand - billed)
         const onDemand = Number(tab.meta.onDemandCostUsd !== undefined ? tab.meta.onDemandCostUsd : (tab.meta.estimatedCost || 0));
         const billed = Number(tab.meta.billedCostUsd !== undefined ? tab.meta.billedCostUsd : 0);
         const saved = Number(tab.meta.cacheSavingsUsd || Math.max(0, onDemand - billed) || 0);
 
+        const burnDot = document.getElementById('burn-pulse-dot');
+        const burnLabel = document.getElementById('burn-label-text');
+        const onDemandContainer = document.getElementById('current-ondemand-container');
+        const onDemandVal = document.getElementById('current-ondemand-val');
+
+        // Live Burn displays the ACTUAL billed fee incurred
         if (burnVal) {
-            burnVal.innerText = onDemand > 0 ? onDemand.toFixed(6) : '0.000000';
-            burnVal.title = `Standard On-Demand Query Burn: ${onDemand.toFixed(6)} USD ($5.00/TiB)`;
+            burnVal.innerText = billed.toFixed(6);
+            burnVal.title = `Actual Billed Cloud Storage Egress Fee: ${billed.toFixed(6)} USD`;
+        }
+
+        // When cached, explicitly surface the baseline On-Demand valuation (Est: $X.XXXXXX)
+        if (onDemandContainer && onDemandVal) {
+            if (saved > 0 || (billed === 0 && onDemand > 0)) {
+                onDemandContainer.style.display = 'inline-block';
+                onDemandVal.innerText = onDemand.toFixed(6);
+            } else {
+                onDemandContainer.style.display = 'none';
+            }
+        }
+
+        // Color coding: Green when 100% cached (zero bill), Amber on partial, Red on live cold burn
+        if (billed === 0 && saved > 0) {
+            meter.style.background = 'rgba(16, 185, 129, 0.08)';
+            meter.style.borderColor = 'rgba(16, 185, 129, 0.25)';
+            if (burnDot) {
+                burnDot.style.background = '#10b981';
+                burnDot.style.boxShadow = '0 0 8px rgba(16, 185, 129, 0.6)';
+            }
+            if (burnLabel) {
+                burnLabel.innerText = 'Billed';
+                burnLabel.style.color = '#059669';
+            }
+        } else if (billed > 0 && saved > 0) {
+            meter.style.background = 'rgba(245, 158, 11, 0.08)';
+            meter.style.borderColor = 'rgba(245, 158, 11, 0.25)';
+            if (burnDot) {
+                burnDot.style.background = '#f59e0b';
+                burnDot.style.boxShadow = '0 0 8px rgba(245, 158, 11, 0.6)';
+            }
+            if (burnLabel) {
+                burnLabel.innerText = 'Live Burn';
+                burnLabel.style.color = '#d97706';
+            }
+        } else {
+            meter.style.background = 'rgba(239, 68, 68, 0.08)';
+            meter.style.borderColor = 'rgba(239, 68, 68, 0.25)';
+            if (burnDot) {
+                burnDot.style.background = '#ef4444';
+                burnDot.style.boxShadow = '0 0 8px rgba(239, 68, 68, 0.6)';
+            }
+            if (burnLabel) {
+                burnLabel.innerText = 'Live Burn';
+                burnLabel.style.color = '#dc2626';
+            }
         }
 
         const formatted = window.formatScanVolume(tab.meta.logicalScannedBytes || tab.meta.estimatedScan || 0);
@@ -119,14 +174,23 @@ window.renderTabTelemetry = (tab) => {
             if (tab.meta.cacheStatus === 'HIT' || tab.meta.cacheStatus === 'LOCAL') {
                 cacheBadge.style.display = 'inline-block';
                 if (saved > 0 && billed === 0) {
+                    cacheBadge.style.background = 'rgba(16, 185, 129, 0.12)';
+                    cacheBadge.style.color = '#059669';
+                    cacheBadge.style.border = '1px solid rgba(16, 185, 129, 0.3)';
                     cacheBadge.innerText = `⚡ 100% Cached · Saved ${saved.toFixed(6)}`;
-                    cacheBadge.title = `Local SSD Cache Hit: 100% cloud egress fee waived. Net Billed: $0.000000 USD`;
+                    cacheBadge.title = `100% Cached: Served from local container SSD cache. Baseline on-demand cost (${onDemand.toFixed(6)}) waived. Net Billed: $0.000000 USD`;
                 } else if (saved > 0) {
+                    cacheBadge.style.background = 'rgba(2, 132, 199, 0.1)';
+                    cacheBadge.style.color = '#0284c7';
+                    cacheBadge.style.border = 'none';
                     cacheBadge.innerText = `⚡ Cache Hit · Saved ${saved.toFixed(6)}`;
                     cacheBadge.title = `Cache Hit: Saved ${saved.toFixed(6)} USD. Net Billed: ${billed.toFixed(6)} USD`;
                 } else {
+                    cacheBadge.style.background = 'rgba(2, 132, 199, 0.1)';
+                    cacheBadge.style.color = '#0284c7';
+                    cacheBadge.style.border = 'none';
                     cacheBadge.innerText = `⚡ SSD Cached`;
-                    cacheBadge.title = 'Served from Local Container Storage Cache';
+                    cacheBadge.title = 'Served from Local Storage Cache';
                 }
             } else {
                 cacheBadge.style.display = 'none';

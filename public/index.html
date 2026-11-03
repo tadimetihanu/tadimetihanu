@@ -643,9 +643,10 @@
                         </button>
                         <!-- Live Burn Badge grouped on the EXACT same row right next to Validate -->
                         <div id="live-burn-meter" style="display:none; align-items:center; gap:8px; background:rgba(239, 68, 68, 0.08); border:1px solid rgba(239, 68, 68, 0.25); padding:5px 12px; border-radius:999px; white-space:nowrap; flex-shrink:0;">
-                            <div style="width:8px; height:8px; background:#ef4444; border-radius:50%; box-shadow:0 0 8px rgba(239, 68, 68, 0.6); animation: burn-pulse 1.8s infinite;"></div>
-                            <div style="font-size:0.68rem; font-weight:800; color:#dc2626; text-transform:uppercase; letter-spacing:0.05em;">Live Burn</div>
+                            <div id="burn-pulse-dot" style="width:8px; height:8px; background:#ef4444; border-radius:50%; box-shadow:0 0 8px rgba(239, 68, 68, 0.6); animation: burn-pulse 1.8s infinite;"></div>
+                            <div id="burn-label-text" style="font-size:0.68rem; font-weight:800; color:#dc2626; text-transform:uppercase; letter-spacing:0.05em;">Live Burn</div>
                             <div style="font-size:0.82rem; font-weight:800; color:var(--text);">$<span id="current-burn-val">0.000000</span> <span style="font-size:0.65rem; font-weight:600; opacity:0.8;">USD</span></div>
+                            <div id="current-ondemand-container" style="font-size:0.68rem; color:var(--text-muted); display:none;" title="Standard Baseline On-Demand Cost at $5.00/TiB">(Est: $<span id="current-ondemand-val">0.000000</span>)</div>
                             <span id="current-cache-badge" style="font-size:0.68rem; font-weight:700; color:#0284c7; background:rgba(2,132,199,0.1); padding:1px 6px; border-radius:4px; display:none;">⚡ Cached</span>
                             <div style="width:1px; height:12px; background:rgba(0,0,0,0.15);"></div>
                             <div style="font-size:0.68rem; color:var(--text-muted);">Scanned: <span id="current-scan-val" style="color:var(--text); font-weight:700;">0.0</span> <span id="current-scan-unit">MB</span></div>
