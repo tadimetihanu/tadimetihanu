@@ -690,6 +690,7 @@
                     <div class="results-tabs">
                         <button id="view-tab-table" class="view-tab active" onclick="switchView('table')">📋 Table View</button>
                         <button id="view-tab-chart" class="view-tab" onclick="switchView('chart')">📊 Chart View</button>
+                        <button id="view-tab-chat" class="view-tab" onclick="switchView('chat')">💬 Chat View</button>
                     </div>
                     <div id="export-btns" style="display:none; gap:8px; align-items:center;">
                         <button class="btn btn-secondary" onclick="window.openCreateIcebergModal()" style="font-size:0.72rem; padding:5px 12px; background:rgba(2,132,199,0.1); border-color:#0284c7; color:#0284c7; font-weight:700;" title="Create/Export as an Apache Iceberg table">🧊 Save as Iceberg</button>
@@ -762,11 +763,43 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div id="chart-main-container" style="flex:1; position:relative;">
+                                <div id="chart-main-container" style="flex:1; position:relative; min-height:340px; height:340px; width:100%;">
                                     <div id="results-helper" style="display:none; height:100%; width:100%; position:absolute; top:0; left:0; z-index:5;"></div>
-                                    <canvas id="results-chart"></canvas>
+                                    <canvas id="results-chart" style="width:100%; height:100%;"></canvas>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 💬 Chat View Panel -->
+                <div id="chat-panel" style="display:none; padding:18px 24px; background:#f8fafc; border-top:1px solid var(--border);">
+                    <div style="background:#ffffff; border-radius:12px; border:1px solid #e2e8f0; display:flex; flex-direction:column; height:360px; box-shadow:0 2px 10px rgba(0,0,0,0.02); overflow:hidden;">
+                        <!-- Chat Header -->
+                        <div style="padding:12px 18px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; background:#fafafa;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="font-size:1.15rem;">💬</span>
+                                <div>
+                                    <strong style="font-size:0.9rem; color:#1e293b;">AI Data Chat</strong>
+                                    <span style="font-size:0.7rem; color:var(--text-muted); margin-left:6px; background:rgba(99,102,241,0.08); color:#6366f1; padding:2px 8px; border-radius:6px; font-weight:600;">Active Query Context</span>
+                                </div>
+                            </div>
+                            <div>
+                                <button class="btn btn-secondary" onclick="window.clearDataChat()" style="font-size:0.72rem; padding:4px 12px; border-radius:6px;">Clear</button>
+                            </div>
+                        </div>
+
+                        <!-- Chat Messages List -->
+                        <div id="data-chat-messages" style="flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; font-size:0.875rem;">
+                            <div style="background:#f1f5f9; padding:12px 16px; border-radius:10px; max-width:85%; color:#334155; line-height:1.5;">
+                                💡 <strong>AI Assistant:</strong> Hello! Ask me anything about the active query results, columns, data distribution, or ask for recommended SQL queries.
+                            </div>
+                        </div>
+
+                        <!-- Chat Input Box -->
+                        <div style="padding:12px 16px; border-top:1px solid #e2e8f0; display:flex; gap:10px; background:#ffffff;">
+                            <input id="data-chat-input" type="text" placeholder="Ask a question about this dataset or ask for insights..." style="flex:1; background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px; padding:10px 14px; font-size:0.875rem; outline:none; font-family:inherit;" onkeydown="if(event.key==='Enter') window.sendDataChat()">
+                            <button id="data-chat-send-btn" class="btn btn-primary" onclick="window.sendDataChat()" style="padding:10px 20px; font-size:0.82rem; font-weight:700;">Send</button>
                         </div>
                     </div>
                 </div>

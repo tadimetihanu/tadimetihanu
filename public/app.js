@@ -247,7 +247,9 @@ window.renderTabTelemetry = (tab) => {
     }
 
     if (tab.results && tab.results.length > 0) {
-        window.renderResults(tab.results, false);
+        _currentResultData = tab.results;
+        _filteredData = [...tab.results];
+        window.renderResults(tab.results, true);
     } else {
         const tableHead = document.getElementById('table-head');
         const tableBody = document.getElementById('table-body');
@@ -1573,10 +1575,12 @@ window.renderPowerBI = () => {
     if (!chartCanvas || !helper) return;
     if (typeof Chart === 'undefined') {
         helper.innerHTML = '🚫 Chart Engine failed to load.';
+        helper.style.display = 'flex';
         return;
     }
-    if (_filteredData.length === 0) {
+    if (!_filteredData || _filteredData.length === 0) {
         helper.style.display = 'flex';
+        helper.innerHTML = '<div style="margin:auto; text-align:center; color:var(--text-muted); padding:30px;"><span style="font-size:2rem; display:block; margin-bottom:8px;">📊</span><strong>No Query Results</strong><p style="font-size:0.8rem; margin-top:4px;">Execute a query or Ask AI to view visual charts.</p></div>';
         chartCanvas.style.visibility = 'hidden';
         return;
     }
@@ -1584,21 +1588,49 @@ window.renderPowerBI = () => {
     chartCanvas.style.visibility = 'visible';
     
     // 🧠 Smart Cardinality & Manual Override
-    const chartType = document.getElementById('pbi-chart-type').value || 'bar';
-    const groupCol  = document.getElementById('pbi-group-col').value;
-    const numericCol = document.getElementById('pbi-numeric-col').value;
+    const chartTypeEl = document.getElementById('pbi-chart-type');
+    const groupColEl  = document.getElementById('pbi-group-col');
+    const numericColEl = document.getElementById('pbi-numeric-col');
+
+    const chartType = chartTypeEl ? chartTypeEl.value : 'bar';
+    const groupCol  = groupColEl && groupColEl.value ? groupColEl.value : Object.keys(_filteredData[0])[0];
+    const numericCol = numericColEl ? numericColEl.value : 'count';
     
     const ctx = chartCanvas.getContext('2d');
     if (chartInstance) chartInstance.destroy();
     
     const agg = {};
+    let totalVal = 0;
     _filteredData.forEach(r => {
-        const key = r[groupCol] || '(Blank)';
-        const val = (numericCol && numericCol !== 'count') ? parseFloat(r[numericCol] || 0) : 1;
+        const key = r[groupCol] !== undefined && r[groupCol] !== null ? String(r[groupCol]) : '(Blank)';
+        const num = parseFloat(r[numericCol]);
+        const val = (numericCol && numericCol !== 'count' && !isNaN(num)) ? num : 1;
         agg[key] = (agg[key] || 0) + val;
+        totalVal += val;
     });
 
     const sorted = Object.entries(agg).sort((a,b) => b[1]-a[1]).slice(0, 15);
+    
+    // Auto populate KPI summary cards
+    const kpiContainer = document.getElementById('pbi-kpi-cards');
+    if (kpiContainer) {
+        const isSum = numericCol && numericCol !== 'count';
+        kpiContainer.innerHTML = `
+            <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:10px 16px; min-width:140px; box-shadow:0 1px 4px rgba(0,0,0,0.03);">
+                <span style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Rows Analyzed</span>
+                <div style="font-size:1.25rem; font-weight:800; color:#1e293b; margin-top:2px;">${_filteredData.length.toLocaleString()}</div>
+            </div>
+            <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:10px 16px; min-width:140px; box-shadow:0 1px 4px rgba(0,0,0,0.03);">
+                <span style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Categories (${groupCol})</span>
+                <div style="font-size:1.25rem; font-weight:800; color:#6366f1; margin-top:2px;">${Object.keys(agg).length.toLocaleString()}</div>
+            </div>
+            <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:10px 16px; min-width:140px; box-shadow:0 1px 4px rgba(0,0,0,0.03);">
+                <span style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">${isSum ? 'Total ' + numericCol : 'Record Count'}</span>
+                <div style="font-size:1.25rem; font-weight:800; color:#10b981; margin-top:2px;">${isSum ? totalVal.toLocaleString(undefined, {maximumFractionDigits: 2}) : totalVal.toLocaleString()}</div>
+            </div>
+        `;
+    }
+
     chartInstance = new Chart(ctx, {
         type: chartType,
         data: {
@@ -1624,45 +1656,178 @@ window.renderPowerBI = () => {
 };
 
 window.initPowerBI = () => {
-    if (!_currentResultData || _currentResultData.length === 0) return;
+    if ((!_currentResultData || _currentResultData.length === 0) && _notebooks[_activeTabIdx]?.results) {
+        _currentResultData = _notebooks[_activeTabIdx].results;
+        _filteredData = [..._currentResultData];
+    }
+    const helper = document.getElementById('results-helper');
+    const chartCanvas = document.getElementById('results-chart');
+    if (!_currentResultData || _currentResultData.length === 0) {
+        if (helper) {
+            helper.style.display = 'flex';
+            helper.innerHTML = '<div style="margin:auto; text-align:center; color:var(--text-muted); padding:30px;"><span style="font-size:2rem; display:block; margin-bottom:8px;">📊</span><strong>No Query Results</strong><p style="font-size:0.8rem; margin-top:4px;">Execute a query or Ask AI to view visual charts.</p></div>';
+        }
+        if (chartCanvas) chartCanvas.style.visibility = 'hidden';
+        return;
+    }
+    if (helper) helper.style.display = 'none';
+    if (chartCanvas) chartCanvas.style.visibility = 'visible';
+
     const cols = Object.keys(_currentResultData[0]);
     
     // 🧪 Smart Cardinality Sensing
     const dimensionSelect = document.getElementById('pbi-group-col');
     const measureSelect = document.getElementById('pbi-numeric-col');
     
-    // Find best categorical dimension (Must have > 1 unique value to be color-diverse)
     const candidates = cols.filter(c => {
         const uniqueCount = new Set(_currentResultData.map(r => r[c])).size;
         return uniqueCount > 1; 
     });
     
-    dimensionSelect.innerHTML = candidates.map(c => `<option value="${c}">${c}</option>`).join('') || 
-                               cols.map(c => `<option value="${c}">${c}</option>`).join('');
+    if (dimensionSelect) {
+        const validCandidates = candidates.length > 0 ? candidates : cols;
+        dimensionSelect.innerHTML = validCandidates.map(c => `<option value="${c}">${c}</option>`).join('');
+        const bestDim = candidates.find(c => typeof _currentResultData[0][c] === 'string' && !c.toLowerCase().includes('id')) || candidates[0] || cols[0];
+        if (bestDim) dimensionSelect.value = bestDim;
+    }
     
-    // Find numeric measures
-    const numericCols = cols.filter(c => typeof _currentResultData[0][c] === 'number');
-    measureSelect.innerHTML = `<option value="count">Record Count</option>` + 
-                              numericCols.map(c => `<option value="${c}">Sum of ${c}</option>`).join('');
+    const numericCols = cols.filter(c => {
+        const val = _currentResultData[0][c];
+        return typeof val === 'number' || (!isNaN(parseFloat(val)) && isFinite(val));
+    });
 
-    // Default Smart Pick
-    const bestDim = candidates.find(c => typeof _currentResultData[0][c] === 'string' && !c.toLowerCase().includes('id')) || candidates[0] || cols[0];
-    dimensionSelect.value = bestDim;
+    if (measureSelect) {
+        measureSelect.innerHTML = `<option value="count">Record Count</option>` + 
+                                  numericCols.map(c => `<option value="${c}">Sum of ${c}</option>`).join('');
+        if (numericCols.length > 0) measureSelect.value = numericCols[0];
+    }
     
     const categorical = cols.filter(c => new Set(_currentResultData.map(r=>r[c])).size < 20 && typeof _currentResultData[0][c] === 'string');
     const filterContainer = document.getElementById('pbi-filters');
     if (filterContainer) {
-        filterContainer.innerHTML = categorical.map(c => `<div style="margin-bottom:12px;"><label style="font-size:0.75rem; font-weight:800;">${c}</label><select style="width:100%; padding:8px; border-radius:8px; border:1px solid var(--border); background:var(--glass);" onchange="window.applySlicers('${c}', this.value)"><option value="">All</option>${Array.from(new Set(_currentResultData.map(r=>r[c]))).map(v=>`<option value="${v}">${v}</option>`).join('')}</select></div>`).join('');
+        if (categorical.length > 0) {
+            filterContainer.innerHTML = categorical.map(c => `<div style="margin-bottom:12px;"><label style="font-size:0.75rem; font-weight:800;">${c}</label><select style="width:100%; padding:8px; border-radius:8px; border:1px solid var(--border); background:var(--glass);" onchange="window.applySlicers('${c}', this.value)"><option value="">All</option>${Array.from(new Set(_currentResultData.map(r=>r[c]))).map(v=>`<option value="${v}">${v}</option>`).join('')}</select></div>`).join('');
+        } else {
+            filterContainer.innerHTML = '<div style="font-size:0.75rem; color:var(--text-muted); font-style:italic;">No categorical slicers found.</div>';
+        }
     }
     window.renderPowerBI();
 };
 
 window.switchView = (view) => {
-    document.getElementById('view-tab-table').classList.toggle('active', view === 'table');
-    document.getElementById('view-tab-chart').classList.toggle('active', view === 'chart');
-    document.getElementById('table-container').style.display = view === 'table' ? 'block' : 'none';
-    document.getElementById('chart-panel').style.display = view === 'chart' ? 'block' : 'none';
+    const tableTab = document.getElementById('view-tab-table');
+    const chartTab = document.getElementById('view-tab-chart');
+    const chatTab  = document.getElementById('view-tab-chat');
+
+    if (tableTab) tableTab.classList.toggle('active', view === 'table');
+    if (chartTab) chartTab.classList.toggle('active', view === 'chart');
+    if (chatTab)  chatTab.classList.toggle('active', view === 'chat');
+
+    const tableContainer = document.getElementById('table-container');
+    const chartPanel     = document.getElementById('chart-panel');
+    const chatPanel      = document.getElementById('chat-panel');
+
+    if (tableContainer) tableContainer.style.display = view === 'table' ? 'block' : 'none';
+    if (chartPanel)     chartPanel.style.display     = view === 'chart' ? 'block' : 'none';
+    if (chatPanel)      chatPanel.style.display      = view === 'chat'  ? 'block' : 'none';
+
     if (view === 'chart') window.initPowerBI();
+    if (view === 'chat') {
+        const input = document.getElementById('data-chat-input');
+        if (input) setTimeout(() => input.focus(), 80);
+    }
+};
+
+// ── 💬 Interactive Data Chat View ──
+window.clearDataChat = () => {
+    const box = document.getElementById('data-chat-messages');
+    if (box) {
+        box.innerHTML = `<div style="background:#f1f5f9; padding:10px 14px; border-radius:10px; max-width:85%; color:#334155; line-height:1.5;">
+            💡 <strong>AI Assistant:</strong> Chat cleared. Ask me any question about your active query, dataset, or SQL metrics!
+        </div>`;
+    }
+};
+
+window.sendDataChat = async () => {
+    const input = document.getElementById('data-chat-input');
+    const msg = input ? input.value.trim() : '';
+    if (!msg) return;
+
+    const messagesBox = document.getElementById('data-chat-messages');
+    if (!messagesBox) return;
+
+    messagesBox.innerHTML += `
+        <div style="background:#111827; color:white; padding:10px 14px; border-radius:10px; max-width:80%; align-self:flex-end; font-size:0.85rem; line-height:1.4;">
+            <strong>You:</strong> ${msg.replace(/</g, '&lt;').replace(/>/g, '&gt;')}
+        </div>
+    `;
+    input.value = '';
+    messagesBox.scrollTop = messagesBox.scrollHeight;
+
+    const sendBtn = document.getElementById('data-chat-send-btn');
+    if (sendBtn) {
+        sendBtn.disabled = true;
+        sendBtn.innerText = '...';
+    }
+
+    const typingId = 'typing-' + Date.now();
+    messagesBox.innerHTML += `
+        <div id="${typingId}" style="background:#f1f5f9; padding:10px 14px; border-radius:10px; max-width:85%; color:#64748b; font-style:italic; font-size:0.83rem;">
+            🤖 AI is analyzing data...
+        </div>
+    `;
+    messagesBox.scrollTop = messagesBox.scrollHeight;
+
+    try {
+        const currentSql = document.getElementById('query-editor')?.value || '';
+        const sampleRows = (_currentResultData || []).slice(0, 5);
+        const contextStr = sampleRows.length > 0 ? `\nSample Data:\n${JSON.stringify(sampleRows, null, 2)}` : '';
+        const targetId = _activeTargetId || (_targets && _targets[0] ? _targets[0].target_id : 'default');
+
+        const promptText = `User Question: ${msg}\nCurrent SQL Query: ${currentSql}${contextStr}\nPlease answer clearly and provide insights or SQL queries as needed.`;
+
+        const data = await apiFetch(`/api/ai-suggest/${targetId}`, {
+            method: 'POST',
+            body: JSON.stringify({
+                prompt: promptText,
+                currentSql,
+                selectedFile: _selectedFile,
+                activeFormat: _activeTypeFilter
+            })
+        });
+
+        const typingEl = document.getElementById(typingId);
+        if (typingEl) typingEl.remove();
+
+        let aiReply = '';
+        if (data.success && data.sql) {
+            aiReply = `I generated the following SQL query for your question:\n\n` + data.sql;
+        } else if (data.answer) {
+            aiReply = data.answer;
+        } else {
+            aiReply = data.error || "I analyzed your dataset and query context. Let me know if you would like me to generate a specific SQL query or calculation!";
+        }
+
+        messagesBox.innerHTML += `
+            <div style="background:#f1f5f9; color:#1e293b; padding:12px 16px; border-radius:10px; max-width:85%; font-size:0.85rem; line-height:1.5;">
+                🤖 <strong>AI Assistant:</strong><br><div style="white-space:pre-wrap; margin-top:4px;">${aiReply.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+            </div>
+        `;
+    } catch (err) {
+        const typingEl = document.getElementById(typingId);
+        if (typingEl) typingEl.remove();
+        messagesBox.innerHTML += `
+            <div style="background:#fee2e2; color:#b91c1c; padding:10px 14px; border-radius:10px; max-width:85%; font-size:0.83rem;">
+                ❌ Error: ${err.message || 'Request failed'}
+            </div>
+        `;
+    } finally {
+        if (sendBtn) {
+            sendBtn.disabled = false;
+            sendBtn.innerText = 'Send';
+        }
+        messagesBox.scrollTop = messagesBox.scrollHeight;
+    }
 };
 
 // ── Export Results ──
