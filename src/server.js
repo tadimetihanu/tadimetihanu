@@ -1047,10 +1047,12 @@ function heuristicRepairBinderError(sql, errorMessage) {
     repaired = repaired.replace(/\br\s*\.\s*country\b/gi, 'c.country');
     repaired = repaired.replace(/\bp\s*\.\s*country\b/gi, 'c.country');
     repaired = repaired.replace(/\bs\s*\.\s*country\b/gi, 'c.country');
+    repaired = repaired.replace(/\bo\s*\.\s*country\b/gi, 'c.country');
 
     // Region name/code belongs to regions (r)
     repaired = repaired.replace(/\bc\s*\.\s*region_name\b/gi, 'r.region_name');
     repaired = repaired.replace(/\bs\s*\.\s*region_name\b/gi, 'r.region_name');
+    repaired = repaired.replace(/\bo\s*\.\s*region_name\b/gi, 'r.region_name');
     repaired = repaired.replace(/\bc\s*\.\s*region_code\b/gi, 'r.region_code');
     repaired = repaired.replace(/\bs\s*\.\s*region_code\b/gi, 'r.region_code');
 
