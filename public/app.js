@@ -1160,11 +1160,17 @@ window.executeQuery = async function() {
         if (data.success) {
             const rowsCount = data.data ? data.data.length : 0;
             const dur = data.meta ? data.meta.duration : 0;
-            const successText = `✅ Success: ${rowsCount} rows returned. (${dur}ms)`;
+            let successText = `✅ Success: ${rowsCount} rows returned. (${dur}ms)`;
+            if (data.isFixed && data.fixedSql) {
+                successText = `✨ Auto-healed typo: ${rowsCount} rows returned. (${dur}ms)`;
+                if (window.editor && typeof window.editor.setValue === 'function' && _notebooks[_activeTabIdx]?.id === targetTabId) {
+                    window.editor.setValue(data.fixedSql);
+                }
+            }
 
             if (destTab) {
                 destTab.results = data.data;
-                destTab.sql = sql;
+                destTab.sql = data.fixedSql || sql;
                 destTab.meta = data.meta;
                 destTab.statusText = successText;
             }
