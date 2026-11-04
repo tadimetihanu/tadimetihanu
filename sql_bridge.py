@@ -38,7 +38,6 @@ def translate_query(sql, spark):
             df = spark.read.parquet(path)
         df.createOrReplaceTempView(view_name)
         
-        # Careful replacement to avoid partial matches
         pattern = rf"read_{fmt}\s*\(\s*'{re.escape(path if '@' not in path else matches[i][1])}'\s*\)"
         new_sql = re.sub(pattern, view_name, new_sql, flags=re.IGNORECASE)
     
@@ -65,13 +64,18 @@ def main():
         print("❌ Error: No SQL query provided. Use --sql \"query\"")
         sys.exit(1)
 
-    print("🔧 Initializing SparkSession...")
+    print("🔧 Initializing lightweight SparkSession for 512MB container...")
     builder = (SparkSession.builder
                .appName("CloudObjectIQ_SQL_Grid_Bridge")
-               .config("spark.sql.shuffle.partitions", "2")
-               .config("spark.default.parallelism", "2")
-               .config("spark.driver.memory", "256m")
-               .config("spark.executor.memory", "256m"))
+               .config("spark.driver.memory", "192m")
+               .config("spark.executor.memory", "192m")
+               .config("spark.memory.fraction", "0.4")
+               .config("spark.memory.storageFraction", "0.2")
+               .config("spark.sql.shuffle.partitions", "1")
+               .config("spark.default.parallelism", "1")
+               .config("spark.ui.enabled", "false")
+               .config("spark.driver.extraJavaOptions", "-XX:+UseSerialGC -XX:MaxRAM=200m")
+               .config("spark.executor.extraJavaOptions", "-XX:+UseSerialGC -XX:MaxRAM=200m"))
     
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("WARN")

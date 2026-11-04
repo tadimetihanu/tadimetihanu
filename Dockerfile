@@ -13,13 +13,14 @@ RUN apt-get update && apt-get install -y \
 # Symlink python to python3 if missing
 RUN ln -sf /usr/bin/python3 /usr/bin/python || true
 
-# Set Java & Spark environment variables
+# Set Java & Spark environment variables tuned for 512MB RAM containers
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
+ENV _JAVA_OPTIONS="-Xms64m -Xmx200m -XX:+UseSerialGC -XX:MaxRAM=220m"
 ENV SPARK_LOCAL_IP="127.0.0.1"
 ENV PYSPARK_PYTHON=/usr/bin/python3
 ENV PYSPARK_DRIVER_PYTHON=/usr/bin/python3
-ENV PYSPARK_SUBMIT_ARGS="--driver-memory 256m --executor-memory 256m pyspark-shell"
+ENV PYSPARK_SUBMIT_ARGS="--driver-memory 192m --executor-memory 192m pyspark-shell"
 
 COPY package*.json ./
 RUN npm install
@@ -41,7 +42,7 @@ ENV SSL_CERT_DIR=/etc/ssl/certs
 ENV AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED
 ENV AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED
 ENV MALLOC_ARENA_MAX=2
-ENV NODE_OPTIONS="--max-semi-space-size=4 --expose-gc"
+ENV NODE_OPTIONS="--max-old-space-size=160 --max-semi-space-size=4 --expose-gc"
 
 RUN mkdir -p /app/data/.duckdb_spill /app/data/.parquet_cache /app/data/.upload_tmp
 
