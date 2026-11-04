@@ -1717,117 +1717,17 @@ window.initPowerBI = () => {
 window.switchView = (view) => {
     const tableTab = document.getElementById('view-tab-table');
     const chartTab = document.getElementById('view-tab-chart');
-    const chatTab  = document.getElementById('view-tab-chat');
 
     if (tableTab) tableTab.classList.toggle('active', view === 'table');
     if (chartTab) chartTab.classList.toggle('active', view === 'chart');
-    if (chatTab)  chatTab.classList.toggle('active', view === 'chat');
 
     const tableContainer = document.getElementById('table-container');
     const chartPanel     = document.getElementById('chart-panel');
-    const chatPanel      = document.getElementById('chat-panel');
 
     if (tableContainer) tableContainer.style.display = view === 'table' ? 'block' : 'none';
     if (chartPanel)     chartPanel.style.display     = view === 'chart' ? 'block' : 'none';
-    if (chatPanel)      chatPanel.style.display      = view === 'chat'  ? 'block' : 'none';
 
     if (view === 'chart') window.initPowerBI();
-    if (view === 'chat') {
-        const input = document.getElementById('data-chat-input');
-        if (input) setTimeout(() => input.focus(), 80);
-    }
-};
-
-// ── 💬 Interactive Data Chat View ──
-window.clearDataChat = () => {
-    const box = document.getElementById('data-chat-messages');
-    if (box) {
-        box.innerHTML = `<div style="background:#f1f5f9; padding:10px 14px; border-radius:10px; max-width:85%; color:#334155; line-height:1.5;">
-            💡 <strong>AI Assistant:</strong> Chat cleared. Ask me any question about your active query, dataset, or SQL metrics!
-        </div>`;
-    }
-};
-
-window.sendDataChat = async () => {
-    const input = document.getElementById('data-chat-input');
-    const msg = input ? input.value.trim() : '';
-    if (!msg) return;
-
-    const messagesBox = document.getElementById('data-chat-messages');
-    if (!messagesBox) return;
-
-    messagesBox.innerHTML += `
-        <div style="background:#111827; color:white; padding:10px 14px; border-radius:10px; max-width:80%; align-self:flex-end; font-size:0.85rem; line-height:1.4;">
-            <strong>You:</strong> ${msg.replace(/</g, '&lt;').replace(/>/g, '&gt;')}
-        </div>
-    `;
-    input.value = '';
-    messagesBox.scrollTop = messagesBox.scrollHeight;
-
-    const sendBtn = document.getElementById('data-chat-send-btn');
-    if (sendBtn) {
-        sendBtn.disabled = true;
-        sendBtn.innerText = '...';
-    }
-
-    const typingId = 'typing-' + Date.now();
-    messagesBox.innerHTML += `
-        <div id="${typingId}" style="background:#f1f5f9; padding:10px 14px; border-radius:10px; max-width:85%; color:#64748b; font-style:italic; font-size:0.83rem;">
-            🤖 AI is analyzing data...
-        </div>
-    `;
-    messagesBox.scrollTop = messagesBox.scrollHeight;
-
-    try {
-        const currentSql = document.getElementById('query-editor')?.value || '';
-        const sampleRows = (_currentResultData || []).slice(0, 5);
-        const contextStr = sampleRows.length > 0 ? `\nSample Data:\n${JSON.stringify(sampleRows, null, 2)}` : '';
-        const targetId = _activeTargetId || (_targets && _targets[0] ? _targets[0].target_id : 'default');
-
-        const promptText = `User Question: ${msg}\nCurrent SQL Query: ${currentSql}${contextStr}\nPlease answer clearly and provide insights or SQL queries as needed.`;
-
-        const data = await apiFetch(`/api/ai-suggest/${targetId}`, {
-            method: 'POST',
-            body: JSON.stringify({
-                prompt: promptText,
-                currentSql,
-                selectedFile: _selectedFile,
-                activeFormat: _activeTypeFilter
-            })
-        });
-
-        const typingEl = document.getElementById(typingId);
-        if (typingEl) typingEl.remove();
-
-        let aiReply = '';
-        if (data.success && data.sql) {
-            aiReply = `I generated the following SQL query for your question:\n\n` + data.sql;
-        } else if (data.answer) {
-            aiReply = data.answer;
-        } else {
-            aiReply = data.error || "I analyzed your dataset and query context. Let me know if you would like me to generate a specific SQL query or calculation!";
-        }
-
-        messagesBox.innerHTML += `
-            <div style="background:#f1f5f9; color:#1e293b; padding:12px 16px; border-radius:10px; max-width:85%; font-size:0.85rem; line-height:1.5;">
-                🤖 <strong>AI Assistant:</strong><br><div style="white-space:pre-wrap; margin-top:4px;">${aiReply.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
-            </div>
-        `;
-    } catch (err) {
-        const typingEl = document.getElementById(typingId);
-        if (typingEl) typingEl.remove();
-        messagesBox.innerHTML += `
-            <div style="background:#fee2e2; color:#b91c1c; padding:10px 14px; border-radius:10px; max-width:85%; font-size:0.83rem;">
-                ❌ Error: ${err.message || 'Request failed'}
-            </div>
-        `;
-    } finally {
-        if (sendBtn) {
-            sendBtn.disabled = false;
-            sendBtn.innerText = 'Send';
-        }
-        messagesBox.scrollTop = messagesBox.scrollHeight;
-    }
 };
 
 // ── Export Results ──
