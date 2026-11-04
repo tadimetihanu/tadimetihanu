@@ -84,8 +84,8 @@ def main():
                .config("spark.sql.shuffle.partitions", "1")
                .config("spark.default.parallelism", "1")
                .config("spark.ui.enabled", "false")
-               .config("spark.driver.extraJavaOptions", "-Dspark.testing.memory=471859200 -XX:+UseSerialGC -XX:MaxRAM=250m")
-               .config("spark.executor.extraJavaOptions", "-Dspark.testing.memory=471859200 -XX:+UseSerialGC -XX:MaxRAM=250m"))
+               .config("spark.driver.extraJavaOptions", "-XX:+UseSerialGC -XX:MaxRAM=250m")
+               .config("spark.executor.extraJavaOptions", "-XX:+UseSerialGC -XX:MaxRAM=250m"))
     
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
