@@ -1774,6 +1774,16 @@ app.post('/api/admin/spark/submit', authenticate, async (req, res) => {
                 conf['spark.hadoop.fs.s3a.impl'] = 'org.apache.hadoop.fs.s3a.S3AFileSystem';
                 conf['spark.hadoop.fs.s3a.connection.ssl.enabled'] = 'false';
                 conf['spark.hadoop.fs.s3a.aws.credentials.provider'] = 'org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider';
+            } else if (target && (target.provider_type === 's3' || target.provider_type === 'r2')) {
+                const endpoint = target.endpoint || (target.provider_type === 'r2' ? 'https://r2.cloudflarestorage.com' : 'https://s3.amazonaws.com');
+                conf['spark.hadoop.fs.s3a.endpoint'] = endpoint;
+                conf['spark.hadoop.fs.s3a.endpoint.region'] = target.region || 'us-east-1';
+                conf['spark.hadoop.fs.s3a.access.key'] = target.access_key || '';
+                conf['spark.hadoop.fs.s3a.secret.key'] = target.secret_key || '';
+                conf['spark.hadoop.fs.s3a.path.style.access'] = 'true';
+                conf['spark.hadoop.fs.s3a.impl'] = 'org.apache.hadoop.fs.s3a.S3AFileSystem';
+                conf['spark.hadoop.fs.s3a.connection.ssl.enabled'] = 'true';
+                conf['spark.hadoop.fs.s3a.aws.credentials.provider'] = 'org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider';
             }
         }
 

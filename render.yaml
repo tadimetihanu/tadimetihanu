@@ -19,10 +19,19 @@ services:
         value: "2"
       - key: NODE_OPTIONS
         value: "--max-semi-space-size=4 --expose-gc"
+      - key: JAVA_HOME
+        value: "/usr/lib/jvm/java-17-openjdk-amd64"
+      - key: SPARK_LOCAL_IP
+        value: "127.0.0.1"
+      - key: PYSPARK_PYTHON
+        value: "/usr/bin/python3"
+      - key: PYSPARK_DRIVER_PYTHON
+        value: "/usr/bin/python3"
+      - key: PYSPARK_SUBMIT_ARGS
+        value: "--driver-memory 256m --executor-memory 256m pyspark-shell"
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: SESSION_SECRET
         generateValue: true
-

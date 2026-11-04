@@ -1,59 +1,93 @@
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
 /**
  * Spark Job Submission Service
  * Handles executing spark-submit commands from the CloudObjectIQ dashboard.
+ * Supports both:
+ * 1. Embedded PySpark execution on Render / cloud containers (no Docker daemon)
+ * 2. Distributed spark-master execution on local Docker-in-Docker environments
  */
 function submitSparkJob(params) {
     return new Promise((resolve, reject) => {
         const { master, deployMode, className, jarPath, conf, args } = params;
 
-        // 🐳 Reroute through Docker since spark-submit isn't on host PATH
-        // 💡 Translate 'localhost' to 'spark-master' because we are now running INSIDE the container network
-        const dockerMaster = (master || 'spark://spark-master:7077')
-            .replace('localhost', 'spark-master')
-            .replace('127.0.0.1', 'spark-master');
-
-        const finalJarPath = jarPath.replace(/^s3:\/\//, 's3a://');
-        
-        const dockerArgs = [
-            'exec',
-            '-u', 'root',
-            'spark-master',
-            '/opt/spark/bin/spark-submit',
-            '--master', dockerMaster,
-            '--deploy-mode', deployMode || 'client',
-            '--conf', 'spark.driver.host=spark-master'
-        ];
-
-        if (className) {
-            dockerArgs.push('--class', className);
+        // Detect if a live Docker daemon is accessible
+        let useDocker = false;
+        if (fs.existsSync('/var/run/docker.sock')) {
+            try {
+                execSync('docker ps', { stdio: 'ignore', timeout: 2000 });
+                useDocker = true;
+            } catch (e) {
+                useDocker = false;
+            }
         }
 
-        // Add standard packages for Azure and AWS
-        dockerArgs.push('--packages', 'org.apache.hadoop:hadoop-azure:3.3.4,com.microsoft.azure:azure-storage:8.6.6,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262');
+        const rawScript = jarPath ? jarPath.trim() : '/app/sql_bridge.py';
+        let cmd = '';
+        let cmdArgs = [];
+        let procEnv = { ...process.env };
 
-        // Add configurations
-        if (conf) {
-            Object.entries(conf).forEach(([k, v]) => {
-                dockerArgs.push('--conf', `${k}=${v}`);
-            });
+        if (useDocker) {
+            // Local Docker-in-Docker Mode (spark-master container)
+            const dockerMaster = (master || 'spark://spark-master:7077')
+                .replace('localhost', 'spark-master')
+                .replace('127.0.0.1', 'spark-master');
+
+            const finalJarPath = rawScript.replace(/^s3:\/\//, 's3a://');
+            
+            cmd = 'docker';
+            cmdArgs = [
+                'exec',
+                '-u', 'root',
+                'spark-master',
+                '/opt/spark/bin/spark-submit',
+                '--master', dockerMaster,
+                '--deploy-mode', deployMode || 'client',
+                '--conf', 'spark.driver.host=spark-master',
+                '--packages', 'org.apache.hadoop:hadoop-azure:3.3.4,com.microsoft.azure:azure-storage:8.6.6,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262'
+            ];
+
+            if (className) {
+                cmdArgs.push('--class', className);
+            }
+
+            if (conf) {
+                Object.entries(conf).forEach(([k, v]) => {
+                    cmdArgs.push('--conf', `${k}=${v}`);
+                });
+            }
+
+            cmdArgs.push(finalJarPath);
+        } else {
+            // Embedded PySpark Mode on Render / Cloud Container
+            let resolvedScript = rawScript;
+            if (!fs.existsSync(resolvedScript)) {
+                const localBridge = path.join(process.cwd(), 'sql_bridge.py');
+                if (fs.existsSync(localBridge)) {
+                    resolvedScript = localBridge;
+                }
+            }
+
+            cmd = 'python3';
+            cmdArgs = [resolvedScript];
+
+            if (conf) {
+                procEnv.SPARK_HADOOP_CONF_JSON = JSON.stringify(conf);
+            }
+            procEnv.SPARK_LOCAL_IP = '127.0.0.1';
+            procEnv.PYSPARK_PYTHON = procEnv.PYSPARK_PYTHON || 'python3';
+            procEnv.PYSPARK_DRIVER_PYTHON = procEnv.PYSPARK_DRIVER_PYTHON || 'python3';
+            procEnv.PYSPARK_SUBMIT_ARGS = procEnv.PYSPARK_SUBMIT_ARGS || '--driver-memory 256m --executor-memory 256m pyspark-shell';
         }
 
-        // Script path
-        dockerArgs.push(finalJarPath);
-        
-        // Handle arguments properly (flattening space-delimited strings in arrays)
+        // Handle arguments properly
         if (args) {
             let rawArgs = [];
-            
-            // If it's an array of strings, some strings might contain multiple arguments (sh-style)
             if (Array.isArray(args)) {
                 rawArgs = args.flatMap(a => {
                     if (typeof a !== 'string') return [a];
-                    // Regex helps split by space while keeping quoted strings together (supports escaped quotes)
                     return a.match(/(?:[^\s"]+|"(?:\\.|[^"\\])*")+/gs) || [a];
                 });
             } else {
@@ -62,22 +96,19 @@ function submitSparkJob(params) {
 
             rawArgs.forEach(a => {
                 if (typeof a !== 'string') {
-                    dockerArgs.push(String(a));
+                    cmdArgs.push(String(a));
                     return;
                 }
-                
                 let clean = a.trim();
-                // Strip redundant shell quotes
                 if (clean.startsWith('"') && clean.endsWith('"')) clean = clean.substring(1, clean.length - 1);
                 if (clean.startsWith("'") && clean.endsWith("'")) clean = clean.substring(1, clean.length - 1);
-                
-                dockerArgs.push(clean.replace(/^s3:\/\//, 's3a://'));
+                cmdArgs.push(clean.replace(/^s3:\/\//, 's3a://'));
             });
         }
 
-        console.log(`🚀 [Spark-Wrapper] Executing: docker ${dockerArgs.join(' ')}`);
+        console.log(`🚀 [Spark] Executing: ${cmd} ${cmdArgs.join(' ')} (Engine mode: ${useDocker ? 'docker-cluster' : 'embedded-pyspark'})`);
 
-        const sparkProcess = spawn('docker', dockerArgs);
+        const sparkProcess = spawn(cmd, cmdArgs, { env: procEnv });
         let outputData = '';
         let errorData = '';
 
@@ -93,13 +124,23 @@ function submitSparkJob(params) {
             process.stderr.write(`[Spark-Error] ${str}`);
         });
 
+        sparkProcess.on('error', (err) => {
+            console.error('❌ Failed to start Spark process:', err);
+            resolve({
+                success: false,
+                message: `Failed to spawn Spark engine (${cmd}): ${err.message}`,
+                output: err.message,
+                data: []
+            });
+        });
+
         sparkProcess.on('close', (code) => {
             if (code !== 0) {
                 console.error(`❌ Spark job failed with exit code ${code}`);
                 return resolve({
                     success: false,
                     message: `Spark job failed with exit code ${code}`,
-                    output: errorData,
+                    output: errorData || outputData,
                     data: []
                 });
             }
@@ -112,15 +153,21 @@ function submitSparkJob(params) {
                 data: []
             };
             
-            // Try to read the exported results for the UI table if it exists
-            const resultPath = path.join(process.cwd(), 'data', 'spark_result.json');
-            if (fs.existsSync(resultPath)) {
-                try {
-                    const data = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
-                    result.data = data;
-                    fs.unlinkSync(resultPath);
-                } catch (e) {
-                    console.error('❌ Failed to parse Spark result JSON:', e);
+            // Try to read exported results for UI
+            const candidatePaths = [
+                path.join(process.cwd(), 'data', 'spark_result.json'),
+                '/app/data/spark_result.json'
+            ];
+            for (const resultPath of candidatePaths) {
+                if (fs.existsSync(resultPath)) {
+                    try {
+                        const data = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+                        result.data = data;
+                        fs.unlinkSync(resultPath);
+                        break;
+                    } catch (e) {
+                        console.error('❌ Failed to parse Spark result JSON:', e);
+                    }
                 }
             }
 

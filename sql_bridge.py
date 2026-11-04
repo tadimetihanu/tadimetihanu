@@ -11,12 +11,11 @@ def translate_query(sql, spark):
     sql = sql.replace('az://', 'wasbs://').replace('s3://', 's3a://')
     
     # Extract account for wasbs expansion if needed
-    # We look for the first account key in the config to guess the target account
     conf = spark.sparkContext.getConf().getAll()
     account = None
     for k, v in conf:
         if 'fs.azure.account.key' in k:
-            account = k.split('.')[-5] # Extract 'account' from 'fs.azure.account.key.account.blob...'
+            account = k.split('.')[-5]
             break
 
     matches = re.findall(r"read_(orc|parquet)\s*\(\s*'([^']+)'\s*\)", sql, re.IGNORECASE)
@@ -53,13 +52,10 @@ def main():
     parser = argparse.ArgumentParser(description='CloudObjectIQ Spark SQL Bridge (with Table Support)')
     parser.add_argument('--sql', type=str)
     
-    # Use parse_known_args to handle cases where values might start with hyphens
     args, unknown = parser.parse_known_args()
     
-    # Fallback: if --sql wasn't caught correctly but we have arguments
     sql_query = args.sql
     if not sql_query and unknown:
-        # If the first 'unknown' looks like it was meant for --sql
         if unknown[0].strip().startswith('--'):
             sql_query = " ".join(unknown)
         else:
@@ -70,20 +66,39 @@ def main():
         sys.exit(1)
 
     print("🔧 Initializing SparkSession...")
-    builder = SparkSession.builder.appName("CloudObjectIQ_SQL_Grid_Bridge")
+    builder = (SparkSession.builder
+               .appName("CloudObjectIQ_SQL_Grid_Bridge")
+               .config("spark.sql.shuffle.partitions", "2")
+               .config("spark.default.parallelism", "2")
+               .config("spark.driver.memory", "256m")
+               .config("spark.executor.memory", "256m"))
     
     spark = builder.getOrCreate()
+    spark.sparkContext.setLogLevel("WARN")
     print("✨ SparkSession ready.")
     
-    # Configure S3A for MinIO only if not already provided via --conf
     hadoop_conf = spark._jsc.hadoopConfiguration()
+
+    # Load dynamic cloud configurations if supplied via SPARK_HADOOP_CONF_JSON
+    extra_conf_json = os.environ.get('SPARK_HADOOP_CONF_JSON')
+    if extra_conf_json:
+        try:
+            extra_conf = json.loads(extra_conf_json)
+            for k, v in extra_conf.items():
+                clean_k = k[len('spark.hadoop.'):] if k.startswith('spark.hadoop.') else k
+                hadoop_conf.set(clean_k, str(v))
+            print(f"🔧 Loaded {len(extra_conf)} Hadoop configuration keys for Cloud Storage.")
+        except Exception as ce:
+            print(f"⚠️ Failed to parse SPARK_HADOOP_CONF_JSON: {ce}")
+
+    # Fallback MinIO default if no endpoint was set
     if not hadoop_conf.get("fs.s3a.endpoint"):
         import socket
         try:
             minio_ip = socket.gethostbyname('cloudobject_iq_minio')
             minio_endpoint = os.environ.get('MINIO_ENDPOINT', f'http://{minio_ip}:9000')
         except:
-            minio_endpoint = os.environ.get('MINIO_ENDPOINT', 'http://cloudobject_iq_minio:9000')
+            minio_endpoint = os.environ.get('MINIO_ENDPOINT', 'http://127.0.0.1:9000')
         minio_access_key = os.environ.get('MINIO_ACCESS_KEY', 'minioadmin')
         minio_secret_key = os.environ.get('MINIO_SECRET_KEY', 'minioadmin')
         
@@ -114,13 +129,15 @@ def main():
                 return float(obj)
             return str(obj)
 
-        result_path = '/app/data/spark_result.json'
+        data_dir = '/app/data' if os.path.exists('/app/data') else os.path.join(os.getcwd(), 'data')
+        os.makedirs(data_dir, exist_ok=True)
+        result_path = os.path.join(data_dir, 'spark_result.json')
+
         print(f"💾 Saving {len(data)} rows to {result_path}")
         with open(result_path, 'w') as f:
             json.dump(data, f, default=default_serializer)
             
         print("🏁 Query Successful")
-        df.show(5, truncate=False)
     except Exception as e:
         print(f"❌ Query Failed: {str(e)}")
         import traceback
