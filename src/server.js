@@ -907,15 +907,7 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
         });
     }
 
-    // Intercept ORC queries and offload to Spark
-    if (sql.toLowerCase().includes('read_orc')) {
-        console.log(`✨ [Auto-Translate] Offloading ORC query to Spark Engine for ${req.user.email}`);
-        return res.json({
-            offloaded: true,
-            message: 'ORC query detected. Auto-translating and offloading execution to the Spark cluster.'
-        });
-    }
-
+    const isOrcQuery = sql.toLowerCase().includes('read_orc');
     const startTime = Date.now();
 
     try {
@@ -1004,6 +996,13 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
             }
         }
 
+        if (isOrcQuery) {
+            console.log(`✨ [Auto-Translate] Native ORC failed, offloading to Spark for ${req.user.email}: ${err.message}`);
+            return res.json({
+                offloaded: true,
+                message: 'ORC query redirected to Spark cluster.'
+            });
+        }
         console.error(`❌ [Query] Error:`, err.message);
         res.status(500).json({ error: err.message });
     }

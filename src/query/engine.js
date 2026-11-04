@@ -102,6 +102,25 @@ async function ensureExtension(extName) {
     const name = String(extName || '').trim().toLowerCase();
     if (!name || _loadedExtensions.has(name)) return;
     try {
+        if (name === 'orc') {
+            try {
+                await _runSqlCmd('INSTALL orc FROM community');
+                await _runSqlCmd('LOAD orc');
+                _loadedExtensions.add('orc');
+                console.log('🧩 [DuckDB] Loaded community extension: orc');
+                return;
+            } catch (e1) {
+                try {
+                    await _runSqlCmd('INSTALL orc');
+                    await _runSqlCmd('LOAD orc');
+                    _loadedExtensions.add('orc');
+                    console.log('🧩 [DuckDB] Loaded core extension: orc');
+                    return;
+                } catch (e2) {
+                    console.warn('⚠️ [DuckDB] orc extension not available:', e2.message);
+                }
+            }
+        }
         await _runSqlCmd(`INSTALL ${name}`);
         await _runSqlCmd(`LOAD ${name}`);
         if (name === 'iceberg') {
@@ -723,6 +742,9 @@ async function runQuery(userId, sql, targetId, options = {}) {
             }
             if (/\bfts_main_|\bcreate_fts_index\b/i.test(executableSql)) {
                 await ensureExtension('fts');
+            }
+            if (/read_orc/i.test(executableSql) || /\.orc\b/i.test(executableSql)) {
+                await ensureExtension('orc');
             }
 
             // Stream-cache remote cloud Parquet files onto local SSD to eliminate httpfs/TLS heap overhead on 10M+ row joins
