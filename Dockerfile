@@ -16,11 +16,10 @@ RUN ln -sf /usr/bin/python3 /usr/bin/python || true
 # Set Java & Spark environment variables tuned for 512MB RAM containers
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
-ENV _JAVA_OPTIONS="-Xms64m -Xmx200m -XX:+UseSerialGC -XX:MaxRAM=220m"
 ENV SPARK_LOCAL_IP="127.0.0.1"
 ENV PYSPARK_PYTHON=/usr/bin/python3
 ENV PYSPARK_DRIVER_PYTHON=/usr/bin/python3
-ENV PYSPARK_SUBMIT_ARGS="--driver-memory 192m --executor-memory 192m pyspark-shell"
+ENV PYSPARK_SUBMIT_ARGS="--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 200m pyspark-shell"
 
 COPY package*.json ./
 RUN npm install

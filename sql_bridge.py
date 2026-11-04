@@ -3,6 +3,12 @@ import argparse
 import re
 import json
 import os
+
+# Ensure PySpark Java Gateway launches with spark.testing.memory so 512MB RAM constraints don't trip INVALID_DRIVER_MEMORY
+existing_args = os.environ.get('PYSPARK_SUBMIT_ARGS', '')
+if '--conf spark.testing.memory=' not in existing_args:
+    os.environ['PYSPARK_SUBMIT_ARGS'] = '--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 200m pyspark-shell ' + existing_args
+
 from pyspark.sql import SparkSession
 
 def translate_query(sql, spark):
@@ -67,15 +73,18 @@ def main():
     print("🔧 Initializing lightweight SparkSession for 512MB container...")
     builder = (SparkSession.builder
                .appName("CloudObjectIQ_SQL_Grid_Bridge")
-               .config("spark.driver.memory", "192m")
-               .config("spark.executor.memory", "192m")
+               .config("spark.testing.memory", "471859200")
+               .config("spark.driver.memory", "200m")
+               .config("spark.executor.memory", "200m")
                .config("spark.memory.fraction", "0.4")
                .config("spark.memory.storageFraction", "0.2")
+               .config("spark.driver.host", "127.0.0.1")
+               .config("spark.driver.bindAddress", "127.0.0.1")
                .config("spark.sql.shuffle.partitions", "1")
                .config("spark.default.parallelism", "1")
                .config("spark.ui.enabled", "false")
-               .config("spark.driver.extraJavaOptions", "-XX:+UseSerialGC -XX:MaxRAM=200m")
-               .config("spark.executor.extraJavaOptions", "-XX:+UseSerialGC -XX:MaxRAM=200m"))
+               .config("spark.driver.extraJavaOptions", "-Dspark.testing.memory=471859200 -XX:+UseSerialGC -XX:MaxRAM=250m")
+               .config("spark.executor.extraJavaOptions", "-Dspark.testing.memory=471859200 -XX:+UseSerialGC -XX:MaxRAM=250m"))
     
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("WARN")

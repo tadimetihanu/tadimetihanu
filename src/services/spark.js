@@ -36,7 +36,7 @@ function submitSparkJob(params) {
                 .replace('127.0.0.1', 'spark-master');
 
             const finalJarPath = rawScript.replace(/^s3:\/\//, 's3a://');
-
+            
             cmd = 'docker';
             cmdArgs = [
                 'exec',
@@ -76,10 +76,11 @@ function submitSparkJob(params) {
             if (conf) {
                 procEnv.SPARK_HADOOP_CONF_JSON = JSON.stringify(conf);
             }
+            delete procEnv._JAVA_OPTIONS;
             procEnv.SPARK_LOCAL_IP = '127.0.0.1';
             procEnv.PYSPARK_PYTHON = procEnv.PYSPARK_PYTHON || 'python3';
             procEnv.PYSPARK_DRIVER_PYTHON = procEnv.PYSPARK_DRIVER_PYTHON || 'python3';
-            procEnv.PYSPARK_SUBMIT_ARGS = procEnv.PYSPARK_SUBMIT_ARGS || '--driver-memory 192m --executor-memory 192m pyspark-shell';
+            procEnv.PYSPARK_SUBMIT_ARGS = '--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 200m pyspark-shell';
         }
 
         // Handle arguments properly
@@ -152,7 +153,7 @@ function submitSparkJob(params) {
                 output: outputData,
                 data: []
             };
-
+            
             // Try to read exported results for UI
             const candidatePaths = [
                 path.join(process.cwd(), 'data', 'spark_result.json'),

@@ -21,8 +21,6 @@ services:
         value: "--max-old-space-size=160 --max-semi-space-size=4 --expose-gc"
       - key: JAVA_HOME
         value: "/usr/lib/jvm/java-17-openjdk-amd64"
-      - key: _JAVA_OPTIONS
-        value: "-Xms64m -Xmx200m -XX:+UseSerialGC -XX:MaxRAM=220m"
       - key: SPARK_LOCAL_IP
         value: "127.0.0.1"
       - key: PYSPARK_PYTHON
@@ -30,7 +28,7 @@ services:
       - key: PYSPARK_DRIVER_PYTHON
         value: "/usr/bin/python3"
       - key: PYSPARK_SUBMIT_ARGS
-        value: "--driver-memory 192m --executor-memory 192m pyspark-shell"
+        value: "--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 200m pyspark-shell"
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
