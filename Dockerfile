@@ -17,6 +17,7 @@ RUN ln -sf /usr/bin/python3 /usr/bin/python || true
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 ENV SPARK_LOCAL_IP="127.0.0.1"
+ENV SPARK_SUBMIT_OPTS="-Dspark.testing.memory=471859200"
 ENV PYSPARK_PYTHON=/usr/bin/python3
 ENV PYSPARK_DRIVER_PYTHON=/usr/bin/python3
 ENV PYSPARK_SUBMIT_ARGS="--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 200m pyspark-shell"

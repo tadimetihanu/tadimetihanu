@@ -5,9 +5,10 @@ import json
 import os
 
 # Ensure PySpark Java Gateway launches with spark.testing.memory so 512MB RAM constraints don't trip INVALID_DRIVER_MEMORY
+os.environ['SPARK_SUBMIT_OPTS'] = (os.environ.get('SPARK_SUBMIT_OPTS', '') + ' -Dspark.testing.memory=471859200').strip()
 existing_args = os.environ.get('PYSPARK_SUBMIT_ARGS', '')
 if '--conf spark.testing.memory=' not in existing_args:
-    os.environ['PYSPARK_SUBMIT_ARGS'] = '--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 200m pyspark-shell ' + existing_args
+    os.environ['PYSPARK_SUBMIT_ARGS'] = f'--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 200m pyspark-shell {existing_args}'.strip()
 
 from pyspark.sql import SparkSession
 

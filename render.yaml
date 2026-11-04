@@ -23,6 +23,8 @@ services:
         value: "/usr/lib/jvm/java-17-openjdk-amd64"
       - key: SPARK_LOCAL_IP
         value: "127.0.0.1"
+      - key: SPARK_SUBMIT_OPTS
+        value: "-Dspark.testing.memory=471859200"
       - key: PYSPARK_PYTHON
         value: "/usr/bin/python3"
       - key: PYSPARK_DRIVER_PYTHON

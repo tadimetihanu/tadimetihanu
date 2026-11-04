@@ -564,6 +564,7 @@ function buildDuckDbSourceExpr(fileName, format) {
         return `iceberg_scan('${safeName}')`;
     }
     if (ext === 'parquet') return `read_parquet('${safeName}')`;
+    if (ext === 'orc') return `read_orc('${safeName}')`;
     if (ext === 'csv' || ext === 'tsv') return `read_csv_auto('${safeName}')`;
     if (ext === 'json' || ext === 'jsonl' || ext === 'ndjson') return `read_json_auto('${safeName}', maximum_object_size=33554432)`;
     return `'${safeName}'`;
@@ -1631,7 +1632,7 @@ async function scanTargetIntoCatalog(userId, targetId) {
 
     await db.run('DELETE FROM metadata_catalog WHERE target_id = ?', [targetId]);
 
-    const autoDescribeExts = new Set(['parquet', 'csv', 'tsv', 'iceberg', 'json', 'jsonl', 'ndjson']);
+    const autoDescribeExts = new Set(['parquet', 'csv', 'tsv', 'iceberg', 'json', 'jsonl', 'ndjson', 'orc']);
     let schemasDetected = 0;
 
     for (const file of files) {

@@ -1526,10 +1526,7 @@ window.selectFileForQuery = (name) => {
     } else if (ext === 'parquet') sql = `SELECT * FROM read_parquet('${name}') LIMIT 100;`;
     else if (ext === 'csv') sql = `SELECT * FROM read_csv_auto('${name}') LIMIT 100;`;
     else if (ext === 'json') sql = `SELECT * FROM read_json_auto('${name}') LIMIT 100;`;
-    else if (ext === 'orc') {
-        showStatus('ORC direct SQL requires extra engine components. Use Spark Jobs for ORC processing.', 'info');
-        sql = `SELECT * FROM read_orc('${name}') LIMIT 100;`;
-    }
+    else if (ext === 'orc') sql = `SELECT * FROM read_orc('${name}') LIMIT 100;`;
     document.getElementById('query-editor').value = sql;
     window.inspectFile(name, _activeTargetId);
 };

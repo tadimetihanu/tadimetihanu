@@ -78,6 +78,7 @@ function submitSparkJob(params) {
             }
             delete procEnv._JAVA_OPTIONS;
             procEnv.SPARK_LOCAL_IP = '127.0.0.1';
+            procEnv.SPARK_SUBMIT_OPTS = '-Dspark.testing.memory=471859200';
             procEnv.PYSPARK_PYTHON = procEnv.PYSPARK_PYTHON || 'python3';
             procEnv.PYSPARK_DRIVER_PYTHON = procEnv.PYSPARK_DRIVER_PYTHON || 'python3';
             procEnv.PYSPARK_SUBMIT_ARGS = '--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 200m pyspark-shell';
