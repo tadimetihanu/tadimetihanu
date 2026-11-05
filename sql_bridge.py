@@ -14,6 +14,9 @@ from pyspark.sql import SparkSession
 
 def translate_query(sql, spark):
     print("🔄 Translating query for Spark engine...")
+    hadoop_conf = spark._jsc.hadoopConfiguration()
+    bucket = hadoop_conf.get("cloudobjectiq.target.bucket") or os.environ.get("TARGET_BUCKET")
+
     # Normalize prefixes for Spark compatibility
     sql = sql.replace('az://', 'wasbs://').replace('s3://', 's3a://')
     
@@ -27,9 +30,17 @@ def translate_query(sql, spark):
 
     matches = re.findall(r"read_(orc|parquet)\s*\(\s*'([^']+)'\s*\)", sql, re.IGNORECASE)
     new_sql = sql
-    for i, (fmt, path) in enumerate(matches):
-        # Expand wasbs://container/path to wasbs://container@account.blob.core.windows.net/path
-        if path.startswith('wasbs://') and account and '@' not in path:
+    for i, (fmt, raw_path) in enumerate(matches):
+        path = raw_path
+        # Auto-expand relative paths if bucket is configured
+        if not path.startswith(('s3a://', 's3://', 'wasbs://', 'abfss://', 'hdfs://', 'file://', 'gs://')):
+            if bucket:
+                clean_p = path.lstrip('/')
+                path = f"s3a://{bucket}/{clean_p}"
+                print(f"📍 Expanded relative path to S3A: {raw_path} -> {path}")
+            else:
+                print(f"⚠️ Notice: Relative path '{raw_path}' will be read as local or default filesystem path.")
+        elif path.startswith('wasbs://') and account and '@' not in path:
             parts = path.replace('wasbs://', '').split('/', 1)
             container = parts[0]
             rest = parts[1] if len(parts) > 1 else ""
@@ -45,7 +56,7 @@ def translate_query(sql, spark):
             df = spark.read.parquet(path)
         df.createOrReplaceTempView(view_name)
         
-        pattern = rf"read_{fmt}\s*\(\s*'{re.escape(path if '@' not in path else matches[i][1])}'\s*\)"
+        pattern = rf"read_{fmt}\s*\(\s*'{re.escape(raw_path)}'\s*\)"
         new_sql = re.sub(pattern, view_name, new_sql, flags=re.IGNORECASE)
     
     print(f"✅ Translation complete. Final SQL: {new_sql}")

@@ -1730,9 +1730,17 @@ app.post('/api/admin/spark/submit', authenticate, async (req, res) => {
     try {
         const { submitSparkJob } = require('./services/spark');
         let conf = {};
-        if (targetId) {
-            const target = await db.get('SELECT * FROM targets WHERE target_id = ?', [targetId]);
-            if (target && (target.provider_type === 'azure' || target.provider_type === 'adls')) {
+        const target = (targetId ? await db.get('SELECT * FROM targets WHERE target_id = ?', [targetId]) : null)
+            || await db.get('SELECT * FROM targets WHERE is_active = 1 LIMIT 1')
+            || await db.get('SELECT * FROM targets LIMIT 1');
+
+        if (target) {
+            if (target.bucket) {
+                conf['spark.hadoop.cloudobjectiq.target.bucket'] = target.bucket.trim().replace(/^\/+|\/+$/g, '');
+            }
+            conf['spark.hadoop.cloudobjectiq.target.provider'] = target.provider_type || '';
+
+            if (target.provider_type === 'azure' || target.provider_type === 'adls') {
                 const connStr = target.endpoint || '';
                 const accMatch = connStr.match(/AccountName=([^;]+)/i);
                 const accKeyMatch = connStr.match(/AccountKey=([^;]+)/i);
@@ -1742,7 +1750,7 @@ app.post('/api/admin/spark/submit', authenticate, async (req, res) => {
                     conf[`spark.hadoop.fs.azure.account.key.${accName}.blob.core.windows.net`] = accKey;
                     conf[`spark.hadoop.fs.azure.account.key.${accName}.dfs.core.windows.net`] = accKey;
                 }
-            } else if (target && target.provider_type === 'minio') {
+            } else if (target.provider_type === 'minio') {
                 let endpoint = (target.endpoint || process.env.MINIO_ENDPOINT || 'http://cloudobject_iq_minio:9000').replace('localhost', 'cloudobject_iq_minio');
                 
                 if (endpoint.includes('cloudobject_iq_minio')) {
@@ -1774,8 +1782,14 @@ app.post('/api/admin/spark/submit', authenticate, async (req, res) => {
                 conf['spark.hadoop.fs.s3a.impl'] = 'org.apache.hadoop.fs.s3a.S3AFileSystem';
                 conf['spark.hadoop.fs.s3a.connection.ssl.enabled'] = 'false';
                 conf['spark.hadoop.fs.s3a.aws.credentials.provider'] = 'org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider';
-            } else if (target && (target.provider_type === 's3' || target.provider_type === 'r2')) {
-                const endpoint = target.endpoint || (target.provider_type === 'r2' ? 'https://r2.cloudflarestorage.com' : 'https://s3.amazonaws.com');
+            } else if (target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
+                let endpoint = (target.endpoint || '').trim().replace(/\/+$/, '');
+                if (endpoint && !endpoint.startsWith('http://') && !endpoint.startsWith('https://')) {
+                    endpoint = 'https://' + endpoint;
+                }
+                if (!endpoint) {
+                    endpoint = target.provider_type === 's3' ? 'https://s3.amazonaws.com' : 'https://r2.cloudflarestorage.com';
+                }
                 conf['spark.hadoop.fs.s3a.endpoint'] = endpoint;
                 conf['spark.hadoop.fs.s3a.endpoint.region'] = target.region || 'us-east-1';
                 conf['spark.hadoop.fs.s3a.access.key'] = target.access_key || '';
@@ -1787,10 +1801,27 @@ app.post('/api/admin/spark/submit', authenticate, async (req, res) => {
             }
         }
 
+        let resolvedArgs = args;
+        if (target && target.bucket) {
+            const bucketName = target.bucket.trim().replace(/^\/+|\/+$/g, '');
+            if (typeof resolvedArgs === 'string') {
+                resolvedArgs = resolvedArgs.replace(
+                    /read_(orc|parquet)\s*\(\s*'([^']+)'\s*\)/gi,
+                    (match, fmt, p) => {
+                        if (!p.startsWith('s3a://') && !p.startsWith('s3://') && !p.startsWith('wasbs://') && !p.startsWith('abfss://') && !p.startsWith('hdfs://') && !p.startsWith('file://')) {
+                            const cleanP = p.replace(/^\/+/, '');
+                            return `read_${fmt}('s3a://${bucketName}/${cleanP}')`;
+                        }
+                        return match;
+                    }
+                );
+            }
+        }
+
         const result = await submitSparkJob({
             className,
             jarPath,
-            args,
+            args: resolvedArgs,
             conf
         });
         res.json(result);

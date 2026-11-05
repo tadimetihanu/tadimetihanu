@@ -34,6 +34,13 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     pymilvus langchain-community langchain-text-splitters langchain-openai langchain-core pypdf \
     || true
 
+# Add Hadoop-AWS and AWS SDK jars to PySpark for Cloudflare R2 / S3 / MinIO support
+RUN PYSPARK_JARS=$(python3 -c "import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), 'jars'))") && \
+    curl -fsSL --retry 3 -o "${PYSPARK_JARS}/hadoop-aws-3.3.4.jar" \
+    https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar && \
+    curl -fsSL --retry 3 -o "${PYSPARK_JARS}/aws-java-sdk-bundle-1.12.262.jar" \
+    https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar || true
+
 COPY . .
 
 ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
