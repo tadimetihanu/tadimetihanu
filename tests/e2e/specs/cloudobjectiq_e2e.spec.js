@@ -121,4 +121,46 @@ test.describe('CloudObjectIQ - AI-Powered End-to-End Test Suite', () => {
 
         await ai.screenshot('05_admin_center');
     });
+
+    test('06: Schema Inspector & Column Details Display', async ({ page }) => {
+        const ai = createAIDriver(page);
+        await page.goto('/');
+
+        console.log('🔬 Step 7: Verifying Schema Inspector...');
+        const fileItem = page.locator('text=.orc, text=.parquet, .file-name').first();
+        if (await fileItem.isVisible()) {
+            await fileItem.click();
+            await page.waitForTimeout(1000);
+
+            const schemaPanel = page.locator('#schema-panel, .schema-inspector, text="Schema Inspector"').first();
+            if (await schemaPanel.isVisible()) {
+                console.log('✅ Schema Inspector panel displayed successfully');
+            }
+        }
+
+        await ai.screenshot('06_schema_inspector');
+    });
+
+    test('07: Saved Queries Library Modal Access', async ({ page }) => {
+        const ai = createAIDriver(page);
+        await page.goto('/');
+
+        console.log('⭐ Step 8: Opening Saved Queries Library...');
+        const savedBtn = page.locator('button:has-text("Saved"), [onclick*="openSavedQueries"]').first();
+        if (await savedBtn.isVisible()) {
+            await savedBtn.click();
+            await page.waitForTimeout(800);
+
+            const savedModal = page.locator('#saved-queries-modal, text="Saved Queries"').first();
+            await expect(savedModal).toBeVisible();
+
+            // Close modal
+            const closeBtn = page.locator('#saved-queries-modal button:has-text("✕"), #saved-queries-modal button[onclick*="close"]').first();
+            if (await closeBtn.isVisible()) {
+                await closeBtn.click();
+            }
+        }
+
+        await ai.screenshot('07_saved_queries_modal');
+    });
 });

@@ -1,0 +1,47 @@
+name: AI End-to-End Test Suite
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      test_url:
+        description: 'Target Application URL (e.g. https://app.cloudobjectiq.com or leave blank for local server)'
+        required: false
+        default: 'https://app.cloudobjectiq.com'
+
+jobs:
+  e2e-tests:
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Node Dependencies
+        run: npm install
+
+      - name: Install Playwright Browsers & OS Dependencies
+        run: npx playwright install --with-deps chromium
+
+      - name: Run AI E2E Tests (Against Live Web App)
+        env:
+          TEST_BASE_URL: ${{ github.event.inputs.test_url || 'https://app.cloudobjectiq.com' }}
+        run: npm run test:e2e
+
+      - name: Upload Playwright Test Report & Visual Screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 30
