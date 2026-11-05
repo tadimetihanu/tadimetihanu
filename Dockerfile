@@ -20,7 +20,7 @@ ENV SPARK_LOCAL_IP="127.0.0.1"
 ENV SPARK_SUBMIT_OPTS="-Dspark.testing.memory=471859200"
 ENV PYSPARK_PYTHON=/usr/bin/python3
 ENV PYSPARK_DRIVER_PYTHON=/usr/bin/python3
-ENV PYSPARK_SUBMIT_ARGS="--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 200m pyspark-shell"
+ENV PYSPARK_SUBMIT_ARGS="--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 512m pyspark-shell"
 
 COPY package*.json ./
 RUN npm install

@@ -8,7 +8,7 @@ import os
 os.environ['SPARK_SUBMIT_OPTS'] = (os.environ.get('SPARK_SUBMIT_OPTS', '') + ' -Dspark.testing.memory=471859200').strip()
 existing_args = os.environ.get('PYSPARK_SUBMIT_ARGS', '')
 if '--conf spark.testing.memory=' not in existing_args:
-    os.environ['PYSPARK_SUBMIT_ARGS'] = f'--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 200m pyspark-shell {existing_args}'.strip()
+    os.environ['PYSPARK_SUBMIT_ARGS'] = f'--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 512m pyspark-shell {existing_args}'.strip()
 
 from pyspark.sql import SparkSession
 
@@ -76,7 +76,7 @@ def main():
                .appName("CloudObjectIQ_SQL_Grid_Bridge")
                .config("spark.testing.memory", "471859200")
                .config("spark.driver.memory", "200m")
-               .config("spark.executor.memory", "200m")
+               .config("spark.executor.memory", "512m")
                .config("spark.memory.fraction", "0.4")
                .config("spark.memory.storageFraction", "0.2")
                .config("spark.driver.host", "127.0.0.1")

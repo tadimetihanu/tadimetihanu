@@ -30,7 +30,7 @@ services:
       - key: PYSPARK_DRIVER_PYTHON
         value: "/usr/bin/python3"
       - key: PYSPARK_SUBMIT_ARGS
-        value: "--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 200m pyspark-shell"
+        value: "--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 512m pyspark-shell"
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
