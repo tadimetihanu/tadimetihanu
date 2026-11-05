@@ -35,7 +35,7 @@ jobs:
 
       - name: Run AI E2E Tests (Against Live Web App)
         env:
-          TEST_BASE_URL: ${{ github.event.inputs.test_url || 'https://app.cloudobjectiq.com' }}
+          TEST_BASE_URL: ${{ inputs.test_url || 'https://app.cloudobjectiq.com' }}
         run: npm run test:e2e
 
       - name: Upload Playwright Test Report & Visual Screenshots
