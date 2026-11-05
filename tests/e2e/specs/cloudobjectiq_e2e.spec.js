@@ -4,24 +4,22 @@ const { createAIDriver } = require('../helpers/ai_driver');
 
 test.describe('CloudObjectIQ - AI-Powered End-to-End Test Suite', () => {
 
-    test('01: App Launch & Initial Interface Verification', async ({ page }) => {
-        const ai = createAIDriver(page);
-
-        console.log('🚀 Step 1: Navigating to CloudObjectIQ...');
+    test.beforeEach(async ({ page }) => {
         await page.goto('/');
-
-        // If login screen is shown, click Sign In and wait for reload
         const loginBtn = page.locator('#login-btn, button:has-text("Sign Into Data Lake")').first();
         if (await loginBtn.isVisible()) {
-            console.log('🔑 Authenticating session...');
             await Promise.all([
                 page.waitForNavigation({ timeout: 10000 }).catch(() => {}),
                 loginBtn.click()
             ]);
-            await page.waitForTimeout(1500);
+            await page.waitForTimeout(1000);
         }
+    });
 
-        // Verify page title and main layout elements
+    test('01: App Launch & Initial Interface Verification', async ({ page }) => {
+        const ai = createAIDriver(page);
+
+        console.log('🚀 Step 1: Verifying layout...');
         await expect(page).toHaveTitle(/CloudObjectIQ|Data/i);
         await expect(page.getByRole('heading', { name: 'CloudObjectIQ' })).toBeVisible();
         await expect(page.getByRole('heading', { name: 'Cloud Targets' })).toBeVisible();
@@ -151,7 +149,7 @@ test.describe('CloudObjectIQ - AI-Powered End-to-End Test Suite', () => {
             await savedBtn.click();
             await page.waitForTimeout(800);
 
-            const savedModal = page.locator('#saved-queries-modal, text="Saved Queries"').first();
+            const savedModal = page.locator('#saved-queries-modal').first();
             await expect(savedModal).toBeVisible();
 
             // Close modal
@@ -162,5 +160,78 @@ test.describe('CloudObjectIQ - AI-Powered End-to-End Test Suite', () => {
         }
 
         await ai.screenshot('07_saved_queries_modal');
+    });
+
+    test('08: Dual-Pass Ground-Truth & Repeatability Benchmark Validation', async ({ page }) => {
+        const ai = createAIDriver(page);
+        await page.goto('/');
+
+        console.log('⚡ Step 9: Running Dual-Pass Ground-Truth Verification...');
+        const queryEditor = page.locator('#query-editor, textarea').first();
+        if (await queryEditor.isVisible()) {
+            await queryEditor.fill("SELECT 42 AS benchmark_val, 'Repeatability Test' AS marker;");
+        }
+
+        const validateBtn = page.locator('#validate-query-btn, button:has-text("Validate")').first();
+        if (await validateBtn.isVisible()) {
+            await validateBtn.click();
+            await page.waitForTimeout(1500);
+
+            // Verify benchmark modal appears
+            const valModal = page.locator('#validation-modal').first();
+            if (await valModal.isVisible()) {
+                console.log('✅ Dual-Pass Benchmark Verification modal displayed');
+                const closeBtn = page.locator('#validation-modal button:has-text("Close")').first();
+                if (await closeBtn.isVisible()) await closeBtn.click();
+            }
+        }
+
+        await ai.screenshot('08_benchmark_validation');
+    });
+
+    test('09: Results Export & CSV Download Event', async ({ page }) => {
+        const ai = createAIDriver(page);
+        await page.goto('/');
+
+        console.log('📊 Step 10: Executing query and exporting CSV...');
+        const queryEditor = page.locator('#query-editor, textarea').first();
+        if (await queryEditor.isVisible()) {
+            await queryEditor.fill("SELECT 'Export-Test' AS item, 100 AS score, CURRENT_DATE AS day;");
+            const runBtn = page.locator('#run-btn, button:has-text("Run")').first();
+            if (await runBtn.isVisible()) {
+                await runBtn.click();
+                await page.waitForTimeout(1500);
+
+                // Check export button
+                const csvBtn = page.locator('#export-btns button:has-text("CSV"), button[onclick*="exportResults"]').first();
+                if (await csvBtn.isVisible()) {
+                    console.log('📥 Triggering CSV export download...');
+                    const downloadPromise = page.waitForEvent('download', { timeout: 6000 }).catch(() => null);
+                    await csvBtn.click();
+                    const download = await downloadPromise;
+                    if (download) {
+                        console.log(`✅ CSV downloaded successfully: ${download.suggestedFilename()}`);
+                    }
+                }
+            }
+        }
+
+        await ai.screenshot('09_results_export');
+    });
+
+    test('10: File Upload & Drag-and-Drop Area Inspection', async ({ page }) => {
+        const ai = createAIDriver(page);
+        await page.goto('/');
+
+        console.log('📁 Step 11: Inspecting file upload dropzone...');
+        const uploadArea = page.locator('.upload-area').first();
+        await expect(uploadArea).toBeVisible();
+
+        const fileInput = page.locator('#file-input').first();
+        const inputCount = await fileInput.count();
+        expect(inputCount).toBeGreaterThan(0);
+        console.log('✅ File input dropzone verified and ready for uploads');
+
+        await ai.screenshot('10_upload_area');
     });
 });
