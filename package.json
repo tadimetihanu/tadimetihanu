@@ -9,7 +9,9 @@
     "build": "rimraf .next && next build",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
-    "test:e2e:report": "playwright show-report"
+    "test:e2e:report": "playwright show-report",
+    "demo:record": "node scripts/record_demo.js",
+    "demo:record:headed": "node scripts/record_demo.js --headed"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1010.0",

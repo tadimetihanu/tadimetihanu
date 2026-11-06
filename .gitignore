@@ -36,3 +36,4 @@ __pycache__/
 
 playwright-report/
 test-results/
+demo_recordings/
