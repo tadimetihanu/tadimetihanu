@@ -37,9 +37,3 @@ services:
         generateValue: true
       - key: SESSION_SECRET
         generateValue: true
-      - key: FEDERATION_ENCRYPTION_KEY
-        generateValue: true
-      - key: DUCKDB_FEDERATION_MEMORY_LIMIT
-        value: "180MB"
-      - key: DUCKDB_FEDERATION_THREADS
-        value: "2"
