@@ -21,8 +21,10 @@ function normalizeDuckRow(row) {
 
 class DuckDBExecutor {
     constructor(options = {}) {
-        this.memoryLimit = options.memoryLimit || process.env.DUCKDB_FEDERATION_MEMORY_LIMIT || '2GB';
-        this.threads = Number(options.threads || process.env.DUCKDB_FEDERATION_THREADS || 4);
+        const defaultMem = process.env.RENDER ? '180MB' : '512MB';
+        const defaultThreads = process.env.RENDER ? 2 : 4;
+        this.memoryLimit = options.memoryLimit || process.env.DUCKDB_FEDERATION_MEMORY_LIMIT || defaultMem;
+        this.threads = Number(options.threads || process.env.DUCKDB_FEDERATION_THREADS || defaultThreads);
         this.defaultTimeoutMs = Number(options.timeoutMs || 60000);
         this.spillDir = path.join(process.cwd(), 'data', '.duckdb_spill').replace(/\\/g, '/');
         if (!fs.existsSync(this.spillDir)) {

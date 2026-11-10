@@ -51,7 +51,7 @@ ENV AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED
 ENV MALLOC_ARENA_MAX=2
 ENV NODE_OPTIONS="--max-old-space-size=160 --max-semi-space-size=4 --expose-gc"
 
-RUN mkdir -p /app/data/.duckdb_spill /app/data/.parquet_cache /app/data/.upload_tmp
+RUN mkdir -p /app/data/.duckdb_spill /app/data/.parquet_cache /app/data/.upload_tmp /app/data/federation_sources /app/data/.federation_stage
 
 EXPOSE 3001
 CMD ["node", "src/server.js"]
