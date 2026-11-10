@@ -156,6 +156,160 @@ CREATE TABLE IF NOT EXISTS pipelines (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS federation_connections (
+    connection_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default_tenant',
+    connection_name TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    connection_config_enc TEXT NOT NULL,
+    auth_method TEXT NOT NULL DEFAULT 'key_secret',
+    owner_id TEXT,
+    status TEXT NOT NULL DEFAULT 'connected',
+    last_error TEXT,
+    last_tested_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS federation_catalogs (
+    catalog_id TEXT PRIMARY KEY,
+    catalog_name TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    connection_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'default_tenant',
+    auth_method TEXT NOT NULL DEFAULT 'key_secret',
+    status TEXT NOT NULL DEFAULT 'connected',
+    capabilities_json TEXT,
+    schema_metadata_json TEXT,
+    created_by TEXT,
+    last_successful_connection TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, catalog_name)
+);
+
+CREATE TABLE IF NOT EXISTS federation_schemas (
+    schema_id TEXT PRIMARY KEY,
+    catalog_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'default_tenant',
+    schema_name TEXT NOT NULL,
+    metadata_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(catalog_id, schema_name)
+);
+
+CREATE TABLE IF NOT EXISTS federation_tables (
+    table_id TEXT PRIMARY KEY,
+    schema_id TEXT NOT NULL,
+    catalog_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'default_tenant',
+    schema_name TEXT NOT NULL,
+    table_name TEXT NOT NULL,
+    physical_location TEXT,
+    format TEXT NOT NULL DEFAULT 'parquet',
+    row_count_estimate INTEGER DEFAULT 0,
+    size_bytes INTEGER DEFAULT 0,
+    metadata_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(catalog_id, schema_name, table_name)
+);
+
+CREATE TABLE IF NOT EXISTS federation_column_metadata (
+    column_id TEXT PRIMARY KEY,
+    table_id TEXT NOT NULL,
+    catalog_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'default_tenant',
+    column_name TEXT NOT NULL,
+    data_type TEXT NOT NULL,
+    ordinal_position INTEGER DEFAULT 0,
+    is_nullable INTEGER DEFAULT 1,
+    stats_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS federation_query_history (
+    query_id TEXT PRIMARY KEY,
+    execution_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'default_tenant',
+    user_id TEXT NOT NULL,
+    sql_query TEXT NOT NULL,
+    rewritten_sql TEXT,
+    engine_used TEXT NOT NULL DEFAULT 'DuckDBExecutor',
+    execution_mode TEXT NOT NULL DEFAULT 'SINGLE_NODE_DUCKDB',
+    join_strategy TEXT,
+    catalogs_referenced TEXT,
+    status TEXT NOT NULL DEFAULT 'success',
+    row_count INTEGER DEFAULT 0,
+    duration_ms INTEGER DEFAULT 0,
+    object_bytes_scanned INTEGER DEFAULT 0,
+    relational_bytes_retrieved INTEGER DEFAULT 0,
+    network_bytes_transferred INTEGER DEFAULT 0,
+    peak_memory_bytes INTEGER DEFAULT 0,
+    estimated_cost_usd REAL DEFAULT 0,
+    on_demand_cost_usd REAL DEFAULT 0,
+    cache_status TEXT DEFAULT 'MISS',
+    is_cost_estimate INTEGER DEFAULT 0,
+    explain_plan_json TEXT,
+    error_message TEXT,
+    failed_source TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS federation_execution_metrics (
+    metric_id TEXT PRIMARY KEY,
+    execution_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'default_tenant',
+    catalog_id TEXT,
+    catalog_name TEXT NOT NULL,
+    schema_name TEXT,
+    table_name TEXT,
+    source_type TEXT NOT NULL,
+    metric_category TEXT NOT NULL,
+    bytes_scanned INTEGER DEFAULT 0,
+    bytes_retrieved INTEGER DEFAULT 0,
+    network_bytes INTEGER DEFAULT 0,
+    rows_processed INTEGER DEFAULT 0,
+    scan_duration_ms INTEGER DEFAULT 0,
+    peak_memory_bytes INTEGER DEFAULT 0,
+    pushed_predicates TEXT,
+    pushed_projections TEXT,
+    cache_status TEXT DEFAULT 'MISS',
+    is_estimate INTEGER DEFAULT 0,
+    estimated_cost_usd REAL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS federation_audit_logs (
+    audit_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default_tenant',
+    user_id TEXT,
+    action TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id TEXT,
+    catalog_name TEXT,
+    status TEXT NOT NULL DEFAULT 'success',
+    details_json TEXT,
+    ip_address TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS federation_access_policies (
+    policy_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default_tenant',
+    subject_id TEXT NOT NULL,
+    subject_type TEXT NOT NULL DEFAULT 'user',
+    catalog_name TEXT NOT NULL,
+    schema_name TEXT DEFAULT '*',
+    table_name TEXT DEFAULT '*',
+    can_select INTEGER DEFAULT 1,
+    can_explain INTEGER DEFAULT 1,
+    can_manage INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, subject_id, catalog_name, schema_name, table_name)
+);
 `;
 
 const POSTGRES_SCHEMA = `
@@ -322,6 +476,165 @@ CREATE INDEX IF NOT EXISTS idx_metadata_catalog_filename ON metadata_catalog(fil
 CREATE INDEX IF NOT EXISTS idx_query_logs_timestamp ON query_logs(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_query_logs_user ON query_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_system_logs_timestamp ON system_logs(timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS federation_connections (
+    connection_id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default_tenant',
+    connection_name VARCHAR(255) NOT NULL,
+    source_type VARCHAR(64) NOT NULL,
+    connection_config_enc TEXT NOT NULL,
+    auth_method VARCHAR(64) NOT NULL DEFAULT 'key_secret',
+    owner_id VARCHAR(64),
+    status VARCHAR(32) NOT NULL DEFAULT 'connected',
+    last_error TEXT,
+    last_tested_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS federation_catalogs (
+    catalog_id VARCHAR(64) PRIMARY KEY,
+    catalog_name VARCHAR(128) NOT NULL,
+    source_type VARCHAR(64) NOT NULL,
+    connection_id VARCHAR(64) NOT NULL,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default_tenant',
+    auth_method VARCHAR(64) NOT NULL DEFAULT 'key_secret',
+    status VARCHAR(32) NOT NULL DEFAULT 'connected',
+    capabilities_json TEXT,
+    schema_metadata_json TEXT,
+    created_by VARCHAR(64),
+    last_successful_connection TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unq_fed_tenant_catalog UNIQUE (tenant_id, catalog_name)
+);
+
+CREATE TABLE IF NOT EXISTS federation_schemas (
+    schema_id VARCHAR(64) PRIMARY KEY,
+    catalog_id VARCHAR(64) NOT NULL,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default_tenant',
+    schema_name VARCHAR(128) NOT NULL,
+    metadata_json TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unq_fed_cat_schema UNIQUE (catalog_id, schema_name)
+);
+
+CREATE TABLE IF NOT EXISTS federation_tables (
+    table_id VARCHAR(64) PRIMARY KEY,
+    schema_id VARCHAR(64) NOT NULL,
+    catalog_id VARCHAR(64) NOT NULL,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default_tenant',
+    schema_name VARCHAR(128) NOT NULL,
+    table_name VARCHAR(128) NOT NULL,
+    physical_location TEXT,
+    format VARCHAR(64) NOT NULL DEFAULT 'parquet',
+    row_count_estimate BIGINT DEFAULT 0,
+    size_bytes BIGINT DEFAULT 0,
+    metadata_json TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unq_fed_cat_schema_table UNIQUE (catalog_id, schema_name, table_name)
+);
+
+CREATE TABLE IF NOT EXISTS federation_column_metadata (
+    column_id VARCHAR(64) PRIMARY KEY,
+    table_id VARCHAR(64) NOT NULL,
+    catalog_id VARCHAR(64) NOT NULL,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default_tenant',
+    column_name VARCHAR(128) NOT NULL,
+    data_type VARCHAR(128) NOT NULL,
+    ordinal_position INTEGER DEFAULT 0,
+    is_nullable INTEGER DEFAULT 1,
+    stats_json TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS federation_query_history (
+    query_id VARCHAR(64) PRIMARY KEY,
+    execution_id VARCHAR(64) NOT NULL,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default_tenant',
+    user_id VARCHAR(64) NOT NULL,
+    sql_query TEXT NOT NULL,
+    rewritten_sql TEXT,
+    engine_used VARCHAR(64) NOT NULL DEFAULT 'DuckDBExecutor',
+    execution_mode VARCHAR(64) NOT NULL DEFAULT 'SINGLE_NODE_DUCKDB',
+    join_strategy VARCHAR(64),
+    catalogs_referenced TEXT,
+    status VARCHAR(32) NOT NULL DEFAULT 'success',
+    row_count BIGINT DEFAULT 0,
+    duration_ms INTEGER DEFAULT 0,
+    object_bytes_scanned BIGINT DEFAULT 0,
+    relational_bytes_retrieved BIGINT DEFAULT 0,
+    network_bytes_transferred BIGINT DEFAULT 0,
+    peak_memory_bytes BIGINT DEFAULT 0,
+    estimated_cost_usd NUMERIC(12, 6) DEFAULT 0,
+    on_demand_cost_usd NUMERIC(12, 6) DEFAULT 0,
+    cache_status VARCHAR(32) DEFAULT 'MISS',
+    is_cost_estimate INTEGER DEFAULT 0,
+    explain_plan_json TEXT,
+    error_message TEXT,
+    failed_source VARCHAR(128),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS federation_execution_metrics (
+    metric_id VARCHAR(64) PRIMARY KEY,
+    execution_id VARCHAR(64) NOT NULL,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default_tenant',
+    catalog_id VARCHAR(64),
+    catalog_name VARCHAR(128) NOT NULL,
+    schema_name VARCHAR(128),
+    table_name VARCHAR(128),
+    source_type VARCHAR(64) NOT NULL,
+    metric_category VARCHAR(64) NOT NULL,
+    bytes_scanned BIGINT DEFAULT 0,
+    bytes_retrieved BIGINT DEFAULT 0,
+    network_bytes BIGINT DEFAULT 0,
+    rows_processed BIGINT DEFAULT 0,
+    scan_duration_ms INTEGER DEFAULT 0,
+    peak_memory_bytes BIGINT DEFAULT 0,
+    pushed_predicates TEXT,
+    pushed_projections TEXT,
+    cache_status VARCHAR(32) DEFAULT 'MISS',
+    is_estimate INTEGER DEFAULT 0,
+    estimated_cost_usd NUMERIC(12, 6) DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS federation_audit_logs (
+    audit_id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default_tenant',
+    user_id VARCHAR(64),
+    action VARCHAR(128) NOT NULL,
+    resource_type VARCHAR(64) NOT NULL,
+    resource_id VARCHAR(128),
+    catalog_name VARCHAR(128),
+    status VARCHAR(32) NOT NULL DEFAULT 'success',
+    details_json TEXT,
+    ip_address VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS federation_access_policies (
+    policy_id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default_tenant',
+    subject_id VARCHAR(64) NOT NULL,
+    subject_type VARCHAR(32) NOT NULL DEFAULT 'user',
+    catalog_name VARCHAR(128) NOT NULL,
+    schema_name VARCHAR(128) DEFAULT '*',
+    table_name VARCHAR(128) DEFAULT '*',
+    can_select INTEGER DEFAULT 1,
+    can_explain INTEGER DEFAULT 1,
+    can_manage INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unq_fed_policy UNIQUE (tenant_id, subject_id, catalog_name, schema_name, table_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fed_cat_tenant ON federation_catalogs(tenant_id, catalog_name);
+CREATE INDEX IF NOT EXISTS idx_fed_tbl_lookup ON federation_tables(catalog_id, schema_name, table_name);
+CREATE INDEX IF NOT EXISTS idx_fed_qhist_exec ON federation_query_history(execution_id);
+CREATE INDEX IF NOT EXISTS idx_fed_metrics_exec ON federation_execution_metrics(execution_id);
 `;
 
 const POSTGRES_MIGRATIONS = [

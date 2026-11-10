@@ -38,6 +38,8 @@ const { suggestQuery } = require('./query/ai');
 const { handleNl2Sql } = require('./nl2sql');
 const { authenticate, isAdmin, loginLimiter, SECRET_KEY } = require('./middleware/auth');
 const { checkAccess } = require('./middleware/checkAccess');
+const federationRoutes = require('./federation/routes');
+const { initFederationCatalogs } = require('./federation');
 
 // Initialize Control Plane Database (PostgreSQL / SQLite)
 db.initDatabase().then(async () => {
@@ -46,6 +48,11 @@ db.initDatabase().then(async () => {
         await ensureAllSampleData();
     } catch (e) {
         console.warn('[DB Init] Sample data warning:', e.message);
+    }
+    try {
+        await initFederationCatalogs();
+    } catch (e) {
+        console.warn('[DB Init] Federation catalogs warning:', e.message);
     }
 }).catch(err => {
     console.error('❌ [Control Plane DB] Failed to initialize database:', err);
@@ -1835,6 +1842,9 @@ app.post('/api/admin/spark/submit', authenticate, async (req, res) => {
 });
 
 
+
+// ── CROSS-SOURCE DATA FEDERATION API ──────────────────────────
+app.use('/api/federation', federationRoutes);
 
 app.use(express.static(path.join(__dirname, '../public')));
 
