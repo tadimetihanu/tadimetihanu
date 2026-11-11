@@ -305,16 +305,16 @@ async function _getParquetColumnStats(allSqlCmd, physPath, knownFileBytes) {
         }
 
         const totalRows = Math.max(0, Number(rgRows?.[0]?.total_rows || 0));
-        const physicalFileBytes = Math.max(knownFileBytes || 0, sumCompressedCols);
-        const footerBytes = Math.max(
-            4096,
-            physicalFileBytes > sumCompressedCols
-                ? (physicalFileBytes - sumCompressedCols)
-                : Math.min(65536, Math.round(sumCompressedCols * 0.004) + 4096)
-        );
+        const hasExactFileBytes = Number(knownFileBytes) > sumCompressedCols;
+        const footerBytes = hasExactFileBytes
+            ? Math.min(65536, Math.max(64, Number(knownFileBytes) - sumCompressedCols))
+            : Math.min(65536, Math.max(256, Math.round(sumCompressedCols * 0.05)));
+        const physicalFileBytes = hasExactFileBytes
+            ? Number(knownFileBytes)
+            : (sumCompressedCols + footerBytes);
 
         const stats = {
-            physicalFileBytes: Math.max(physicalFileBytes, sumCompressedCols + footerBytes),
+            physicalFileBytes,
             sumCompressedCols,
             footerBytes,
             numRowGroups,
@@ -333,59 +333,127 @@ async function _getParquetColumnStats(allSqlCmd, physPath, knownFileBytes) {
     }
 }
 
-async function _estimateSurvivingRowGroupRatio(allSqlCmd, safePath, cleanedScopes, numRowGroups) {
-    if (numRowGroups <= 1 || typeof allSqlCmd !== 'function') return 1.0;
+function _compareStatVal(a, b) {
+    const numA = Number(a);
+    const numB = Number(b);
+    if (Number.isFinite(numA) && Number.isFinite(numB) && String(a).trim() !== '' && String(b).trim() !== '') {
+        return numA - numB;
+    }
+    return String(a).localeCompare(String(b));
+}
+
+async function _estimateSurvivingRowGroupRatio(allSqlCmd, safePath, rawScopes, numRowGroups, colBytesMap, aliases) {
+    const defaultRes = {
+        ratio: 1.0,
+        survivingRowGroups: numRowGroups || 1,
+        totalRowGroups: numRowGroups || 1,
+        pushedFilters: []
+    };
+    if ( typeof allSqlCmd !== 'function') return defaultRes;
+
     try {
-        const combined = cleanedScopes.join(' ');
-        const whereMatch = combined.match(/\bWHERE\s+([^;)]+)/i);
-        if (!whereMatch) return 1.0;
+        const combined = rawScopes.join(' ');
+        const whereMatch = combined.match(/\bWHERE\s+([\s\S]+?)(?:\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|\bHAVING\b|$)/i);
+        if (!whereMatch) return defaultRes;
 
-        const whereClause = whereMatch[1];
-        const eqMatch = whereClause.match(/(?:[A-Za-z0-9_$"]+\.)?([A-Za-z_][A-Za-z0-9_$]*)\s*=\s*('[^']+'|\d+)/i);
-        if (!eqMatch) return 1.0;
+        const whereClause = whereMatch[1].trim();
+        const predicateRegex = /(?:([A-Za-z_][A-Za-z0-9_$]*)\s*\.\s*)?([A-Za-z_][A-Za-z0-9_$]*)\s*(=|>=|<=|>|<)\s*('[^']*'|-?\d+(?:\.\d+)?)/gi;
+        const matchedPredicates = [];
 
-        const filterCol = eqMatch[1].toLowerCase().replace(/^"+|"+$/g, '');
-        const filterValRaw = eqMatch[2].replace(/^'|'$/g, '');
+        for (const m of whereClause.matchAll(predicateRegex)) {
+            const qual = (m[1] || '').toLowerCase();
+            const col = (m[2] || '').toLowerCase();
+            const op = m[3];
+            const rawVal = m[4].replace(/^'|'$/g, '');
 
-        const metaRows = await allSqlCmd(`
-            SELECT row_group_id, stats_min_value, stats_max_value
-            FROM parquet_metadata('${safePath}')
-            WHERE LOWER(path_in_schema) = '${filterCol}'
-        `);
+            if (!colBytesMap || !colBytesMap.has(col)) continue;
+            if (qual && aliases && aliases.size > 0) {
+                const lowerAliases = new Set(Array.from(aliases).map(a => a.toLowerCase()));
+                if (!lowerAliases.has(qual)) continue;
+            }
+            matchedPredicates.push({ col, op, val: rawVal, expr: `${col} ${op} ${m[4]}` });
+        }
 
-        if (!metaRows || metaRows.length === 0) return 1.0;
+        if (matchedPredicates.length === 0) return defaultRes;
 
-        let surviving = 0;
-        let totalChecked = 0;
-        for (const rg of metaRows) {
-            const minV = rg.stats_min_value;
-            const maxV = rg.stats_max_value;
-            if (minV !== null && maxV !== null && minV !== undefined && maxV !== undefined) {
-                totalChecked++;
-                const valStr = String(filterValRaw);
-                const minStr = String(minV);
-                const maxStr = String(maxV);
-                if (valStr >= minStr && valStr <= maxStr) {
-                    surviving++;
+        const pushedFilters = matchedPredicates.map(p => p.expr);
+
+        // Evaluate all matched predicates across row groups using Parquet min/max statistics
+        const survivingByRg = new Map();
+        for (let rgId = 0; rgId < numRowGroups; rgId++) {
+            survivingByRg.set(rgId, true);
+        }
+
+        for (const pred of matchedPredicates) {
+            const metaRows = await allSqlCmd(`
+                SELECT row_group_id, stats_min_value, stats_max_value, stats_min, stats_max
+                FROM parquet_metadata('${safePath}')
+                WHERE LOWER(path_in_schema) = '${pred.col}'
+            `);
+            if (!metaRows || metaRows.length === 0) continue;
+
+            for (const rg of metaRows) {
+                const rgId = Number(rg.row_group_id);
+                if (!survivingByRg.get(rgId)) continue;
+                const minV = rg.stats_min_value ?? rg.stats_min;
+                const maxV = rg.stats_max_value ?? rg.stats_max;
+                if (minV === null || maxV === null || minV === undefined || maxV === undefined) continue;
+
+                let canMatch = true;
+                if (pred.op === '=') {
+                    canMatch = _compareStatVal(pred.val, minV) >= 0 && _compareStatVal(pred.val, maxV) <= 0;
+                } else if (pred.op === '>') {
+                    canMatch = _compareStatVal(maxV, pred.val) > 0;
+                } else if (pred.op === '>=') {
+                    canMatch = _compareStatVal(maxV, pred.val) >= 0;
+                } else if (pred.op === '<') {
+                    canMatch = _compareStatVal(minV, pred.val) < 0;
+                } else if (pred.op === '<=') {
+                    canMatch = _compareStatVal(minV, pred.val) <= 0;
                 }
-            } else {
-                surviving++;
+                if (!canMatch) {
+                    survivingByRg.set(rgId, false);
+                }
             }
         }
 
-        if (totalChecked > 0 && totalChecked === metaRows.length) {
-            return Math.max(0.05, Math.min(1.0, surviving / metaRows.length));
+        let survivingCount = 0;
+        for (const v of survivingByRg.values()) {
+            if (v) survivingCount++;
         }
-    } catch (_) {}
-    return 1.0;
+        const ratio = Math.max(0.05, Math.min(1.0, survivingCount / numRowGroups));
+        return {
+            ratio,
+            survivingRowGroups: survivingCount,
+            totalRowGroups: numRowGroups,
+            pushedFilters
+        };
+    } catch (_) {
+        return defaultRes;
+    }
 }
 
 /**
  * Computes accurate physical scanned bytes and cloud burn USD for a completed DuckDB query
  * using real Parquet per-column compressed metadata, row-group pruning, local SSD cache stats,
  * and metadata_catalog object sizes.
+ *
+ * Clearly distinguishes and labels:
+ * - compressedObjectBytes: Total physical size of compressed Parquet object(s) in S3 / ADLS Gen2
+ * - bytesTransferred: Actual network bytes transferred from remote object storage during execution
+ * - logicalBytesScanned: Parquet footer + projected column bytes across surviving row groups after predicate pushdown
  */
-async function computeQueryScanMetrics({ originalSql, executableSql, rows, targetId, allSqlCmd, db, cacheReport, executionId }) {
+async function computeQueryScanMetrics({
+    originalSql,
+    executableSql,
+    rows,
+    targetId,
+    allSqlCmd,
+    db,
+    cacheReport,
+    executionId,
+    referencedTables = []
+}) {
     const rawOrig = String(originalSql || '');
     const rawExec = String(executableSql || rawOrig);
     const execId = executionId || require('crypto').randomUUID();
@@ -398,6 +466,8 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
             executionId: execId,
             estimatedScan,
             logicalScannedBytes: estimatedScan,
+            compressedObjectBytes: estimatedScan,
+            bytesTransferred: 0,
             totalDatasetBytes: estimatedScan,
             pruningSavedPct: 0,
             storageBytesDownloaded: 0,
@@ -409,7 +479,9 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
             onDemandCostUsd,
             cacheSavingsUsd: onDemandCostUsd,
             currency: CURRENCY,
-            pricingUnit: PRICING_UNIT
+            pricingUnit: PRICING_UNIT,
+            perFileBreakdown: [],
+            sourceBreakdown: []
         };
     }
 
@@ -419,6 +491,8 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
             executionId: execId,
             estimatedScan: 0,
             logicalScannedBytes: 0,
+            compressedObjectBytes: 0,
+            bytesTransferred: 0,
             totalDatasetBytes: 0,
             pruningSavedPct: 0,
             storageBytesDownloaded: 0,
@@ -430,7 +504,9 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
             onDemandCostUsd: 0,
             cacheSavingsUsd: 0,
             currency: CURRENCY,
-            pricingUnit: PRICING_UNIT
+            pricingUnit: PRICING_UNIT,
+            perFileBreakdown: [],
+            sourceBreakdown: []
         };
     }
 
@@ -438,14 +514,25 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
     let totalLogicalScannedBytes = 0;
     let totalDatasetBytes = 0;
     let totalUncachedLogicalBytes = 0;
+    let totalBytesTransferred = 0;
     const perFileBreakdown = [];
+    const sourceBreakdown = [];
 
     const perFileCache = new Map();
     if (cacheReport && Array.isArray(cacheReport.perFile)) {
         for (const item of cacheReport.perFile) {
             if (item.physPath) perFileCache.set(item.physPath, item);
+            if (item.originalUri) perFileCache.set(item.originalUri, item);
             if (item.objectKey) perFileCache.set(item.objectKey, item);
         }
+    }
+
+    // Map referencedTables by resolvedPath, storageUri, or basename
+    const tableMetaByPath = new Map();
+    for (const tbl of (referencedTables || [])) {
+        if (tbl.resolvedPath) tableMetaByPath.set(tbl.resolvedPath, tbl);
+        if (tbl.storageUri) tableMetaByPath.set(tbl.storageUri, tbl);
+        if (tbl.filePath) tableMetaByPath.set(tbl.filePath, tbl);
     }
 
     for (const ref of refs) {
@@ -453,17 +540,34 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
         const lowerPath = physPath.toLowerCase();
         const isParquetSingle = lowerPath.endsWith('.parquet') && !/[*?[\]]/.test(physPath);
 
+        const matchedTableMeta =
+            tableMetaByPath.get(physPath) ||
+            Array.from(tableMetaByPath.values()).find(t =>
+                physPath.endsWith(t.filePath) ||
+                (t.alias && aliases.has(t.alias))
+            ) || null;
+
+        const effectiveTargetId = matchedTableMeta?.targetId || targetId;
         const localBytes = _getLocalPathBytes(physPath);
-        const catalogBytes = localBytes > 0 ? localBytes : await _lookupCatalogBytes(db, targetId, physPath);
-        const knownBytes = Math.max(localBytes, catalogBytes);
+        const catalogBytes = localBytes > 0 ? localBytes : await _lookupCatalogBytes(db, effectiveTargetId, physPath);
+        const knownBytes = Math.max(localBytes, catalogBytes, Number(matchedTableMeta?.fileSize || 0));
 
         let fileTotalBytes = knownBytes;
         let fileLogicalScan = 0;
+        let projectedColumns = [];
+        let totalColumnsCount = 0;
+        let pushedFilters = [];
+        let survivingRowGroups = 1;
+        let totalRowGroups = 1;
 
         if (isParquetSingle && typeof allSqlCmd === 'function') {
             const pqStats = await _getParquetColumnStats(allSqlCmd, physPath, knownBytes);
             if (pqStats && pqStats.colBytesMap.size > 0) {
                 fileTotalBytes = pqStats.physicalFileBytes;
+                totalColumnsCount = pqStats.colBytesMap.size;
+                totalRowGroups = pqStats.numRowGroups;
+                survivingRowGroups = pqStats.numRowGroups;
+
                 const rawScopes = _getSqlScopesForPath(rawExec, physPath);
                 const cleanedScopes = rawScopes.map(_stripCommentsAndStrings);
                 const selectAll = cleanedScopes.some(sc => _hasWildcardSelectInScope(sc, aliases));
@@ -471,23 +575,44 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
                 let colScannedBytes = 0;
                 if (selectAll) {
                     colScannedBytes = pqStats.sumCompressedCols;
+                    projectedColumns = Array.from(pqStats.colBytesMap.keys());
                 } else {
                     for (const [colLower, cBytes] of pqStats.colBytesMap.entries()) {
                         if (_isColumnReferencedInScopes(colLower, cleanedScopes, aliases)) {
                             colScannedBytes += cBytes;
+                            projectedColumns.push(colLower);
+                        }
+                    }
+                    // For COUNT(*) where no specific column is referenced, DuckDB reads metadata/minimal column
+                    if (projectedColumns.length === 0) {
+                        const firstCol = pqStats.colBytesMap.entries().next().value;
+                        if (firstCol) {
+                            projectedColumns.push(firstCol[0]);
+                            colScannedBytes = Math.min(firstCol[1], pqStats.footerBytes);
                         }
                     }
                 }
 
                 // Apply predicate pushdown row-group pruning estimation
                 const safePath = physPath.replace(/\\/g, '/').replace(/'/g, "''");
-                const survivingRatio = await _estimateSurvivingRowGroupRatio(allSqlCmd, safePath, cleanedScopes, pqStats.numRowGroups);
-                colScannedBytes = Math.round(colScannedBytes * survivingRatio);
+                const rgPrune = await _estimateSurvivingRowGroupRatio(
+                    allSqlCmd,
+                    safePath,
+                    rawScopes,
+                    pqStats.numRowGroups,
+                    pqStats.colBytesMap,
+                    aliases
+                );
+                survivingRowGroups = rgPrune.survivingRowGroups;
+                totalRowGroups = rgPrune.totalRowGroups;
+                pushedFilters = rgPrune.pushedFilters;
+                colScannedBytes = Math.round(colScannedBytes * rgPrune.ratio);
 
                 // Apply pure LIMIT N row-group early stop
                 if (pureLimitN !== null && pqStats.totalRows > 0 && pqStats.numRowGroups > 1) {
                     const rowsPerRg = Math.max(1, Math.ceil(pqStats.totalRows / pqStats.numRowGroups));
                     const rgsRead = Math.min(pqStats.numRowGroups, Math.max(1, Math.ceil(pureLimitN / rowsPerRg)));
+                    survivingRowGroups = Math.min(survivingRowGroups, rgsRead);
                     colScannedBytes = Math.round(colScannedBytes * (rgsRead / pqStats.numRowGroups));
                 }
 
@@ -512,22 +637,76 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
             }
         }
 
+        const compressedObjectBytes = Math.max(fileTotalBytes, fileLogicalScan);
         totalLogicalScannedBytes += fileLogicalScan;
-        totalDatasetBytes += Math.max(fileTotalBytes, fileLogicalScan);
+        totalDatasetBytes += compressedObjectBytes;
 
-        // Check cache status: if served from local SSD cache or local sample file, no on-demand cloud egress
-        const cachedItem = perFileCache.get(physPath) || perFileCache.get(path.posix.basename(physPath));
-        const isLocallyCached = cachedItem ? (cachedItem.cacheHit === true) : (localBytes > 0 && !/^(?:s3|r2|az|gdrive|https?):\/\//i.test(physPath));
+        // Check cache status & network bytes transferred
+        const cachedItem =
+            perFileCache.get(physPath) ||
+            (matchedTableMeta?.storageUri && perFileCache.get(matchedTableMeta.storageUri)) ||
+            (matchedTableMeta?.filePath && perFileCache.get(matchedTableMeta.filePath)) ||
+            perFileCache.get(path.posix.basename(physPath));
+
+        const isRemoteUri = /^(?:s3|r2|az|abfss|https?):\/\//i.test(physPath);
+        const isLocallyCached = cachedItem
+            ? (cachedItem.cacheHit === true)
+            : (localBytes > 0 && !isRemoteUri && !matchedTableMeta?.isRemoteSource);
+
+        let fileBytesTransferred = 0;
+        if (cachedItem && Number(cachedItem.downloadedBytes) > 0) {
+            fileBytesTransferred = Number(cachedItem.downloadedBytes);
+        } else if (isRemoteUri || (matchedTableMeta?.isRemoteSource && !isLocallyCached)) {
+            fileBytesTransferred = fileLogicalScan;
+        }
+        totalBytesTransferred += fileBytesTransferred;
 
         if (!isLocallyCached) {
             totalUncachedLogicalBytes += fileLogicalScan;
         }
 
+        const sourceOnDemandCostUsd = (fileLogicalScan / TIB_BYTES) * COST_PER_TIB_USD;
+        const sourceBilledCostUsd = isLocallyCached ? 0 : sourceOnDemandCostUsd;
+
         perFileBreakdown.push({
             path: physPath,
             logicalScan: fileLogicalScan,
-            totalBytes: fileTotalBytes,
-            isCached: isLocallyCached
+            totalBytes: compressedObjectBytes,
+            bytesTransferred: fileBytesTransferred,
+            isCached: isLocallyCached,
+            projectedColumns,
+            totalColumns: totalColumnsCount,
+            pushedFilters,
+            survivingRowGroups,
+            totalRowGroups
+        });
+
+        sourceBreakdown.push({
+            fullName: matchedTableMeta?.fullName || path.posix.basename(physPath),
+            catalogName: matchedTableMeta?.catalogName || 'default',
+            schemaName: matchedTableMeta?.schemaName || 'default',
+            tableName: matchedTableMeta?.tableName || path.posix.basename(physPath),
+            targetId: effectiveTargetId,
+            targetName: matchedTableMeta?.targetName || 'Storage Target',
+            providerType: matchedTableMeta?.providerType || (physPath.startsWith('az://') ? 'adls' : 's3'),
+            provider: matchedTableMeta?.providerType || (physPath.startsWith('az://') ? 'adls' : 's3'),
+            bucket: matchedTableMeta?.bucket || '',
+            storageUri: matchedTableMeta?.storageUri || physPath,
+            compressedObjectBytes,
+            bytesTransferred: fileBytesTransferred,
+            logicalBytesScanned: fileLogicalScan,
+            logicalScannedBytes: fileLogicalScan,
+            projectedColumns,
+            totalColumns: totalColumnsCount,
+            pushedFilters,
+            survivingRowGroups,
+            totalRowGroups,
+            pruningSavedPct: compressedObjectBytes > 0
+                ? Math.max(0, Math.min(99, Math.round(((compressedObjectBytes - fileLogicalScan) / compressedObjectBytes) * 100)))
+                : 0,
+            cacheStatus: isLocallyCached ? 'HIT' : (fileBytesTransferred > 0 ? 'MISS' : 'LOCAL'),
+            estimatedCostUsd: sourceOnDemandCostUsd,
+            billedCostUsd: sourceBilledCostUsd
         });
     }
 
@@ -538,7 +717,10 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
         ? Math.max(0, Math.min(99, Math.round(((totalDatasetBytes - logicalScannedBytes) / totalDatasetBytes) * 100)))
         : 0;
 
-    const storageBytesDownloaded = cacheReport ? Number(cacheReport.bytesDownloaded || 0) : 0;
+    const storageBytesDownloaded = Math.max(
+        totalBytesTransferred,
+        cacheReport ? Number(cacheReport.bytesDownloaded || 0) : 0
+    );
     const cacheHits = cacheReport ? Number(cacheReport.hits || 0) : 0;
     const cacheMisses = cacheReport ? Number(cacheReport.misses || 0) : 0;
 
@@ -547,6 +729,8 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
         if (cacheHits > 0 && cacheMisses === 0) cacheStatus = 'HIT';
         else if (cacheMisses > 0 && cacheHits === 0) cacheStatus = 'MISS';
         else cacheStatus = 'PARTIAL';
+    } else if (storageBytesDownloaded > 0) {
+        cacheStatus = 'MISS';
     }
 
     const onDemandCostUsd = (logicalScannedBytes / TIB_BYTES) * COST_PER_TIB_USD;
@@ -558,6 +742,8 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
         executionId: execId,
         estimatedScan: logicalScannedBytes,
         logicalScannedBytes,
+        compressedObjectBytes: totalDatasetBytes,
+        bytesTransferred: storageBytesDownloaded,
         totalDatasetBytes,
         pruningSavedPct,
         storageBytesDownloaded,
@@ -570,7 +756,8 @@ async function computeQueryScanMetrics({ originalSql, executableSql, rows, targe
         cacheSavingsUsd,
         currency: CURRENCY,
         pricingUnit: PRICING_UNIT,
-        perFileBreakdown
+        perFileBreakdown,
+        sourceBreakdown
     };
 }
 

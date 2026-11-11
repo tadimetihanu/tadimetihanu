@@ -100,31 +100,88 @@ function _formatS3WriteError(err, target, bucketName) {
     return err;
 }
 
-function getAzureClient(target) {
-    let connStr = target.endpoint || '';
-    
-    // 💡 Auto-Switch DFS to BLOB for SDK Handshake compatibility
-    connStr = connStr.replace(/dfs\.core\.windows\.net/g, 'core.windows.net');
+function buildAzureConnectionString(target = {}) {
+    const rawEndpoint = String(target.endpoint || '').trim();
+    const rawCreds = String(target.credentials || '').trim();
+    const rawAk = String(target.access_key || '').trim();
+    const rawSk = String(target.secret_key || '').trim();
 
-    // 🏗️ Build Connection String if only a raw URL or AccountName is provided
-    if (connStr && !connStr.includes('AccountKey=')) {
-        let accountName = target.access_key || '';
-        let accountKey = target.secret_key || '';
-        
-        // Extract account name from URL if possible
-        if (!accountName && connStr.includes('.blob.core.windows.net')) {
-            const match = connStr.match(/https?:\/\/([^.]+)\.blob\.core\.windows\.net/);
-            if (match) accountName = match[1];
-        } else if (!accountName && !connStr.includes('.')) {
-            accountName = connStr; // Assume raw string is the account name
-        }
-
-        if (accountName && accountKey) {
-            connStr = `DefaultEndpointsProtocol=https;AccountName=${accountName};AccountKey=${accountKey};EndpointSuffix=core.windows.net`;
+    // Case 1: Full Azure connection string in endpoint, credentials, or access_key
+    for (const candidate of [rawCreds, rawEndpoint, rawAk]) {
+        if (candidate && (/AccountName=/i.test(candidate) || /UseDevelopmentStorage=true/i.test(candidate) || /SharedAccessSignature=/i.test(candidate))) {
+            return candidate.replace(/dfs\.core\.windows\.net/gi, 'blob.core.windows.net');
         }
     }
 
-    if (!connStr) throw new Error('Azure Connection String or Endpoint is missing');
+    // Extract accountName from endpoint if URL is provided (supports both .dfs.core.windows.net and .blob.core.windows.net)
+    let accountNameFromEndpoint = '';
+    if (rawEndpoint) {
+        const urlMatch = rawEndpoint.match(/https?:\/\/([^./]+)\.(?:dfs|blob)\.core\.windows\.net/i);
+        if (urlMatch) {
+            accountNameFromEndpoint = urlMatch[1];
+        } else if (!rawEndpoint.includes('/') && !rawEndpoint.includes(':') && !rawEndpoint.includes('.')) {
+            accountNameFromEndpoint = rawEndpoint;
+        }
+    }
+
+    let accountName = rawAk;
+    let accountKey = rawSk;
+
+    if ((!accountName || !accountKey) && rawCreds && rawCreds !== ':') {
+        if (rawCreds.includes(':')) {
+            const idx = rawCreds.indexOf(':');
+            const part1 = rawCreds.slice(0, idx).trim();
+            const part2 = rawCreds.slice(idx + 1).trim();
+            if (part1 && part2) {
+                accountName = accountName || part1;
+                accountKey = accountKey || part2;
+            } else if (!part1 && part2) {
+                accountKey = accountKey || part2;
+            }
+        } else if (accountNameFromEndpoint) {
+            accountName = accountName || accountNameFromEndpoint;
+            accountKey = accountKey || rawCreds;
+        }
+    }
+
+    if (!accountName && accountNameFromEndpoint) {
+        accountName = accountNameFromEndpoint;
+    }
+
+    // If accountName was accidentally set to the same value as accountKey when a single key was provided
+    if (accountName && accountKey && accountName === accountKey && accountNameFromEndpoint && accountNameFromEndpoint !== accountName) {
+        accountName = accountNameFromEndpoint;
+    }
+
+    if (!accountName || !accountKey) {
+        throw new Error('Azure ADLS Gen2 / Blob credentials incomplete: AccountName and AccountKey (or Connection String) are required.');
+    }
+
+    // Support custom/local Azurite or sovereign cloud endpoints if specified as full http(s) URL without core.windows.net
+    if (rawEndpoint && /^https?:\/\//i.test(rawEndpoint) && !/core\.windows\.net/i.test(rawEndpoint)) {
+        const cleanEp = rawEndpoint.replace(/\/+$/, '');
+        return `DefaultEndpointsProtocol=${cleanEp.startsWith('https') ? 'https' : 'http'};AccountName=${accountName};AccountKey=${accountKey};BlobEndpoint=${cleanEp}/${accountName};`;
+    }
+
+    return `DefaultEndpointsProtocol=https;AccountName=${accountName};AccountKey=${accountKey};EndpointSuffix=core.windows.net`;
+}
+
+function getAzureClient(target) {
+    const rawEndpoint = String(target.endpoint || '').trim();
+    const rawCreds = String(target.credentials || '').trim();
+
+    // Support SAS URL directly if provided
+    if (/^https?:\/\/[^?]+\?.*sv=/i.test(rawEndpoint)) {
+        const blobEp = rawEndpoint.replace(/\.dfs\.core\.windows\.net/i, '.blob.core.windows.net');
+        return new BlobServiceClient(blobEp);
+    }
+    if (/^\?sv=|^sv=/i.test(rawCreds) && rawEndpoint) {
+        const baseEp = rawEndpoint.replace(/\.dfs\.core\.windows\.net/i, '.blob.core.windows.net').replace(/\/+$/, '');
+        const sas = rawCreds.startsWith('?') ? rawCreds : `?${rawCreds}`;
+        return new BlobServiceClient(`${baseEp}${sas}`);
+    }
+
+    const connStr = buildAzureConnectionString(target);
     return BlobServiceClient.fromConnectionString(connStr);
 }
 
@@ -146,36 +203,121 @@ const MOCKS = {
 // ── Unified Storage API ───────────────────────────────────────
 
 async function testConnection(config) {
+    const startMs = Date.now();
+    const pType = String(config.type || config.provider_type || '').trim().toLowerCase();
+    const bucketName = _cleanBucketName(config.bucket);
+
     try {
-        if (config.type === 'gdrive' || config.type === 'googledrive') {
+        if (pType === 'gdrive' || pType === 'googledrive') {
             return await gdrive.testConnection(config);
-        } else if (config.type === 's3' || config.type === 'r2' || config.type === 'cloudflare') {
-            const S3 = require('@aws-sdk/client-s3');
-            const [ak = '', sk = ''] = (config.credentials || '').split(':');
-            const client = getS3Client({
-                provider_type: config.type,
-                endpoint: config.endpoint,
-                bucket: config.bucket,
-                region: config.region,
-                access_key: ak,
-                secret_key: sk
-            });
-            await client.send(new S3.HeadBucketCommand({ Bucket: _cleanBucketName(config.bucket) }));
-            return { success: true };
-        } else if (config.type === 'azure' || config.type === 'adls') {
-            const Azure = require('@azure/storage-blob');
-            // Use dummy target for builder
-            const blobService = getAzureClient({ 
-                endpoint: config.endpoint, 
-                access_key: config.credentials.split(':')[0], 
-                secret_key: config.credentials.split(':')[1] 
-            });
-            const container = blobService.getContainerClient(config.bucket);
-            await container.getProperties();
-            return { success: true };
         }
+
+        if (pType === 's3' || pType === 'minio' || pType === 'r2' || pType === 'cloudflare') {
+            if (!bucketName) {
+                const err = new Error('S3 bucket name is required to validate connectivity.');
+                err.code = 'INVALID_CONFIG';
+                err.statusCode = 400;
+                throw err;
+            }
+            const synced = db.parseCredentials(config.credentials, config.access_key, config.secret_key);
+            if (!synced.access_key || !synced.secret_key) {
+                const err = new Error('S3 Access Key and Secret Key are required.');
+                err.code = 'AUTH_FAILURE';
+                err.statusCode = 401;
+                throw err;
+            }
+            const targetObj = {
+                provider_type: pType,
+                endpoint: config.endpoint,
+                bucket: bucketName,
+                region: config.region || 'us-east-1',
+                access_key: synced.access_key,
+                secret_key: synced.secret_key
+            };
+            const client = getS3Client(targetObj);
+            const res = await client.send(new ListObjectsV2Command({
+                Bucket: bucketName,
+                MaxKeys: 5
+            }));
+            const sampleCount = (res.Contents || []).length;
+            return {
+                success: true,
+                provider: pType,
+                bucket: bucketName,
+                endpoint: config.endpoint || 'https://s3.amazonaws.com',
+                region: targetObj.region,
+                latencyMs: Date.now() - startMs,
+                sampleObjectsCount: sampleCount
+            };
+        }
+
+        if (pType === 'azure' || pType === 'adls') {
+            if (!bucketName) {
+                const err = new Error('Azure ADLS Gen2 / Blob container (filesystem) name is required.');
+                err.code = 'INVALID_CONFIG';
+                err.statusCode = 400;
+                throw err;
+            }
+            const synced = db.parseCredentials(config.credentials, config.access_key, config.secret_key);
+            const targetObj = {
+                provider_type: pType,
+                endpoint: config.endpoint,
+                bucket: bucketName,
+                credentials: synced.credentials,
+                access_key: synced.access_key,
+                secret_key: synced.secret_key
+            };
+            const blobService = getAzureClient(targetObj);
+            const container = blobService.getContainerClient(bucketName);
+            await container.getProperties();
+            let sampleCount = 0;
+            for await (const _blob of container.listBlobsFlat()) {
+                sampleCount++;
+                if (sampleCount >= 5) break;
+            }
+            return {
+                success: true,
+                provider: pType,
+                bucket: bucketName,
+                endpoint: config.endpoint || `https://${synced.access_key || 'account'}.dfs.core.windows.net`,
+                latencyMs: Date.now() - startMs,
+                sampleObjectsCount: sampleCount
+            };
+        }
+
+        throw new Error(`Unsupported storage provider type: ${pType}`);
     } catch (err) {
-        throw new Error(`Test failed: ${err.message}`);
+        const rawMsg = err && err.message ? err.message : String(err);
+        const rawCode = (err && (err.Code || err.code || err.name)) || '';
+        const httpStatus = (err && (err.statusCode || (err.$metadata && err.$metadata.httpStatusCode))) || 0;
+
+        let classifiedCode = err.code || 'CONNECTION_FAILED';
+        let statusCode = err.statusCode || 400;
+
+        if (
+            httpStatus === 401 ||
+            /InvalidAccessKeyId|SignatureDoesNotMatch|AuthenticationFailed|InvalidAccountKey|AccountKey|base64/i.test(rawCode + ' ' + rawMsg)
+        ) {
+            classifiedCode = 'AUTH_FAILURE';
+            statusCode = 401;
+        } else if (
+            httpStatus === 403 ||
+            /AccessDenied|AuthorizationFailure|AuthorizationPermissionMismatch|AccountIsDisabled/i.test(rawCode + ' ' + rawMsg)
+        ) {
+            classifiedCode = 'PERMISSION_DENIED';
+            statusCode = 403;
+        } else if (
+            httpStatus === 404 ||
+            /NoSuchBucket|ContainerNotFound|specified container does not exist/i.test(rawCode + ' ' + rawMsg)
+        ) {
+            classifiedCode = 'BUCKET_NOT_FOUND';
+            statusCode = 404;
+        }
+
+        const wrapped = new Error(`Test failed (${classifiedCode}): ${rawMsg}`);
+        wrapped.code = classifiedCode;
+        wrapped.statusCode = statusCode;
+        throw wrapped;
     }
 }
 
@@ -909,6 +1051,9 @@ module.exports = {
     createIcebergTable,
     appendIcebergRecords,
     getTarget,
+    getS3Client,
+    getAzureClient,
+    buildAzureConnectionString,
     testConnection,
     gdrive
 };

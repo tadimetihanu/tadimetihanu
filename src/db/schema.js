@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     role TEXT DEFAULT 'viewer',
+    tenant_id TEXT DEFAULT 'default',
     oauth_provider TEXT,
     oauth_id TEXT,
     display_name TEXT,
@@ -24,6 +25,12 @@ CREATE TABLE IF NOT EXISTS targets (
     is_active INTEGER DEFAULT 1,
     krb_principal TEXT,
     krb_keytab TEXT,
+    catalog_name TEXT,
+    default_schema TEXT DEFAULT 'default',
+    base_prefix TEXT DEFAULT '',
+    tenant_id TEXT DEFAULT 'default',
+    last_validated_at TEXT,
+    validation_status TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -42,11 +49,17 @@ CREATE TABLE IF NOT EXISTS permissions (
 CREATE TABLE IF NOT EXISTS metadata_catalog (
     id TEXT PRIMARY KEY,
     target_id TEXT,
+    catalog_name TEXT,
+    schema_name TEXT DEFAULT 'default',
+    table_name TEXT,
+    storage_uri TEXT,
     file_path TEXT,
     file_name TEXT,
     file_size INTEGER,
+    row_count INTEGER DEFAULT 0,
     format TEXT,
     schema_json TEXT,
+    tenant_id TEXT DEFAULT 'default',
     last_modified TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -72,11 +85,15 @@ CREATE TABLE IF NOT EXISTS query_history (
     sql_query TEXT,
     duration_ms INTEGER,
     row_count INTEGER,
+    status TEXT DEFAULT 'success',
+    error_message TEXT,
     cost_usd REAL,
     on_demand_cost_usd REAL DEFAULT 0,
     scan_bytes INTEGER,
+    compressed_object_bytes INTEGER DEFAULT 0,
     storage_downloaded_bytes INTEGER DEFAULT 0,
     cache_status TEXT DEFAULT 'MISS',
+    source_breakdown_json TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -89,11 +106,14 @@ CREATE TABLE IF NOT EXISTS query_logs (
     row_count INTEGER DEFAULT 0,
     execution_time_ms INTEGER DEFAULT 0,
     status TEXT DEFAULT 'success',
+    error_message TEXT,
     data_scanned_bytes INTEGER DEFAULT 0,
+    compressed_object_bytes INTEGER DEFAULT 0,
     storage_downloaded_bytes INTEGER DEFAULT 0,
     cache_status TEXT DEFAULT 'MISS',
     calculated_cost_usd REAL DEFAULT 0,
     on_demand_cost_usd REAL DEFAULT 0,
+    source_breakdown_json TEXT,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -164,6 +184,7 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     role VARCHAR(32) DEFAULT 'viewer',
+    tenant_id VARCHAR(64) DEFAULT 'default',
     oauth_provider VARCHAR(64),
     oauth_id VARCHAR(255),
     display_name VARCHAR(255),
@@ -184,6 +205,12 @@ CREATE TABLE IF NOT EXISTS targets (
     is_active INTEGER DEFAULT 1,
     krb_principal TEXT,
     krb_keytab TEXT,
+    catalog_name VARCHAR(128),
+    default_schema VARCHAR(128) DEFAULT 'default',
+    base_prefix TEXT DEFAULT '',
+    tenant_id VARCHAR(64) DEFAULT 'default',
+    last_validated_at TEXT,
+    validation_status VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -202,11 +229,17 @@ CREATE TABLE IF NOT EXISTS permissions (
 CREATE TABLE IF NOT EXISTS metadata_catalog (
     id VARCHAR(128) PRIMARY KEY DEFAULT md5(random()::text || clock_timestamp()::text),
     target_id VARCHAR(64),
+    catalog_name VARCHAR(128),
+    schema_name VARCHAR(128) DEFAULT 'default',
+    table_name VARCHAR(128),
+    storage_uri TEXT,
     file_path TEXT,
     file_name TEXT,
     file_size BIGINT DEFAULT 0,
+    row_count BIGINT DEFAULT 0,
     format VARCHAR(64),
     schema_json TEXT,
+    tenant_id VARCHAR(64) DEFAULT 'default',
     last_modified TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -232,11 +265,15 @@ CREATE TABLE IF NOT EXISTS query_history (
     sql_query TEXT,
     duration_ms INTEGER,
     row_count BIGINT,
+    status VARCHAR(32) DEFAULT 'success',
+    error_message TEXT,
     cost_usd NUMERIC(12, 6),
     on_demand_cost_usd NUMERIC(12, 6) DEFAULT 0,
     scan_bytes BIGINT,
+    compressed_object_bytes BIGINT DEFAULT 0,
     storage_downloaded_bytes BIGINT DEFAULT 0,
     cache_status VARCHAR(32) DEFAULT 'MISS',
+    source_breakdown_json TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -249,11 +286,14 @@ CREATE TABLE IF NOT EXISTS query_logs (
     row_count BIGINT DEFAULT 0,
     execution_time_ms INTEGER DEFAULT 0,
     status VARCHAR(32) DEFAULT 'success',
+    error_message TEXT,
     data_scanned_bytes BIGINT DEFAULT 0,
+    compressed_object_bytes BIGINT DEFAULT 0,
     storage_downloaded_bytes BIGINT DEFAULT 0,
     cache_status VARCHAR(32) DEFAULT 'MISS',
     calculated_cost_usd NUMERIC(12, 6) DEFAULT 0,
     on_demand_cost_usd NUMERIC(12, 6) DEFAULT 0,
+    source_breakdown_json TEXT,
     timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -325,6 +365,7 @@ CREATE INDEX IF NOT EXISTS idx_system_logs_timestamp ON system_logs(timestamp DE
 `;
 
 const POSTGRES_MIGRATIONS = [
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(64) DEFAULT 'default'`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_provider VARCHAR(64)`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_id VARCHAR(255)`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(255)`,
@@ -334,18 +375,37 @@ const POSTGRES_MIGRATIONS = [
     `ALTER TABLE targets ADD COLUMN IF NOT EXISTS secret_key TEXT`,
     `ALTER TABLE targets ADD COLUMN IF NOT EXISTS krb_principal TEXT`,
     `ALTER TABLE targets ADD COLUMN IF NOT EXISTS krb_keytab TEXT`,
+    `ALTER TABLE targets ADD COLUMN IF NOT EXISTS catalog_name VARCHAR(128)`,
+    `ALTER TABLE targets ADD COLUMN IF NOT EXISTS default_schema VARCHAR(128) DEFAULT 'default'`,
+    `ALTER TABLE targets ADD COLUMN IF NOT EXISTS base_prefix TEXT DEFAULT ''`,
+    `ALTER TABLE targets ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(64) DEFAULT 'default'`,
+    `ALTER TABLE targets ADD COLUMN IF NOT EXISTS last_validated_at TEXT`,
+    `ALTER TABLE targets ADD COLUMN IF NOT EXISTS validation_status VARCHAR(64)`,
     `ALTER TABLE permissions ALTER COLUMN id SET DEFAULT md5(random()::text || clock_timestamp()::text)`,
+    `ALTER TABLE metadata_catalog ADD COLUMN IF NOT EXISTS catalog_name VARCHAR(128)`,
+    `ALTER TABLE metadata_catalog ADD COLUMN IF NOT EXISTS schema_name VARCHAR(128) DEFAULT 'default'`,
+    `ALTER TABLE metadata_catalog ADD COLUMN IF NOT EXISTS table_name VARCHAR(128)`,
+    `ALTER TABLE metadata_catalog ADD COLUMN IF NOT EXISTS storage_uri TEXT`,
+    `ALTER TABLE metadata_catalog ADD COLUMN IF NOT EXISTS row_count BIGINT DEFAULT 0`,
+    `ALTER TABLE metadata_catalog ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(64) DEFAULT 'default'`,
     `ALTER TABLE metadata_catalog ADD COLUMN IF NOT EXISTS schema_json TEXT`,
     `ALTER TABLE metadata_catalog ADD COLUMN IF NOT EXISTS last_modified TEXT`,
     `ALTER TABLE metadata_catalog ALTER COLUMN id SET DEFAULT md5(random()::text || clock_timestamp()::text)`,
     `ALTER TABLE query_history ADD COLUMN IF NOT EXISTS execution_id VARCHAR(64)`,
+    `ALTER TABLE query_history ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'success'`,
+    `ALTER TABLE query_history ADD COLUMN IF NOT EXISTS error_message TEXT`,
     `ALTER TABLE query_history ADD COLUMN IF NOT EXISTS on_demand_cost_usd NUMERIC(12, 6) DEFAULT 0`,
+    `ALTER TABLE query_history ADD COLUMN IF NOT EXISTS compressed_object_bytes BIGINT DEFAULT 0`,
     `ALTER TABLE query_history ADD COLUMN IF NOT EXISTS storage_downloaded_bytes BIGINT DEFAULT 0`,
     `ALTER TABLE query_history ADD COLUMN IF NOT EXISTS cache_status VARCHAR(32) DEFAULT 'MISS'`,
+    `ALTER TABLE query_history ADD COLUMN IF NOT EXISTS source_breakdown_json TEXT`,
     `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS execution_id VARCHAR(64)`,
+    `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS error_message TEXT`,
+    `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS compressed_object_bytes BIGINT DEFAULT 0`,
     `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS storage_downloaded_bytes BIGINT DEFAULT 0`,
     `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS cache_status VARCHAR(32) DEFAULT 'MISS'`,
-    `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS on_demand_cost_usd NUMERIC(12, 6) DEFAULT 0`
+    `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS on_demand_cost_usd NUMERIC(12, 6) DEFAULT 0`,
+    `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS source_breakdown_json TEXT`
 ];
 
 const DEFAULT_TARGETS = [

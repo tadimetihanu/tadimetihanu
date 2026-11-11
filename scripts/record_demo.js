@@ -89,9 +89,29 @@ async function recordDemo() {
         }
     }
 
+    // Helper: Save a still frame per scene (useful for verification & thumbnails)
+    let shotIdx = 0;
+    let recordingFailed = false;
+    async function snap(label) {
+        shotIdx++;
+        await page.screenshot({ path: path.join(OUTPUT_DIR, `scene_${shotIdx}_${label}.png`) }).catch(() => {});
+    }
+
     try {
         console.log('🚀 Scene 1: Navigating to CloudObjectIQ...');
-        await page.goto(TARGET_URL, { waitUntil: 'networkidle', timeout: 30000 });
+        // Wait for the app to be healthy (Render cold starts / redeploys return 502)
+        let healthy = false;
+        for (let attempt = 1; attempt <= 12 && !healthy; attempt++) {
+            const resp = await page.goto(TARGET_URL, { waitUntil: 'networkidle', timeout: 30000 }).catch(() => null);
+            const status = resp ? resp.status() : 0;
+            healthy = status === 200 && await page.getByRole('heading', { name: 'CloudObjectIQ' }).isVisible().catch(() => false)
+                || status === 200 && await page.locator('#login-btn').isVisible().catch(() => false);
+            if (!healthy) {
+                console.log(`⏳ App not ready (HTTP ${status}), retrying in 10s... [${attempt}/12]`);
+                await page.waitForTimeout(10000);
+            }
+        }
+        if (!healthy) throw new Error('App never became healthy - aborting so we do not record an error page.');
         await page.waitForTimeout(1000);
 
         // Handle login if present
@@ -101,6 +121,9 @@ async function recordDemo() {
             await smoothMove('#login-btn, button:has-text("Sign Into Data Lake")');
             await loginBtn.click();
             await page.waitForTimeout(2000);
+            await snap('chart_rendered');
+        } else {
+            console.log('⚠️  Chart View button not visible - skipping chart scene');
         }
 
         console.log('✨ Scene 2: Highlighting Header and Target Selection...');
@@ -115,6 +138,7 @@ async function recordDemo() {
             await page.waitForTimeout(1500);
         }
 
+        await snap('target_selected');
         console.log('📁 Scene 3: Exploring Datasets in Object Explorer...');
         const fileItem = page.locator('#file-list .file-item, #file-list li').first();
         if (await fileItem.isVisible()) {
@@ -149,6 +173,7 @@ async function recordDemo() {
             }
         }
 
+        await snap('ask_ai');
         console.log('⚡ Scene 5: Query Execution & Sub-Second Scan...');
         const runBtn = page.locator('#run-btn').first();
         if (await runBtn.isVisible()) {
@@ -157,12 +182,28 @@ async function recordDemo() {
             await page.waitForTimeout(2500);
         }
 
+        await snap('query_results');
         console.log('📊 Scene 6: Results Grid & Visualization Showcase...');
         const chartBtn = page.locator('#chart-toggle-btn, button:has-text("Chart View")').first();
         if (await chartBtn.isVisible()) {
             await smoothMove('#chart-toggle-btn, button:has-text("Chart View")');
             await chartBtn.click();
+            await page.waitForTimeout(1200);
+
+            // Plot a meaningful measure (e.g. revenue) instead of the default first numeric column
+            const measureSel = page.locator('#pbi-numeric-col');
+            if (await measureSel.isVisible().catch(() => false)) {
+                const opts = await measureSel.locator('option').evaluateAll(os => os.map(o => ({ v: o.value, t: o.textContent })));
+                const pick = opts.find(o => /revenue|amount|total|sales|price/i.test(o.t)) || opts[opts.length - 1];
+                if (pick) {
+                    await smoothMove('#pbi-numeric-col');
+                    await measureSel.selectOption(pick.v);
+                }
+            }
             await page.waitForTimeout(2000);
+            await snap('chart_rendered');
+        } else {
+            console.log('⚠️  Chart View button not visible - skipping chart scene');
         }
 
         // Smooth scroll to inspect results table and telemetry
@@ -171,18 +212,19 @@ async function recordDemo() {
         await page.mouse.wheel(0, -300);
         await page.waitForTimeout(2000);
 
+        await snap('chart_view');
         console.log('🏁 Scene 7: Wrap-up & Final Showcase Pause...');
         await page.waitForTimeout(2000);
 
     } catch (err) {
-        console.error('⚠️ Recording encountered a step error (continuing to finalize video):', err.message);
+        console.error('❌ Recording failed:', err.message); recordingFailed = true; process.exitCode = 1;
     } finally {
         const video = page.video();
         await page.close();
         await context.close();
         await browser.close();
 
-        if (video) {
+        if (video && !recordingFailed) {
             const rawVideoPath = await video.path();
             const finalVideoPath = path.join(OUTPUT_DIR, 'cloudobjectiq_product_demo.webm');
             
@@ -194,7 +236,7 @@ async function recordDemo() {
                 console.log('\n🎉 ==============================================');
                 console.log('🎥 Demo Video Successfully Recorded & Saved!');
                 console.log(`📁 File: ${finalVideoPath}`);
-                console.log('📐 Resolution: 1920x1080 Full HD (60 FPS)');
+                console.log('📐 Resolution: 1920x1080 Full HD (~25 fps, Playwright WebM)');
                 console.log('==============================================\n');
             } catch (copyErr) {
                 console.log(`🎥 Video saved at: ${rawVideoPath}`);
