@@ -3,6 +3,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { SQLITE_SCHEMA, POSTGRES_SCHEMA, POSTGRES_MIGRATIONS, DEFAULT_TARGETS } = require('./schema');
+const { decryptSecret } = require('../utils/crypto');
 
 const RENDER_DEFAULT_INSTANCE_ID = 'dpg-dbk8g0etlv9c73f5kitg-a';
 
@@ -139,14 +140,19 @@ if (!_isPostgres) {
 
 // ── Credential Helpers (keeps credentials, access_key, secret_key in sync) ──
 function parseCredentials(credentials, accessKey, secretKey) {
-    let creds = typeof credentials === 'string' ? credentials.trim() : '';
-    let ak = typeof accessKey === 'string' ? accessKey.trim() : '';
-    let sk = typeof secretKey === 'string' ? secretKey.trim() : '';
+    let creds = typeof credentials === 'string' ? decryptSecret(credentials).trim() : '';
+    let ak = typeof accessKey === 'string' ? decryptSecret(accessKey).trim() : '';
+    let sk = typeof secretKey === 'string' ? decryptSecret(secretKey).trim() : '';
 
     if (creds && (!ak && !sk)) {
         if (creds.startsWith('{') && creds.endsWith('}')) {
             ak = creds;
             sk = 'json-key';
+        } else if (creds.includes('AccountName=') || creds.includes('AccountKey=')) {
+            const nameMatch = creds.match(/AccountName=([^;]+)/i);
+            const keyMatch = creds.match(/AccountKey=([^;]+)/i);
+            ak = nameMatch ? nameMatch[1].trim() : creds;
+            sk = keyMatch ? keyMatch[1].trim() : '';
         } else if (creds.includes(':')) {
             const idx = creds.indexOf(':');
             ak = creds.slice(0, idx);
@@ -170,7 +176,8 @@ function normalizeTargetRow(row) {
         ...row,
         credentials: synced.credentials,
         access_key: synced.access_key,
-        secret_key: synced.secret_key
+        secret_key: synced.secret_key,
+        krb_keytab: row.krb_keytab ? decryptSecret(row.krb_keytab) : row.krb_keytab
     };
 }
 

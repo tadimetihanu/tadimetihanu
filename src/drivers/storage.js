@@ -5,6 +5,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const gdrive = require('./gdrive');
 const db = require('../db');
+const { decryptSecret } = require('../utils/crypto');
 
 // ── Target Resolver ───────────────────────────────────────────
 async function getTarget(targetId) {
@@ -68,8 +69,8 @@ function getS3Client(target) {
     const clientConfig = {
         region,
         credentials: { 
-            accessKeyId: (target.access_key || '').trim(), 
-            secretAccessKey: (target.secret_key || '').trim()
+            accessKeyId: decryptSecret(target.access_key || '').trim(), 
+            secretAccessKey: decryptSecret(target.secret_key || '').trim()
         },
         forcePathStyle: true,
         // Disable AWS SDK v3.729+ automatic CRC32 request checksums that break Cloudflare R2 & S3-compatible PutObject

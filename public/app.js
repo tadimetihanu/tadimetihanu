@@ -1643,14 +1643,18 @@ window.renderPowerBI = () => {
 
     // Lock container and reset canvas attributes before Chart.js measures bounding rect
     if (container) {
+        container.style.position = 'relative';
         container.style.height = '340px';
         container.style.minHeight = '340px';
         container.style.maxHeight = '340px';
+        container.style.width = '100%';
         container.style.flex = '0 0 340px';
+        container.style.overflow = 'hidden';
     }
-    chartCanvas.removeAttribute('style');
-    chartCanvas.removeAttribute('width');
-    chartCanvas.removeAttribute('height');
+    chartCanvas.style.display = 'block';
+    chartCanvas.style.width = '100%';
+    chartCanvas.style.height = '340px';
+    chartCanvas.style.maxHeight = '340px';
     chartCanvas.style.visibility = 'visible';
 
     const ctx = chartCanvas.getContext('2d');
@@ -1730,6 +1734,7 @@ window.renderPowerBI = () => {
         options: { 
             responsive: true, 
             maintainAspectRatio: false,
+            resizeDelay: 100,
             layout: {
                 padding: { top: 8, bottom: 8, left: 8, right: 8 }
             },
@@ -1831,7 +1836,11 @@ window.switchView = (view) => {
     if (tableContainer) tableContainer.style.display = view === 'table' ? 'block' : 'none';
     if (chartPanel)     chartPanel.style.display     = view === 'chart' ? 'block' : 'none';
 
-    if (view === 'chart') window.initPowerBI();
+    if (view === 'chart') {
+        requestAnimationFrame(() => {
+            window.initPowerBI();
+        });
+    }
 };
 
 // ── Export Results ──

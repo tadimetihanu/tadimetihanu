@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const gdrive = require('../drivers/gdrive');
 const db = require('../db');
 const logger = require('../utils/logger');
+const { decryptSecret } = require('../utils/crypto');
 const { shouldProactivelyStageOutOfCore, executeOutOfCore } = require('./out_of_core');
 const { computeQueryScanMetrics, calculateCost, invalidateParquetStatsCache } = require('./scan_metrics');
 
@@ -479,12 +480,17 @@ async function initSecret(target) {
             region = 'us-east-1';
         }
 
-        const ak = (target.access_key || '').trim().replace(/'/g, "''");
-        const sk = (target.secret_key || '').trim().replace(/'/g, "''");
+        const ak = decryptSecret(target.access_key || '').trim().replace(/'/g, "''");
+        const sk = decryptSecret(target.secret_key || '').trim().replace(/'/g, "''");
         const epEsc = ep.replace(/'/g, "''");
         const secretName = `s3_${target.target_id || bucketName || 'default'}`.replace(/[^a-z0-9_]/gi, '_');
+        const scope = bucketName ? `s3://${bucketName}` : 's3://';
 
         const cmds = [
+            `SET s3_endpoint='${epEsc}'`,
+            `SET s3_access_key_id='${ak}'`,
+            `SET s3_secret_access_key='${sk}'`,
+            `SET s3_region='${region}'`,
             `SET s3_url_style='path'`,
             `SET s3_use_ssl=${ssl}`,
             `CREATE OR REPLACE SECRET ${secretName} (
@@ -494,9 +500,22 @@ async function initSecret(target) {
                 REGION '${region}',
                 ENDPOINT '${epEsc}',
                 URL_STYLE 'path',
-                USE_SSL ${ssl}
+                USE_SSL ${ssl},
+                SCOPE '${scope}'
             )`
         ];
+        if (bucketName) {
+            cmds.push(`CREATE OR REPLACE SECRET ${secretName}_global (
+                TYPE S3,
+                KEY_ID '${ak}',
+                SECRET '${sk}',
+                REGION '${region}',
+                ENDPOINT '${epEsc}',
+                URL_STYLE 'path',
+                USE_SSL ${ssl},
+                SCOPE 's3://'
+            )`);
+        }
         for (const cmd of cmds) {
             await _runSqlCmd(cmd);
         }
@@ -508,8 +527,8 @@ async function initSecret(target) {
         
         // Auto-build connection string if only AccountName and keys were provided
         if (connStr && !connStr.includes('AccountKey=')) {
-            let accountName = (target.access_key || '').trim();
-            let accountKey = (target.secret_key || '').trim();
+            let accountName = decryptSecret(target.access_key || '').trim();
+            let accountKey = decryptSecret(target.secret_key || '').trim();
             if (!accountName && connStr.includes('.blob.core.windows.net')) {
                 const m = connStr.match(/https?:\/\/([^.]+)\.blob\.core\.windows\.net/);
                 if (m) accountName = m[1];

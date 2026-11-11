@@ -710,9 +710,14 @@ td { padding: 12px 15px; border-bottom: 1px solid var(--border); }
     max-height: 340px !important;
     flex: 0 0 340px !important;
     overflow: hidden !important;
+    box-sizing: border-box !important;
 }
 
 #results-chart {
+    display: block !important;
+    width: 100% !important;
+    height: 340px !important;
     max-height: 340px !important;
     max-width: 100% !important;
+    box-sizing: border-box !important;
 }
