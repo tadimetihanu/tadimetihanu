@@ -1559,6 +1559,45 @@ window.closeSchemaPanel = () => document.getElementById('schema-panel').style.di
 window.insertSchemaQuery = (isNew) => { if (isNew) window.addNotebookTab(); window.executeQuery(); };
 
 // ── Analytics Engine ──
+let _customMeasures = [];
+
+window.addMeasure = () => {
+    if (!_currentResultData || _currentResultData.length === 0) {
+        return window.showToast ? window.showToast('Run a query first to add a custom measure', 'info') : alert('Run a query first to add a custom measure');
+    }
+    const cols = Object.keys(_currentResultData[0]);
+    const numericCols = cols.filter(c => {
+        const val = _currentResultData[0][c];
+        return typeof val === 'number' || (!isNaN(parseFloat(val)) && isFinite(val));
+    });
+    const defaultCol = numericCols.find(c => !/(^id$|_id$)/i.test(c)) || numericCols[0] || cols[0];
+    const measureName = prompt('Enter Custom Measure Name (e.g., Avg Value, Max Metric):', `Avg of ${defaultCol}`);
+    if (!measureName) return;
+    const aggType = (prompt('Aggregation Type (AVG, MAX, MIN, SUM, COUNT):', 'AVG') || 'AVG').trim().toUpperCase();
+    const id = `custom_${Date.now()}`;
+    _customMeasures.push({ id, name: measureName.trim(), col: defaultCol, agg: aggType });
+
+    const measuresBox = document.getElementById('pbi-measures');
+    if (measuresBox) {
+        measuresBox.innerHTML = _customMeasures.map(m => `
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; font-size:0.75rem;">
+                <span style="font-weight:700; color:#334155;">📐 ${m.name}</span>
+                <span style="font-size:0.65rem; color:#6366f1; background:rgba(99,102,241,0.1); padding:2px 6px; border-radius:4px; font-weight:700;">${m.agg}(${m.col})</span>
+            </div>
+        `).join('');
+    }
+
+    const measureSelect = document.getElementById('pbi-numeric-col');
+    if (measureSelect) {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = `${measureName.trim()} (${aggType})`;
+        measureSelect.appendChild(opt);
+        measureSelect.value = id;
+    }
+    window.renderPowerBI();
+};
+
 window.applySlicers = (col, val) => {
     if (val) _activeSlicers[col] = val;
     else delete _activeSlicers[col];
@@ -1569,6 +1608,7 @@ window.applySlicers = (col, val) => {
 window.renderPowerBI = () => {
     const chartCanvas = document.getElementById('results-chart');
     const helper      = document.getElementById('results-helper');
+    const container   = document.getElementById('chart-main-container');
     if (!chartCanvas || !helper) return;
     if (typeof Chart === 'undefined') {
         helper.innerHTML = '🚫 Chart Engine failed to load.';
@@ -1582,36 +1622,76 @@ window.renderPowerBI = () => {
         return;
     }
     helper.style.display = 'none';
-    chartCanvas.style.visibility = 'visible';
-    
+
     // 🧠 Smart Cardinality & Manual Override
     const chartTypeEl = document.getElementById('pbi-chart-type');
     const groupColEl  = document.getElementById('pbi-group-col');
     const numericColEl = document.getElementById('pbi-numeric-col');
 
-    const chartType = chartTypeEl ? chartTypeEl.value : 'bar';
+    const chartType = chartTypeEl && chartTypeEl.value ? chartTypeEl.value : 'bar';
     const groupCol  = groupColEl && groupColEl.value ? groupColEl.value : Object.keys(_filteredData[0])[0];
-    const numericCol = numericColEl ? numericColEl.value : 'count';
-    
+    const numericCol = numericColEl && numericColEl.value ? numericColEl.value : 'count';
+
+    if (chartInstance) {
+        chartInstance.destroy();
+        chartInstance = null;
+    }
+    if (typeof Chart.getChart === 'function') {
+        const existing = Chart.getChart(chartCanvas);
+        if (existing) existing.destroy();
+    }
+
+    // Lock container and reset canvas attributes before Chart.js measures bounding rect
+    if (container) {
+        container.style.height = '340px';
+        container.style.minHeight = '340px';
+        container.style.maxHeight = '340px';
+        container.style.flex = '0 0 340px';
+    }
+    chartCanvas.removeAttribute('style');
+    chartCanvas.removeAttribute('width');
+    chartCanvas.removeAttribute('height');
+    chartCanvas.style.visibility = 'visible';
+
     const ctx = chartCanvas.getContext('2d');
-    if (chartInstance) chartInstance.destroy();
-    
-    const agg = {};
+
+    const customM = _customMeasures.find(m => m.id === numericCol);
+    const targetCol = customM ? customM.col : numericCol;
+    const aggMode = customM ? customM.agg : (numericCol === 'count' ? 'COUNT' : 'SUM');
+
+    const buckets = {};
     let totalVal = 0;
     _filteredData.forEach(r => {
         const key = r[groupCol] !== undefined && r[groupCol] !== null ? String(r[groupCol]) : '(Blank)';
-        const num = parseFloat(r[numericCol]);
-        const val = (numericCol && numericCol !== 'count' && !isNaN(num)) ? num : 1;
-        agg[key] = (agg[key] || 0) + val;
+        const num = parseFloat(r[targetCol]);
+        const val = (aggMode !== 'COUNT' && !isNaN(num)) ? num : 1;
+        if (!buckets[key]) buckets[key] = { sum: 0, count: 0, min: Infinity, max: -Infinity };
+        buckets[key].sum += val;
+        buckets[key].count += 1;
+        if (val < buckets[key].min) buckets[key].min = val;
+        if (val > buckets[key].max) buckets[key].max = val;
         totalVal += val;
     });
 
+    const agg = {};
+    Object.entries(buckets).forEach(([k, b]) => {
+        if (aggMode === 'AVG') agg[k] = b.count > 0 ? b.sum / b.count : 0;
+        else if (aggMode === 'MIN') agg[k] = b.min === Infinity ? 0 : b.min;
+        else if (aggMode === 'MAX') agg[k] = b.max === -Infinity ? 0 : b.max;
+        else if (aggMode === 'COUNT') agg[k] = b.count;
+        else agg[k] = b.sum;
+    });
+
     const sorted = Object.entries(agg).sort((a,b) => b[1]-a[1]).slice(0, 15);
-    
+    const measureLabel = customM ? customM.name : ((numericCol && numericCol !== 'count') ? `Sum of ${numericCol}` : 'Record Count');
+
     // Auto populate KPI summary cards
     const kpiContainer = document.getElementById('pbi-kpi-cards');
     if (kpiContainer) {
-        const isSum = numericCol && numericCol !== 'count';
+        const isMetric = aggMode !== 'COUNT';
+        const displayTotal = aggMode === 'AVG' && _filteredData.length > 0
+            ? (totalVal / _filteredData.length)
+            : totalVal;
         kpiContainer.innerHTML = `
             <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:10px 16px; min-width:140px; box-shadow:0 1px 4px rgba(0,0,0,0.03);">
                 <span style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Rows Analyzed</span>
@@ -1622,32 +1702,57 @@ window.renderPowerBI = () => {
                 <div style="font-size:1.25rem; font-weight:800; color:#6366f1; margin-top:2px;">${Object.keys(agg).length.toLocaleString()}</div>
             </div>
             <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:10px 16px; min-width:140px; box-shadow:0 1px 4px rgba(0,0,0,0.03);">
-                <span style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">${isSum ? 'Total ' + numericCol : 'Record Count'}</span>
-                <div style="font-size:1.25rem; font-weight:800; color:#10b981; margin-top:2px;">${isSum ? totalVal.toLocaleString(undefined, {maximumFractionDigits: 2}) : totalVal.toLocaleString()}</div>
+                <span style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">${isMetric ? measureLabel : 'Record Count'}</span>
+                <div style="font-size:1.25rem; font-weight:800; color:#10b981; margin-top:2px;">${isMetric ? displayTotal.toLocaleString(undefined, {maximumFractionDigits: 2}) : displayTotal.toLocaleString()}</div>
             </div>
         `;
     }
 
+    const isCircular = chartType === 'pie' || chartType === 'doughnut';
+    const palette = ['#6366f1', '#f59e0b', '#10b981', '#ef4444', '#7c3aed', '#06b6d4', '#f97316', '#ec4899', '#14b8a6', '#4338ca', '#8b5cf6', '#dc2626', '#d946ef', '#059669', '#1e293b'];
+
     chartInstance = new Chart(ctx, {
         type: chartType,
         data: {
-            labels: sorted.map(i=>i[0]),
+            labels: sorted.map(i => String(i[0]).length > 22 ? String(i[0]).slice(0, 20) + '…' : String(i[0])),
             datasets: [{ 
-                label: (numericCol && numericCol !== 'count') ? numericCol : 'Record Count', 
-                data: sorted.map(i=>i[1]), 
-                backgroundColor: ['#6366f1', '#f59e0b', '#10b981', '#ef4444', '#7c3aed', '#06b6d4', '#f97316', '#ec4899', '#14b8a6', '#4338ca', '#8b5cf6', '#dc2626', '#d946ef', '#10b981', '#1e293b'],
-                borderWidth: 0,
-                borderRadius: (chartType === 'bar') ? 6 : 0
+                label: measureLabel, 
+                data: sorted.map(i => i[1]), 
+                backgroundColor: chartType === 'line' ? 'rgba(99, 102, 241, 0.15)' : palette,
+                borderColor: chartType === 'line' ? '#6366f1' : '#ffffff',
+                borderWidth: isCircular ? 2 : (chartType === 'line' ? 2.5 : 0),
+                borderRadius: (chartType === 'bar') ? 6 : 0,
+                maxBarThickness: 44,
+                fill: chartType === 'line',
+                tension: chartType === 'line' ? 0.3 : 0
             }]
         },
         options: { 
             responsive: true, 
-            maintainAspectRatio: false, 
+            maintainAspectRatio: false,
+            layout: {
+                padding: { top: 8, bottom: 8, left: 8, right: 8 }
+            },
             plugins: { 
-                legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8, font: { family: 'Outfit' } } },
+                legend: {
+                    display: isCircular || sorted.length <= 1,
+                    position: isCircular ? 'right' : 'bottom',
+                    labels: { usePointStyle: true, boxWidth: 8, padding: 10, font: { family: 'Outfit', size: 11 } }
+                },
                 tooltip: { backgroundColor: '#1e293b', titleFont: { family: 'Outfit' }, bodyFont: { family: 'Outfit' } }
-            }, 
-            barPercentage: 0.6 
+            },
+            scales: isCircular ? {} : {
+                x: {
+                    grid: { display: false },
+                    ticks: { font: { family: 'Outfit', size: 11 }, color: '#64748b', maxRotation: 35, minRotation: 0 }
+                },
+                y: {
+                    beginAtZero: true,
+                    grid: { color: 'rgba(226, 232, 240, 0.7)' },
+                    ticks: { font: { family: 'Outfit', size: 11 }, color: '#64748b' }
+                }
+            },
+            barPercentage: 0.65 
         }
     });
 };
@@ -1695,8 +1800,10 @@ window.initPowerBI = () => {
 
     if (measureSelect) {
         measureSelect.innerHTML = `<option value="count">Record Count</option>` + 
-                                  numericCols.map(c => `<option value="${c}">Sum of ${c}</option>`).join('');
-        if (numericCols.length > 0) measureSelect.value = numericCols[0];
+                                  numericCols.map(c => `<option value="${c}">Sum of ${c}</option>`).join('') +
+                                  _customMeasures.map(m => `<option value="${m.id}">${m.name} (${m.agg})</option>`).join('');
+        const bestMetric = numericCols.find(c => !/(^id$|_id$)/i.test(c));
+        measureSelect.value = bestMetric || 'count';
     }
     
     const categorical = cols.filter(c => new Set(_currentResultData.map(r=>r[c])).size < 20 && typeof _currentResultData[0][c] === 'string');

@@ -37,7 +37,7 @@
         .dashboard-table td { padding: 8px; border-bottom: 1px solid #1e293b; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
     </style>
     <title>CloudObjectIQ | Direct Object Explorer</title>
-    <link rel="stylesheet" href="style.css?v=10">
+    <link rel="stylesheet" href="style.css?v=11">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <script src="chart.js"></script>
 </head>
@@ -711,10 +711,10 @@
                         </tbody>
                     </table>
                 </div>
-                <div id="chart-panel" style="display:none; padding: 24px; background: #f8fafc; border-top: 1px solid var(--border);">
-                    <div style="display: flex; gap: 20px; min-height: 400px;">
+                <div id="chart-panel" style="display:none; padding: 20px 24px; background: #f8fafc; border-top: 1px solid var(--border);">
+                    <div style="display: flex; gap: 20px; align-items: flex-start;">
                         <!-- Left: Filters Panel (Power BI Slicers) -->
-                        <div style="width: 250px; background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 2px 10px rgba(0,0,0,0.02);">
+                        <div style="width: 240px; flex-shrink: 0; background: white; padding: 18px; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 2px 10px rgba(0,0,0,0.02);">
                             <h4 style="margin: 0 0 15px 0; display:flex; align-items:center; gap:8px;"><span>🎯</span> Global Slicers</h4>
                             <p style="font-size:0.75rem; color:var(--text-muted); margin-top:-10px;">Filter data across visuals</p>
                             <div id="pbi-filters" style="margin-bottom:20px;">
@@ -730,19 +730,19 @@
                         </div>
                         
                         <!-- Right: Charts & KPIs -->
-                        <div style="flex: 1; display: flex; flex-direction: column; gap: 20px;">
+                        <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px;">
                             <div id="pbi-kpi-cards" style="display: flex; gap: 15px; overflow-x: auto; padding-bottom: 5px;">
                                 <!-- Auto-populated KPIs -->
                             </div>
                             
-                            <div style="background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; flex:1; display:flex; flex-direction:column; box-shadow: 0 2px 10px rgba(0,0,0,0.02);">
-                                <div style="display:flex; justify-content:space-between; margin-bottom: 20px;">
+                            <div style="background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; display:flex; flex-direction:column; box-shadow: 0 2px 10px rgba(0,0,0,0.02);">
+                                <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; margin-bottom: 16px;">
                                     <div>
-                                        <h3 style="margin:0; font-size:1.2rem; color:#1e293b;">Interactive Report</h3>
-                                        <p style="margin:0; font-size:0.8rem; color:var(--text-muted);">Data driven by CloudObjectIQ Data Model</p>
+                                        <h3 style="margin:0; font-size:1.15rem; color:#1e293b;">Interactive Report</h3>
+                                        <p style="margin:2px 0 0; font-size:0.78rem; color:var(--text-muted);">Data driven by CloudObjectIQ Data Model</p>
                                         <div id="chart-debug-status" style="font-size:0.65rem; padding-top:4px; color:var(--text-muted);">🔄 Engine Ready</div>
                                     </div>
-                                    <div style="display:flex; gap:10px;">
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap;">
                                         <div style="display:flex; flex-direction:column; gap:4px;">
                                             <span style="font-size:0.6rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Dimension</span>
                                             <select id="pbi-group-col" onchange="renderPowerBI()" style="padding:8px 12px; border-radius:8px; border:1px solid #e2e8f0; outline:none; background: #f8fafc; font-weight:600; color:#334155; cursor:pointer; min-width:120px;"></select>
@@ -754,22 +754,20 @@
                                         <div style="display:flex; flex-direction:column; gap:4px;">
                                             <span style="font-size:0.6rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Type</span>
                                             <select id="pbi-chart-type" onchange="renderPowerBI()" style="padding:8px 12px; border-radius:8px; border:1px solid #e2e8f0; outline:none; background: #f8fafc; font-weight:600; color:#334155; cursor:pointer;">
-                                                <option value="bar">Bar Chart</option>
-                                                <option value="pie" selected>Pie Chart</option>
+                                                <option value="bar" selected>Bar Chart</option>
+                                                <option value="pie">Pie Chart</option>
                                                 <option value="line">Line Chart</option>
                                                 <option value="doughnut">Doughnut</option>
                                             </select>
                                         </div>
                                     </div>
                                 </div>
-                                <div id="chart-main-container" style="flex:1; position:relative; min-height:340px; height:340px; width:100%;">
+                                <div id="chart-main-container" style="position:relative; height:340px; min-height:340px; max-height:340px; width:100%; overflow:hidden;">
                                     <div id="results-helper" style="display:none; height:100%; width:100%; position:absolute; top:0; left:0; z-index:5;"></div>
-                                    <canvas id="results-chart" style="width:100%; height:100%;"></canvas>
+                                    <canvas id="results-chart"></canvas>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                </div>
                     </div>
                 </div>
             </div>
@@ -1240,6 +1238,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=19"></script>
+    <script src="app.js?v=20"></script>
 </body>
 </html>
