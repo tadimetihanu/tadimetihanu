@@ -34,12 +34,6 @@ const db = require('./db');
 const { listFiles, uploadFile, uploadStream } = require('./drivers/storage');
 const { encrypt, decrypt } = require('./utils/crypto');
 const { initDuckDB, runQuery, calculateCost, invalidateCachedFile, validateQueryAgainstDuckDB } = require('./query/engine');
-const {
-    deriveLogicalCoordinates,
-    registerCatalogEntry,
-    getCatalogTree,
-    refreshTargetCatalog
-} = require('./query/catalog_resolver');
 const { suggestQuery } = require('./query/ai');
 const { handleNl2Sql } = require('./nl2sql');
 const { authenticate, isAdmin, loginLimiter, SECRET_KEY } = require('./middleware/auth');
@@ -272,9 +266,6 @@ app.get('/api/user/profile', authenticate, async (req, res) => {
                     execution_time_ms AS duration, 
                     data_scanned_bytes, 
                     storage_downloaded_bytes,
-                    compressed_object_bytes,
-                    source_breakdown_json,
-                    error_message,
                     cache_status,
                     calculated_cost_usd, 
                     on_demand_cost_usd,
@@ -286,11 +277,6 @@ app.get('/api/user/profile', authenticate, async (req, res) => {
                 ORDER BY timestamp DESC 
                 LIMIT 50
             `, [userId]);
-            history = history.map(h => {
-                let source_breakdown = [];
-                try { if (h.source_breakdown_json) source_breakdown = JSON.parse(h.source_breakdown_json); } catch (_) {}
-                return { ...h, source_breakdown };
-            });
 
             stats = (await db.get(`
                 SELECT 
@@ -426,86 +412,30 @@ function getAzurePrefix(target) {
 app.get('/api/targets', authenticate, async (req, res) => {
     const userId = req.user.user_id;
     const role   = req.user.role;
-    const userTenant = req.user.tenant_id || 'default';
 
     console.log(`[TargetFetch] User: ${req.user.email}, Role: ${role}`);
 
     try {
         let targets;
         if (role === 'admin') {
-            targets = await db.all(
-                'SELECT * FROM targets WHERE COALESCE(tenant_id, ?) = ?',
-                ['default', userTenant]
-            );
+            targets = await db.all('SELECT * FROM targets');
         } else {
             targets = await db.all(`
                 SELECT t.* FROM targets t
                 JOIN permissions p ON t.target_id = p.target_id
-                WHERE p.subject_id = ? AND p.subject_type = 'user' AND p.can_read = 1
-                  AND COALESCE(t.tenant_id, 'default') = ?
-            `, [userId, userTenant]);
+                WHERE p.subject_id = ? AND p.subject_type = 'user'
+            `, [userId]);
         }
         
         console.log(`[TargetFetch] Found ${targets.length} targets for ${req.user.email}`);
         targets = targets.map(t => ({
-            ...db.sanitizeTargetForClient(t),
+            ...t,
             base_uri: getAzurePrefix(t)
         }));
         res.json({ success: true, targets });
     } catch (err) {
         console.error(`[TargetFetch] Error: ${err.message}`);
         res.status(500).json({ error: err.message });
-    }
-});
-
-app.post('/api/targets/:targetId/validate', authenticate, checkAccess('read'), async (req, res) => {
-    const { targetId } = req.params;
-    const userTenant = req.user.tenant_id || 'default';
-    try {
-        const target = await db.get('SELECT * FROM targets WHERE target_id = ?', [targetId]);
-        if (!target) {
-            return res.status(404).json({ success: false, error: 'Target not found' });
-        }
-        if ((target.tenant_id || 'default') !== userTenant) {
-            return res.status(403).json({ success: false, error: 'Tenant isolation policy violation' });
-        }
-        const { testConnection } = require('./drivers/storage');
-        const result = await testConnection({
-            type: target.provider_type,
-            endpoint: target.endpoint,
-            bucket: target.bucket,
-            region: target.region,
-            credentials: target.credentials,
-            access_key: target.access_key,
-            secret_key: target.secret_key
-        });
-        const nowIso = new Date().toISOString();
-        await db.run(
-            'UPDATE targets SET last_validated_at = ?, validation_status = ? WHERE target_id = ?',
-            [nowIso, 'VALID', targetId]
-        );
-        res.json({
-            success: true,
-            targetId,
-            validatedAt: nowIso,
-            validationStatus: 'VALID',
-            ...result
-        });
-    } catch (err) {
-        const nowIso = new Date().toISOString();
-        const statusLabel = err.code ? `FAILED:${err.code}` : 'FAILED';
-        await db.run(
-            'UPDATE targets SET last_validated_at = ?, validation_status = ? WHERE target_id = ?',
-            [nowIso, statusLabel, targetId]
-        ).catch(() => {});
-        res.status(err.statusCode || 400).json({
-            success: false,
-            targetId,
-            validatedAt: nowIso,
-            validationStatus: statusLabel,
-            code: err.code || 'CONNECTION_FAILED',
-            error: err.message
-        });
     }
 });
 
@@ -739,6 +669,16 @@ app.get('/api/schema/:targetId', authenticate, checkAccess('read'), async (req, 
     }
 });
 
+app.post('/api/admin/test-connection', authenticate, isAdmin, async (req, res) => {
+    try {
+        const { testConnection } = require('./drivers/storage');
+        const results = await testConnection(req.body);
+        res.json({ success: true, ...results });
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
 function _normalizeObjectKey(rawKey) {
     const normalized = String(rawKey || '')
         .replace(/\\/g, '/')
@@ -777,13 +717,11 @@ async function _registerUploadedObjectInCatalog(targetId, objectKey, sizeBytes, 
             }
         }
 
-        await registerCatalogEntry({
-            targetId,
-            filePath: catalogPath,
-            fileSize: Number(sizeBytes || 0),
-            format: ext,
-            lastModified: nowIso
-        });
+        const catId = crypto.createHash('md5').update(`${targetId}_${catalogPath}`).digest('hex');
+        await db.run(`
+            INSERT OR REPLACE INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_modified)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [catId, targetId, catalogPath, path.posix.basename(catalogPath), Number(sizeBytes || 0), ext, nowIso]);
     } catch (catErr) {
         console.warn(`[Upload Catalog Sync Notice] ${catErr.message}`);
     }
@@ -944,46 +882,16 @@ app.post('/api/iceberg/insert', authenticate, checkAccess('write'), async (req, 
 
 // ── QUERY & AI ROUTES ─────────────────────────────────────────
 
-function _formatQueryMeta(scanMeta, duration, rowCount = 0) {
-    const logicalBytes = scanMeta.logicalScannedBytes !== undefined ? scanMeta.logicalScannedBytes : (scanMeta.estimatedScan || 0);
-    const compressedBytes = scanMeta.compressedObjectBytes !== undefined ? scanMeta.compressedObjectBytes : (scanMeta.totalDatasetBytes || logicalBytes);
-    const transferredBytes = scanMeta.bytesTransferred !== undefined ? scanMeta.bytesTransferred : (scanMeta.storageBytesDownloaded || 0);
-    return {
-        duration,
-        rowCount,
-        status: scanMeta.status || 'success',
-        executionId: scanMeta.executionId || crypto.randomUUID(),
-        estimatedScan: logicalBytes,
-        logicalScannedBytes: logicalBytes,
-        compressedObjectBytes: compressedBytes,
-        bytesTransferred: transferredBytes,
-        totalDatasetBytes: compressedBytes,
-        pruningSavedPct: scanMeta.pruningSavedPct || 0,
-        storageBytesDownloaded: transferredBytes,
-        cacheStatus: scanMeta.cacheStatus || 'LOCAL',
-        cacheHits: scanMeta.cacheHits || 0,
-        cacheMisses: scanMeta.cacheMisses || 0,
-        estimatedCost: scanMeta.onDemandCostUsd !== undefined ? scanMeta.onDemandCostUsd : (scanMeta.estimatedCost || 0),
-        billedCostUsd: scanMeta.billedCostUsd !== undefined ? scanMeta.billedCostUsd : 0,
-        onDemandCostUsd: scanMeta.onDemandCostUsd !== undefined ? scanMeta.onDemandCostUsd : (scanMeta.estimatedCost || 0),
-        cacheSavingsUsd: scanMeta.cacheSavingsUsd || 0,
-        currency: scanMeta.currency || 'USD',
-        pricingUnit: scanMeta.pricingUnit || '$5.00 / TiB',
-        perFileBreakdown: scanMeta.perFileBreakdown || [],
-        sourceBreakdown: scanMeta.sourceBreakdown || []
-    };
-}
-
-async function _handleSqlQueryRequest(req, res) {
+app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, res) => {
     req.setTimeout(300000);
     res.setTimeout(300000);
-    const targetId = req.params.targetId || req.body?.targetId || null;
-    const { sql } = req.body || {};
+    const { targetId } = req.params;
+    const { sql } = req.body;
     const userId = req.user.user_id;
 
     // RBAC: Block Viewers from executing arbitrary SQL
     if (req.user.role === 'viewer') {
-        return res.status(403).json({ success: false, code: 'PERMISSION_DENIED', error: 'Forbidden: Viewers cannot execute SQL queries.' });
+        return res.status(403).json({ success: false, error: 'Forbidden: Viewers cannot execute SQL queries.' });
     }
 
     if (!sql) return res.status(400).json({ error: 'SQL query required' });
@@ -1004,13 +912,31 @@ async function _handleSqlQueryRequest(req, res) {
     const startTime = Date.now();
 
     try {
-        const results = await runQuery(userId, sql, targetId, { user: req.user });
+        const results = await runQuery(userId, sql, targetId);
         const duration = Date.now() - startTime;
         const scanMeta = results._scanMeta || calculateCost(sql, results);
         res.json({ 
             success: true, 
             data: sanitizeBigInt(results),
-            meta: _formatQueryMeta(scanMeta, duration, Array.isArray(results) ? results.length : 0)
+            meta: {
+                duration,
+                executionId: scanMeta.executionId || crypto.randomUUID(),
+                estimatedScan: scanMeta.logicalScannedBytes !== undefined ? scanMeta.logicalScannedBytes : (scanMeta.estimatedScan || 0),
+                logicalScannedBytes: scanMeta.logicalScannedBytes !== undefined ? scanMeta.logicalScannedBytes : (scanMeta.estimatedScan || 0),
+                totalDatasetBytes: scanMeta.totalDatasetBytes || (scanMeta.logicalScannedBytes || 0),
+                pruningSavedPct: scanMeta.pruningSavedPct || 0,
+                storageBytesDownloaded: scanMeta.storageBytesDownloaded || 0,
+                cacheStatus: scanMeta.cacheStatus || 'LOCAL',
+                cacheHits: scanMeta.cacheHits || 0,
+                cacheMisses: scanMeta.cacheMisses || 0,
+                estimatedCost: scanMeta.onDemandCostUsd !== undefined ? scanMeta.onDemandCostUsd : (scanMeta.estimatedCost || 0),
+                billedCostUsd: scanMeta.billedCostUsd !== undefined ? scanMeta.billedCostUsd : 0,
+                onDemandCostUsd: scanMeta.onDemandCostUsd !== undefined ? scanMeta.onDemandCostUsd : (scanMeta.estimatedCost || 0),
+                cacheSavingsUsd: scanMeta.cacheSavingsUsd || 0,
+                currency: scanMeta.currency || 'USD',
+                pricingUnit: scanMeta.pricingUnit || '$5.00 / TiB',
+                perFileBreakdown: scanMeta.perFileBreakdown || []
+            }
         });
     } catch (err) {
         // ── SELF-HEALING AI LOGIC (Deterministic + LLM fallback with multi-pass repair) ──────────
@@ -1027,7 +953,7 @@ async function _handleSqlQueryRequest(req, res) {
                     }
                     if (fixedSql && fixedSql !== currentSql) {
                         console.log(`✨ [AI-Fix] Re-executing repaired SQL (pass ${attempt}): ${fixedSql}`);
-                        const fixedResults = await runQuery(userId, fixedSql, targetId, { user: req.user });
+                        const fixedResults = await runQuery(userId, fixedSql, targetId);
                         const duration = Date.now() - startTime;
                         const scanMeta = fixedResults._scanMeta || calculateCost(fixedSql, fixedResults);
                         return res.json({ 
@@ -1036,7 +962,25 @@ async function _handleSqlQueryRequest(req, res) {
                             isFixed: true,
                             originalSql: sql,
                             fixedSql: fixedSql,
-                            meta: _formatQueryMeta(scanMeta, duration, Array.isArray(fixedResults) ? fixedResults.length : 0)
+                            meta: {
+                                duration,
+                                executionId: scanMeta.executionId || crypto.randomUUID(),
+                                estimatedScan: scanMeta.logicalScannedBytes !== undefined ? scanMeta.logicalScannedBytes : (scanMeta.estimatedScan || 0),
+                                logicalScannedBytes: scanMeta.logicalScannedBytes !== undefined ? scanMeta.logicalScannedBytes : (scanMeta.estimatedScan || 0),
+                                totalDatasetBytes: scanMeta.totalDatasetBytes || (scanMeta.logicalScannedBytes || 0),
+                                pruningSavedPct: scanMeta.pruningSavedPct || 0,
+                                storageBytesDownloaded: scanMeta.storageBytesDownloaded || 0,
+                                cacheStatus: scanMeta.cacheStatus || 'LOCAL',
+                                cacheHits: scanMeta.cacheHits || 0,
+                                cacheMisses: scanMeta.cacheMisses || 0,
+                                estimatedCost: scanMeta.billedCostUsd !== undefined ? scanMeta.billedCostUsd : (scanMeta.estimatedCost || 0),
+                                billedCostUsd: scanMeta.billedCostUsd !== undefined ? scanMeta.billedCostUsd : (scanMeta.estimatedCost || 0),
+                                onDemandCostUsd: scanMeta.onDemandCostUsd !== undefined ? scanMeta.onDemandCostUsd : (scanMeta.estimatedCost || 0),
+                                cacheSavingsUsd: scanMeta.cacheSavingsUsd || 0,
+                                currency: scanMeta.currency || 'USD',
+                                pricingUnit: scanMeta.pricingUnit || '$5.00 / TiB',
+                                perFileBreakdown: scanMeta.perFileBreakdown || []
+                            }
                         });
                     }
                     break;
@@ -1061,16 +1005,9 @@ async function _handleSqlQueryRequest(req, res) {
             });
         }
         console.error(`❌ [Query] Error:`, err.message);
-        res.status(err.statusCode || 500).json({
-            success: false,
-            code: err.code || 'QUERY_EXECUTION_ERROR',
-            error: err.message
-        });
+        res.status(500).json({ error: err.message });
     }
-}
-
-app.post('/api/query', authenticate, _handleSqlQueryRequest);
-app.post('/api/query/:targetId', authenticate, checkAccess('read'), _handleSqlQueryRequest);
+});
 
 // ── SAVED QUERIES API ──────────────────────────────────────────
 app.get('/api/saved-queries', authenticate, async (req, res) => {
@@ -1515,270 +1452,53 @@ app.post('/api/admin/permissions', authenticate, async (req, res) => {
 });
 
 // 3. Target Management
-function _isMaskedOrEmptySecret(val) {
-    if (val === undefined || val === null) return true;
-    const s = String(val).trim();
-    if (!s || s === ':') return true;
-    if (s.includes('••••') || /^\*+$/.test(s)) return true;
-    return false;
-}
-
 app.get('/api/admin/targets', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
-    const userTenant = req.user.tenant_id || 'default';
     try {
-        const rawTargets = await db.all(
-            'SELECT * FROM targets WHERE COALESCE(tenant_id, ?) = ?',
-            ['default', userTenant]
-        );
-        const targets = rawTargets.map(t => ({
-            ...db.sanitizeTargetForClient(t),
-            base_uri: getAzurePrefix(t)
-        }));
+        const targets = await db.all('SELECT * FROM targets');
         res.json({ success: true, targets });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/api/admin/test-connection', authenticate, async (req, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
-    const {
-        target_id,
-        type,
-        provider_type,
-        endpoint,
-        bucket,
-        region,
-        credentials,
-        access_key,
-        secret_key
-    } = req.body || {};
-
-    try {
-        let resolvedCreds = credentials;
-        let resolvedAk = access_key;
-        let resolvedSk = secret_key;
-
-        if (target_id && _isMaskedOrEmptySecret(credentials) && _isMaskedOrEmptySecret(access_key) && _isMaskedOrEmptySecret(secret_key)) {
-            const existing = await db.get('SELECT * FROM targets WHERE target_id = ?', [target_id]);
-            if (existing) {
-                resolvedCreds = existing.credentials;
-                resolvedAk = existing.access_key;
-                resolvedSk = existing.secret_key;
-            }
-        }
-
-        const { testConnection } = require('./drivers/storage');
-        const result = await testConnection({
-            type: type || provider_type,
-            endpoint,
-            bucket,
-            region,
-            credentials: resolvedCreds,
-            access_key: resolvedAk,
-            secret_key: resolvedSk
-        });
-
-        if (target_id) {
-            const nowIso = new Date().toISOString();
-            await db.run(
-                'UPDATE targets SET last_validated_at = ?, validation_status = ? WHERE target_id = ?',
-                [nowIso, 'VALID', target_id]
-            ).catch(() => {});
-        }
-
-        res.json({ success: true, ...result });
-    } catch (err) {
-        if (target_id) {
-            const nowIso = new Date().toISOString();
-            const statusLabel = err.code ? `FAILED:${err.code}` : 'FAILED';
-            await db.run(
-                'UPDATE targets SET last_validated_at = ?, validation_status = ? WHERE target_id = ?',
-                [nowIso, statusLabel, target_id]
-            ).catch(() => {});
-        }
-        res.status(err.statusCode || 400).json({
-            success: false,
-            code: err.code || 'CONNECTION_FAILED',
-            error: err.message
-        });
-    }
-});
-
 app.post('/api/admin/targets', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
-    const {
-        target_name,
-        provider_type,
-        endpoint,
-        bucket,
-        credentials,
-        access_key,
-        secret_key,
-        region,
-        krb_principal,
-        krb_keytab,
-        catalog_name,
-        default_schema,
-        base_prefix,
-        tenant_id,
-        validate_connection
-    } = req.body || {};
-
-    if (!target_name || !provider_type) {
-        return res.status(400).json({ error: 'target_name and provider_type are required' });
-    }
-
-    const effectiveTenant = tenant_id || req.user.tenant_id || 'default';
-    const enc = db.encryptTargetSecrets({ credentials, access_key, secret_key, krb_keytab });
+    const { target_name, provider_type, endpoint, bucket, credentials, access_key, secret_key, region, krb_principal, krb_keytab } = req.body;
+    const synced = db.parseCredentials(credentials, access_key, secret_key);
 
     try {
-        let validationStatus = null;
-        let lastValidatedAt = null;
-        if (validate_connection) {
-            const { testConnection } = require('./drivers/storage');
-            await testConnection({
-                type: provider_type,
-                endpoint,
-                bucket,
-                region,
-                credentials,
-                access_key,
-                secret_key
-            });
-            validationStatus = 'VALID';
-            lastValidatedAt = new Date().toISOString();
-        }
-
         const targetId = require('crypto').randomUUID();
         await db.run(`
-            INSERT INTO targets (
-                target_id, target_name, provider_type, endpoint, bucket,
-                credentials, access_key, secret_key, region, is_active,
-                krb_principal, krb_keytab, catalog_name, default_schema,
-                base_prefix, tenant_id, last_validated_at, validation_status
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [
-            targetId,
-            target_name,
-            provider_type,
-            endpoint || '',
-            bucket || null,
-            enc.credentials,
-            enc.access_key,
-            enc.secret_key,
-            region || '',
-            krb_principal || null,
-            enc.krb_keytab || null,
-            catalog_name || null,
-            default_schema || 'default',
-            base_prefix || '',
-            effectiveTenant,
-            lastValidatedAt,
-            validationStatus
-        ]);
-        const created = await db.get('SELECT * FROM targets WHERE target_id = ?', [targetId]);
-        res.json({
-            success: true,
-            targetId,
-            target: db.sanitizeTargetForClient(created)
-        });
+            INSERT INTO targets (target_id, target_name, provider_type, endpoint, bucket, credentials, access_key, secret_key, region, is_active, krb_principal, krb_keytab)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        `, [targetId, target_name, provider_type, endpoint, bucket, synced.credentials, synced.access_key, synced.secret_key, region, krb_principal || null, krb_keytab || null]);
+        res.json({ success: true, targetId });
     } catch (err) {
-        res.status(err.statusCode || 500).json({
-            success: false,
-            code: err.code || 'TARGET_CREATE_ERROR',
-            error: err.message
-        });
+        res.status(500).json({ error: err.message });
     }
 });
 
 app.put('/api/admin/targets/:targetId', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const { targetId } = req.params;
-    const {
-        target_name,
-        provider_type,
-        endpoint,
-        bucket,
-        credentials,
-        access_key,
-        secret_key,
-        region,
-        krb_principal,
-        krb_keytab,
-        catalog_name,
-        default_schema,
-        base_prefix
-    } = req.body || {};
-
+    const { target_name, provider_type, endpoint, bucket, credentials, access_key, secret_key, region, krb_principal, krb_keytab } = req.body;
+    const synced = db.parseCredentials(credentials, access_key, secret_key);
     console.log(`[Admin] Updating target ${targetId}: ${target_name}`);
 
     try {
-        const existing = await db.get('SELECT * FROM targets WHERE target_id = ?', [targetId]);
-        if (!existing) {
-            return res.status(404).json({ error: 'Target not found' });
+        if (provider_type) {
+            await db.run(
+                'UPDATE targets SET target_name = ?, provider_type = ?, endpoint = ?, bucket = ?, credentials = ?, access_key = ?, secret_key = ?, region = ?, krb_principal = ?, krb_keytab = ? WHERE target_id = ?',
+                [target_name, provider_type, endpoint, bucket, synced.credentials, synced.access_key, synced.secret_key, region, krb_principal || null, krb_keytab || null, targetId]
+            );
+        } else {
+            await db.run(
+                'UPDATE targets SET target_name = ?, endpoint = ?, bucket = ?, credentials = ?, access_key = ?, secret_key = ?, region = ?, krb_principal = ?, krb_keytab = ? WHERE target_id = ?',
+                [target_name, endpoint, bucket, synced.credentials, synced.access_key, synced.secret_key, region, krb_principal || null, krb_keytab || null, targetId]
+            );
         }
-        const userTenant = req.user.tenant_id || 'default';
-        if ((existing.tenant_id || 'default') !== userTenant) {
-            return res.status(403).json({ error: 'Tenant isolation policy violation' });
-        }
-
-        const keepExistingCreds =
-            _isMaskedOrEmptySecret(credentials) &&
-            _isMaskedOrEmptySecret(access_key) &&
-            _isMaskedOrEmptySecret(secret_key);
-
-        const enc = keepExistingCreds
-            ? db.encryptTargetSecrets({
-                credentials: existing.credentials,
-                access_key: existing.access_key,
-                secret_key: existing.secret_key,
-                krb_keytab: krb_keytab || existing.krb_keytab
-            })
-            : db.encryptTargetSecrets({
-                credentials,
-                access_key,
-                secret_key,
-                krb_keytab: krb_keytab || existing.krb_keytab
-            });
-
-        await db.run(
-            `UPDATE targets
-             SET target_name = ?,
-                 provider_type = ?,
-                 endpoint = ?,
-                 bucket = ?,
-                 credentials = ?,
-                 access_key = ?,
-                 secret_key = ?,
-                 region = ?,
-                 krb_principal = ?,
-                 krb_keytab = ?,
-                 catalog_name = ?,
-                 default_schema = ?,
-                 base_prefix = ?
-             WHERE target_id = ?`,
-            [
-                target_name !== undefined ? target_name : existing.target_name,
-                provider_type || existing.provider_type,
-                endpoint !== undefined ? endpoint : existing.endpoint,
-                bucket !== undefined ? bucket : existing.bucket,
-                enc.credentials,
-                enc.access_key,
-                enc.secret_key,
-                region !== undefined ? region : existing.region,
-                krb_principal !== undefined ? krb_principal : existing.krb_principal,
-                enc.krb_keytab,
-                catalog_name !== undefined ? catalog_name : existing.catalog_name,
-                default_schema !== undefined ? default_schema : (existing.default_schema || 'default'),
-                base_prefix !== undefined ? base_prefix : (existing.base_prefix || ''),
-                targetId
-            ]
-        );
-        const updated = await db.get('SELECT * FROM targets WHERE target_id = ?', [targetId]);
-        res.json({ success: true, target: db.sanitizeTargetForClient(updated) });
+        res.json({ success: true });
     } catch (err) {
         console.error(`[Admin] Update failed: ${err.message}`);
         res.status(500).json({ error: err.message });
@@ -1789,17 +1509,8 @@ app.delete('/api/admin/targets/:targetId', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const { targetId } = req.params;
     try {
-        const existing = await db.get('SELECT * FROM targets WHERE target_id = ?', [targetId]);
-        if (!existing) {
-            return res.status(404).json({ error: 'Target not found' });
-        }
-        const userTenant = req.user.tenant_id || 'default';
-        if ((existing.tenant_id || 'default') !== userTenant) {
-            return res.status(403).json({ error: 'Tenant isolation policy violation' });
-        }
         await db.run('DELETE FROM metadata_catalog WHERE target_id = ?', [targetId]);
         await db.run('DELETE FROM permissions WHERE target_id = ?', [targetId]);
-        await db.run('DELETE FROM objects WHERE target_id = ?', [targetId]).catch(() => {});
         await db.run('DELETE FROM targets WHERE target_id = ?', [targetId]);
         res.json({ success: true });
     } catch (err) {
@@ -1844,9 +1555,6 @@ app.get('/api/admin/logs', authenticate, async (req, res) => {
                     q.execution_time_ms AS duration, 
                     q.data_scanned_bytes, 
                     q.storage_downloaded_bytes,
-                    q.compressed_object_bytes,
-                    q.source_breakdown_json,
-                    q.error_message,
                     q.cache_status,
                     q.calculated_cost_usd, 
                     q.on_demand_cost_usd,
@@ -1857,21 +1565,15 @@ app.get('/api/admin/logs', authenticate, async (req, res) => {
                 ORDER BY q.timestamp DESC
                 LIMIT 200
             `);
-            logs = rawLogs.map(l => {
-                let source_breakdown = [];
-                try { if (l.source_breakdown_json) source_breakdown = JSON.parse(l.source_breakdown_json); } catch (_) {}
-                return {
-                    ...l,
-                    duration: Number(l.duration || 0),
-                    data_scanned_bytes: Number(l.data_scanned_bytes || 0),
-                    storage_downloaded_bytes: Number(l.storage_downloaded_bytes || 0),
-                    compressed_object_bytes: Number(l.compressed_object_bytes || 0),
-                    calculated_cost_usd: Number(l.calculated_cost_usd || 0),
-                    on_demand_cost_usd: Number(l.on_demand_cost_usd || l.calculated_cost_usd || 0),
-                    cache_status: l.cache_status || 'MISS',
-                    source_breakdown
-                };
-            });
+            logs = rawLogs.map(l => ({
+                ...l,
+                duration: Number(l.duration || 0),
+                data_scanned_bytes: Number(l.data_scanned_bytes || 0),
+                storage_downloaded_bytes: Number(l.storage_downloaded_bytes || 0),
+                calculated_cost_usd: Number(l.calculated_cost_usd || 0),
+                on_demand_cost_usd: Number(l.on_demand_cost_usd || l.calculated_cost_usd || 0),
+                cache_status: l.cache_status || 'MISS'
+            }));
 
             if (logs.length > 0) {
                 const totalDur = logs.reduce((acc, l) => acc + l.duration, 0);
@@ -1902,104 +1604,11 @@ app.get('/api/admin/logs', authenticate, async (req, res) => {
     }
 });
 
-app.get('/api/catalog/tree', authenticate, async (req, res) => {
-    try {
-        const tree = await getCatalogTree(req.user);
-        res.json({ success: true, ...tree });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-app.post('/api/catalog/register', authenticate, async (req, res) => {
-    if (req.user.role === 'viewer') {
-        return res.status(403).json({ success: false, error: 'Forbidden: Viewers cannot register catalog tables' });
-    }
-    try {
-        const {
-            targetId,
-            catalogName,
-            schemaName,
-            tableName,
-            filePath,
-            fileSize,
-            rowCount,
-            format,
-            columns
-        } = req.body || {};
-
-        if (!targetId || !filePath) {
-            return res.status(400).json({ success: false, error: 'targetId and filePath are required' });
-        }
-
-        const target = await db.get('SELECT * FROM targets WHERE target_id = ?', [targetId]);
-        if (!target) {
-            return res.status(404).json({ success: false, error: 'Target not found' });
-        }
-
-        const userTenant = req.user.tenant_id || 'default';
-        if ((target.tenant_id || 'default') !== userTenant) {
-            return res.status(403).json({ success: false, error: 'Tenant isolation policy violation' });
-        }
-
-        const entry = await registerCatalogEntry({
-            targetId,
-            catalogName,
-            schemaName,
-            tableName,
-            filePath,
-            fileSize,
-            rowCount,
-            format: format || 'parquet',
-            schemaJson: columns || null,
-            tenantId: userTenant
-        });
-
-        res.json({ success: true, entry });
-    } catch (err) {
-        res.status(err.statusCode || 500).json({ success: false, error: err.message });
-    }
-});
-
-app.post('/api/catalog/refresh', authenticate, async (req, res) => {
-    if (req.user.role === 'viewer') {
-        return res.status(403).json({ success: false, error: 'Forbidden: Viewers cannot refresh catalog metadata' });
-    }
-    try {
-        const { targetId } = req.body || {};
-        if (targetId) {
-            const result = await scanTargetIntoCatalog(req.user.user_id, targetId);
-            const tree = await getCatalogTree(req.user);
-            return res.json({ success: true, refreshed: [result], ...tree });
-        }
-
-        const userTenant = req.user.tenant_id || 'default';
-        const targets = await db.all(
-            'SELECT target_id, target_name FROM targets WHERE COALESCE(tenant_id, ?) = ?',
-            ['default', userTenant]
-        );
-        const refreshed = [];
-        const errors = [];
-        for (const t of targets) {
-            try {
-                const r = await scanTargetIntoCatalog(req.user.user_id, t.target_id);
-                refreshed.push({ targetId: t.target_id, targetName: t.target_name, ...r });
-            } catch (e) {
-                errors.push({ targetId: t.target_id, targetName: t.target_name, error: e.message });
-            }
-        }
-        const tree = await getCatalogTree(req.user);
-        res.json({ success: true, refreshed, errors, ...tree });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
 app.get('/api/admin/catalog', authenticate, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     try {
         const catalog = await db.all(`
-            SELECT m.*, t.target_name, t.provider_type, t.bucket
+            SELECT m.*, t.target_name 
             FROM metadata_catalog m
             LEFT JOIN targets t ON m.target_id = t.target_id
             ORDER BY m.created_at DESC
@@ -2011,20 +1620,14 @@ app.get('/api/admin/catalog', authenticate, async (req, res) => {
 });
 
 async function scanTargetIntoCatalog(userId, targetId) {
-    const target = await db.get('SELECT * FROM targets WHERE target_id = ?', [targetId]);
-    if (!target) throw new Error(`Target ${targetId} not found`);
-
     const rawFiles = await listFiles(targetId);
     const files = rawFiles.filter(f => f && f.name && !f.name.endsWith('/'));
 
-    // Preserve any previously extracted schemas or custom logical coordinates across rescans
-    const prevRows = await db.all(
-        'SELECT file_path, catalog_name, schema_name, table_name, schema_json, row_count FROM metadata_catalog WHERE target_id = ?',
-        [targetId]
-    ).catch(() => []);
-    const prevByPath = new Map();
+    // Preserve any previously extracted schemas so large files stay cached across rescans
+    const prevRows = await db.all('SELECT file_path, schema_json FROM metadata_catalog WHERE target_id = ?', [targetId]).catch(() => []);
+    const prevSchemas = new Map();
     for (const r of prevRows) {
-        if (r.file_path) prevByPath.set(r.file_path, r);
+        if (r.file_path && r.schema_json) prevSchemas.set(r.file_path, r.schema_json);
     }
 
     await db.run('DELETE FROM metadata_catalog WHERE target_id = ?', [targetId]);
@@ -2033,30 +1636,18 @@ async function scanTargetIntoCatalog(userId, targetId) {
     let schemasDetected = 0;
 
     for (const file of files) {
+        const id = require('crypto').createHash('md5').update(`${targetId}_${file.name}`).digest('hex');
         const ext = (file.format || (file.name.toLowerCase().endsWith('.iceberg') || file.name.toLowerCase().includes('.iceberg') ? 'iceberg' : file.name.split('.').pop() || 'bin')).toLowerCase();
         const sizeBytes = Number(file.size || 0);
         const lastMod = file.lastModified || new Date().toISOString();
-        const prev = prevByPath.get(file.name);
-        const coords = deriveLogicalCoordinates(target, file.name);
 
-        let schemaJson = prev?.schema_json || null;
-        let rowCount = Number(prev?.row_count || 0);
+        // Insert catalog entry first so engine.js can resolve logicalName during DESCRIBE
+        await db.run(`
+            INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, schema_json, last_modified)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `, [id, targetId, file.name, path.basename(file.name), sizeBytes, ext, prevSchemas.get(file.name) || null, lastMod]);
 
-        // Insert initial catalog entry so engine.js can resolve logicalName during DESCRIBE
-        const entry = await registerCatalogEntry({
-            targetId,
-            catalogName: prev?.catalog_name || coords.catalogName,
-            schemaName: prev?.schema_name || coords.schemaName,
-            tableName: prev?.table_name || coords.tableName,
-            filePath: file.name,
-            fileSize: sizeBytes,
-            rowCount,
-            format: ext,
-            schemaJson,
-            tenantId: target.tenant_id || 'default',
-            lastModified: lastMod
-        });
-
+        let schemaJson = prevSchemas.get(file.name) || null;
         const isLargeJson = (ext === 'json' || ext === 'jsonl' || ext === 'ndjson') && sizeBytes > 10 * 1024 * 1024;
         if (!schemaJson && autoDescribeExts.has(ext) && !isLargeJson) {
             try {
@@ -2075,14 +1666,7 @@ async function scanTargetIntoCatalog(userId, targetId) {
                         nullable: r.null === 'YES'
                     }));
                     schemaJson = JSON.stringify(cols);
-                    try {
-                        const cntRows = await runQuery(userId, `SELECT COUNT(*) AS cnt FROM ${srcExpr}`, targetId);
-                        rowCount = Number(cntRows[0]?.cnt || 0);
-                    } catch (_) {}
-                    await db.run(
-                        'UPDATE metadata_catalog SET schema_json = ?, row_count = ? WHERE id = ?',
-                        [schemaJson, rowCount, entry.id]
-                    );
+                    await db.run('UPDATE metadata_catalog SET schema_json = ? WHERE id = ?', [schemaJson, id]);
                 }
             } catch (descErr) {
                 console.warn(`[Catalog Schema Notice] ${file.name}: ${descErr.message}`);

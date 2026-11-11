@@ -3,7 +3,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { SQLITE_SCHEMA, POSTGRES_SCHEMA, POSTGRES_MIGRATIONS, DEFAULT_TARGETS } = require('./schema');
-const { encryptSecret, decryptSecret, maskSecret, isEncrypted } = require('../utils/crypto');
 
 const RENDER_DEFAULT_INSTANCE_ID = 'dpg-dbk8g0etlv9c73f5kitg-a';
 
@@ -138,21 +137,16 @@ if (!_isPostgres) {
     initSqliteFallback();
 }
 
-// ── Credential Helpers (keeps credentials, access_key, secret_key in sync & encrypted at rest) ──
+// ── Credential Helpers (keeps credentials, access_key, secret_key in sync) ──
 function parseCredentials(credentials, accessKey, secretKey) {
-    let creds = typeof credentials === 'string' ? decryptSecret(credentials).trim() : '';
-    let ak = typeof accessKey === 'string' ? decryptSecret(accessKey).trim() : '';
-    let sk = typeof secretKey === 'string' ? decryptSecret(secretKey).trim() : '';
+    let creds = typeof credentials === 'string' ? credentials.trim() : '';
+    let ak = typeof accessKey === 'string' ? accessKey.trim() : '';
+    let sk = typeof secretKey === 'string' ? secretKey.trim() : '';
 
     if (creds && (!ak && !sk)) {
         if (creds.startsWith('{') && creds.endsWith('}')) {
             ak = creds;
             sk = 'json-key';
-        } else if (creds.includes('AccountName=') || creds.includes('AccountKey=')) {
-            const nameMatch = creds.match(/AccountName=([^;]+)/i);
-            const keyMatch = creds.match(/AccountKey=([^;]+)/i);
-            ak = nameMatch ? nameMatch[1].trim() : creds;
-            sk = keyMatch ? keyMatch[1].trim() : '';
         } else if (creds.includes(':')) {
             const idx = creds.indexOf(':');
             ak = creds.slice(0, idx);
@@ -168,16 +162,6 @@ function parseCredentials(credentials, accessKey, secretKey) {
     return { credentials: creds, access_key: ak, secret_key: sk };
 }
 
-function encryptTargetSecrets({ credentials, access_key, secret_key, krb_keytab } = {}) {
-    const synced = parseCredentials(credentials, access_key, secret_key);
-    return {
-        credentials: synced.credentials ? encryptSecret(synced.credentials) : '',
-        access_key: synced.access_key ? encryptSecret(synced.access_key) : '',
-        secret_key: synced.secret_key ? encryptSecret(synced.secret_key) : '',
-        krb_keytab: krb_keytab ? encryptSecret(decryptSecret(krb_keytab)) : null
-    };
-}
-
 function normalizeTargetRow(row) {
     if (!row || typeof row !== 'object') return row;
     if (!('provider_type' in row) && !('target_id' in row)) return row;
@@ -186,31 +170,7 @@ function normalizeTargetRow(row) {
         ...row,
         credentials: synced.credentials,
         access_key: synced.access_key,
-        secret_key: synced.secret_key,
-        krb_keytab: row.krb_keytab ? decryptSecret(row.krb_keytab) : row.krb_keytab
-    };
-}
-
-function sanitizeTargetForClient(row) {
-    if (!row || typeof row !== 'object') return row;
-    const normalized = normalizeTargetRow(row);
-    const hasCreds = Boolean(
-        (normalized.credentials && normalized.credentials !== ':' && normalized.credentials.trim() !== '') ||
-        (normalized.access_key && normalized.access_key.trim() !== '') ||
-        (normalized.secret_key && normalized.secret_key.trim() !== '')
-    );
-    const maskedKey = maskSecret(normalized.access_key || normalized.credentials || '');
-    const {
-        credentials: _c,
-        access_key: _ak,
-        secret_key: _sk,
-        krb_keytab: _kt,
-        ...safeFields
-    } = normalized;
-    return {
-        ...safeFields,
-        has_credentials: hasCreds,
-        access_key_masked: maskedKey
+        secret_key: synced.secret_key
     };
 }
 
@@ -252,12 +212,6 @@ function translateSql(sql) {
     out = out.replace(/INSERT\s+OR\s+REPLACE\s+INTO\s+metadata_catalog\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/gi, (match, cols, vals) => {
         const colNames = cols.split(',').map(c => c.trim().toLowerCase());
         const updates = ['file_path = EXCLUDED.file_path', 'file_name = EXCLUDED.file_name', 'file_size = EXCLUDED.file_size', 'format = EXCLUDED.format'];
-        if (colNames.includes('catalog_name')) updates.push('catalog_name = EXCLUDED.catalog_name');
-        if (colNames.includes('schema_name')) updates.push('schema_name = EXCLUDED.schema_name');
-        if (colNames.includes('table_name')) updates.push('table_name = EXCLUDED.table_name');
-        if (colNames.includes('storage_uri')) updates.push('storage_uri = EXCLUDED.storage_uri');
-        if (colNames.includes('row_count')) updates.push('row_count = EXCLUDED.row_count');
-        if (colNames.includes('tenant_id')) updates.push('tenant_id = EXCLUDED.tenant_id');
         if (colNames.includes('schema_json')) updates.push('schema_json = EXCLUDED.schema_json');
         if (colNames.includes('last_modified')) updates.push('last_modified = EXCLUDED.last_modified');
         return `INSERT INTO metadata_catalog (${cols}) VALUES (${vals}) ON CONFLICT (id) DO UPDATE SET ${updates.join(', ')}`;
@@ -403,7 +357,6 @@ async function verifyOrNegotiatePostgres() {
 
 async function ensureSqliteMigrations() {
     const migrations = [
-        ['users', 'tenant_id', "TEXT DEFAULT 'default'"],
         ['users', 'oauth_provider', 'TEXT'],
         ['users', 'oauth_id', 'TEXT'],
         ['users', 'display_name', 'TEXT'],
@@ -413,35 +366,16 @@ async function ensureSqliteMigrations() {
         ['targets', 'secret_key', 'TEXT'],
         ['targets', 'krb_principal', 'TEXT'],
         ['targets', 'krb_keytab', 'TEXT'],
-        ['targets', 'catalog_name', 'TEXT'],
-        ['targets', 'default_schema', "TEXT DEFAULT 'default'"],
-        ['targets', 'base_prefix', "TEXT DEFAULT ''"],
-        ['targets', 'tenant_id', "TEXT DEFAULT 'default'"],
-        ['targets', 'last_validated_at', 'TEXT'],
-        ['targets', 'validation_status', 'TEXT'],
-        ['metadata_catalog', 'catalog_name', 'TEXT'],
-        ['metadata_catalog', 'schema_name', "TEXT DEFAULT 'default'"],
-        ['metadata_catalog', 'table_name', 'TEXT'],
-        ['metadata_catalog', 'storage_uri', 'TEXT'],
-        ['metadata_catalog', 'row_count', 'INTEGER DEFAULT 0'],
-        ['metadata_catalog', 'tenant_id', "TEXT DEFAULT 'default'"],
         ['metadata_catalog', 'schema_json', 'TEXT'],
         ['metadata_catalog', 'last_modified', 'TEXT'],
         ['query_history', 'execution_id', 'TEXT'],
-        ['query_history', 'status', "TEXT DEFAULT 'success'"],
-        ['query_history', 'error_message', 'TEXT'],
         ['query_history', 'on_demand_cost_usd', 'REAL DEFAULT 0'],
-        ['query_history', 'compressed_object_bytes', 'INTEGER DEFAULT 0'],
         ['query_history', 'storage_downloaded_bytes', 'INTEGER DEFAULT 0'],
         ['query_history', 'cache_status', "TEXT DEFAULT 'MISS'"],
-        ['query_history', 'source_breakdown_json', 'TEXT'],
         ['query_logs', 'execution_id', 'TEXT'],
-        ['query_logs', 'error_message', 'TEXT'],
-        ['query_logs', 'compressed_object_bytes', 'INTEGER DEFAULT 0'],
         ['query_logs', 'storage_downloaded_bytes', 'INTEGER DEFAULT 0'],
         ['query_logs', 'cache_status', "TEXT DEFAULT 'MISS'"],
-        ['query_logs', 'on_demand_cost_usd', 'REAL DEFAULT 0'],
-        ['query_logs', 'source_breakdown_json', 'TEXT']
+        ['query_logs', 'on_demand_cost_usd', 'REAL DEFAULT 0']
     ];
     for (const [table, col, colType] of migrations) {
         try {
@@ -504,24 +438,27 @@ async function initDatabase() {
             }
 
             // 2. Seed Default Targets if targets table is empty
-            const existingTargets = await all('SELECT target_id, credentials, access_key, secret_key, krb_keytab FROM targets');
+            const existingTargets = await all('SELECT target_id, credentials, access_key, secret_key FROM targets');
             if (existingTargets.length === 0) {
                 for (const t of DEFAULT_TARGETS) {
-                    const enc = encryptTargetSecrets(t);
                     await run(`
                         INSERT INTO targets (target_id, target_name, provider_type, endpoint, bucket, credentials, access_key, secret_key, region, is_active)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    `, [t.target_id, t.target_name, t.provider_type, t.endpoint, t.bucket, enc.credentials, enc.access_key, enc.secret_key, t.region, t.is_active]);
+                    `, [t.target_id, t.target_name, t.provider_type, t.endpoint, t.bucket, t.credentials, t.access_key, t.secret_key, t.region, t.is_active]);
                 }
                 console.log(`🎯 [Control Plane DB] Seeded ${DEFAULT_TARGETS.length} default cloud targets`);
             } else {
-                // Ensure existing targets have synced & encrypted credentials at rest
+                // Backfill access_key / secret_key on any existing targets that only stored credentials
                 for (const row of existingTargets) {
-                    const enc = encryptTargetSecrets(row);
-                    await run(
-                        'UPDATE targets SET credentials = ?, access_key = ?, secret_key = ?, krb_keytab = ? WHERE target_id = ?',
-                        [enc.credentials, enc.access_key, enc.secret_key, enc.krb_keytab, row.target_id]
-                    );
+                    if (row.credentials && (!row.access_key && !row.secret_key)) {
+                        const synced = parseCredentials(row.credentials, '', '');
+                        if (synced.access_key || synced.secret_key) {
+                            await run(
+                                'UPDATE targets SET access_key = ?, secret_key = ? WHERE target_id = ?',
+                                [synced.access_key, synced.secret_key, row.target_id]
+                            );
+                        }
+                    }
                 }
             }
 
@@ -553,9 +490,7 @@ module.exports = {
     initDatabase,
     getStatus,
     parseCredentials,
-    encryptTargetSecrets,
     normalizeTargetRow,
-    sanitizeTargetForClient,
     translateSql,
     exec,
     query,

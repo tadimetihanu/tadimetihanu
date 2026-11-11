@@ -8,7 +8,6 @@ const db = require('../db');
 const logger = require('../utils/logger');
 const { shouldProactivelyStageOutOfCore, executeOutOfCore } = require('./out_of_core');
 const { computeQueryScanMetrics, calculateCost, invalidateParquetStatsCache } = require('./scan_metrics');
-const { resolveFederatedSql } = require('./catalog_resolver');
 
 // SSL CA Certificate Paths for libcurl / OpenSSL / DuckDB
 if (!process.env.CURL_CA_BUNDLE) process.env.CURL_CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
@@ -324,8 +323,6 @@ function _evictParquetCacheIfNeeded(incomingBytes, protectedPaths) {
     } catch (_) {}
 }
 
-const _inFlightDownloads = new Map();
-
 async function cacheRemoteParquetFiles(targetId, target, executableSql) {
     const cacheReport = {
         hits: 0,
@@ -335,12 +332,12 @@ async function cacheRemoteParquetFiles(targetId, target, executableSql) {
     };
 
     const pType = String(target.provider_type || '').trim().toLowerCase();
-    const isCloudProvider = (
+    const isRemoteCloud = (
         pType === 's3' || pType === 'r2' || pType === 'cloudflare' ||
         pType === 'minio' || pType === 'azure' || pType === 'adls' || _isR2Target(target)
-    );
+    ) && target.endpoint && !target.endpoint.includes('localhost') && !target.endpoint.includes('127.0.0.1');
 
-    if (!isCloudProvider) return { executableSql, cacheReport };
+    if (!isRemoteCloud) return { executableSql, cacheReport };
 
     const bucketName = _cleanBucketName(target.bucket) || 'datalake';
     const escapedBucket = bucketName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -400,88 +397,40 @@ async function cacheRemoteParquetFiles(targetId, target, executableSql) {
         }
 
         if (!cacheHit) {
-            const inflightKey = `${targetId}::${objectKey}`;
+            const tmpPath = `${localCachePath}.tmp_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
             try {
-                if (_inFlightDownloads.has(inflightKey)) {
-                    downloadedBytes = await _inFlightDownloads.get(inflightKey);
-                    cacheHit = fs.existsSync(localCachePath);
-                } else {
-                    const dlPromise = (async () => {
-                        const tmpPath = `${localCachePath}.tmp_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-                        try {
-                            fs.mkdirSync(path.dirname(localCachePath), { recursive: true });
-                            _evictParquetCacheIfNeeded(expectedSize || 64 * 1024 * 1024, protectedPaths);
-                            const dlStart = Date.now();
-                            await downloadFile(targetId, objectKey, tmpPath);
-                            const dlStat = fs.statSync(tmpPath);
-                            if (dlStat.size <= 0) {
-                                throw new Error('Downloaded Parquet file is empty');
-                            }
-                            if (dlStat.size > MAX_SINGLE_CACHE_FILE_BYTES) {
-                                try { fs.unlinkSync(tmpPath); } catch (_) {}
-                                return 0;
-                            }
-                            try {
-                                fs.renameSync(tmpPath, localCachePath);
-                            } catch (renErr) {
-                                if (!fs.existsSync(localCachePath)) {
-                                    fs.copyFileSync(tmpPath, localCachePath);
-                                }
-                                try { fs.unlinkSync(tmpPath); } catch (_) {}
-                            }
-                            console.log(`⚡ [Parquet Cache] Cached '${objectKey}' (${(dlStat.size / (1024 * 1024)).toFixed(2)} MB in ${Date.now() - dlStart}ms)`);
-                            return dlStat.size;
-                        } catch (innerErr) {
-                            try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (_) {}
-                            throw innerErr;
-                        }
-                    })();
-                    _inFlightDownloads.set(inflightKey, dlPromise);
-                    try {
-                        downloadedBytes = await dlPromise;
-                        cacheHit = downloadedBytes > 0 || fs.existsSync(localCachePath);
-                    } finally {
-                        _inFlightDownloads.delete(inflightKey);
-                    }
+                fs.mkdirSync(path.dirname(localCachePath), { recursive: true });
+                _evictParquetCacheIfNeeded(expectedSize || 64 * 1024 * 1024, protectedPaths);
+                const dlStart = Date.now();
+                await downloadFile(targetId, objectKey, tmpPath);
+                const dlStat = fs.statSync(tmpPath);
+                if (dlStat.size <= 0) {
+                    throw new Error('Downloaded Parquet file is empty');
                 }
+                if (dlStat.size > MAX_SINGLE_CACHE_FILE_BYTES) {
+                    try { fs.unlinkSync(tmpPath); } catch (_) {}
+                    continue;
+                }
+                fs.renameSync(tmpPath, localCachePath);
+                console.log(`⚡ [Parquet Cache] Cached '${objectKey}' (${(dlStat.size / (1024 * 1024)).toFixed(1)} MB in ${Date.now() - dlStart}ms)`);
+                cacheHit = true;
+                downloadedBytes = dlStat.size;
             } catch (dlErr) {
-                const rawMsg = dlErr && dlErr.message ? dlErr.message : String(dlErr);
-                const rawCode = (dlErr && (dlErr.Code || dlErr.code || dlErr.name)) || '';
-                const httpStatus = (dlErr && (dlErr.statusCode || (dlErr.$metadata && dlErr.$metadata.httpStatusCode))) || 0;
-                const isAuthErr = httpStatus === 401 || /InvalidAccessKeyId|SignatureDoesNotMatch|AuthenticationFailed|InvalidAccountKey/i.test(rawCode + ' ' + rawMsg);
-                const isPermErr = httpStatus === 403 || /AccessDenied|AuthorizationFailure|AuthorizationPermissionMismatch/i.test(rawCode + ' ' + rawMsg);
-                const isAzUri = fullUri.toLowerCase().startsWith('az://');
-                const extLoaded = isAzUri ? _loadedExtensions.has('azure') : _loadedExtensions.has('httpfs');
-
-                if (isAuthErr || isPermErr || !extLoaded) {
-                    const wrapped = new Error(
-                        isAuthErr
-                            ? `Storage authentication failed for '${target.target_name}' (${objectKey}): ${rawMsg}`
-                            : (isPermErr
-                                ? `Storage permission denied on '${target.target_name}' (${objectKey}): ${rawMsg}`
-                                : `Failed to read remote Parquet '${objectKey}' from '${target.target_name}': ${rawMsg}`)
-                    );
-                    wrapped.code = isAuthErr ? 'AUTH_FAILURE' : (isPermErr ? 'PERMISSION_DENIED' : 'STORAGE_READ_FAILED');
-                    wrapped.statusCode = isAuthErr ? 401 : (isPermErr ? 403 : 502);
-                    throw wrapped;
-                }
-                console.warn(`⚠️ [Parquet Cache] Falling back to httpfs for '${objectKey}': ${rawMsg}`);
+                try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (_) {}
+                console.warn(`⚠️ [Parquet Cache] Falling back to httpfs for '${objectKey}': ${dlErr.message}`);
             }
         }
 
         const normLocal = localCachePath.replace(/\\/g, '/');
         if (cacheHit) {
+            cacheReport.hits++;
             if (downloadedBytes > 0) {
                 cacheReport.bytesDownloaded += downloadedBytes;
                 cacheReport.misses++;
-            } else {
-                cacheReport.hits++;
             }
             cacheReport.perFile.push({
                 physPath: normLocal,
-                originalUri: fullUri,
                 objectKey,
-                targetId,
                 cacheHit: downloadedBytes === 0,
                 downloadedBytes
             });
@@ -492,9 +441,7 @@ async function cacheRemoteParquetFiles(targetId, target, executableSql) {
             cacheReport.misses++;
             cacheReport.perFile.push({
                 physPath: fullUri,
-                originalUri: fullUri,
                 objectKey,
-                targetId,
                 cacheHit: false,
                 downloadedBytes: 0
             });
@@ -511,7 +458,6 @@ async function initSecret(target) {
 
     if (type === 'minio' || type === 's3' || type === 'r2' || type === 'cloudflare' || isR2) {
         await ensureExtension('httpfs');
-        if (!_loadedExtensions.has('httpfs')) return;
         const bucketName = _cleanBucketName(target.bucket);
         const rawEp = (target.endpoint || '').trim();
         let ep = rawEp.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
@@ -537,7 +483,6 @@ async function initSecret(target) {
         const sk = (target.secret_key || '').trim().replace(/'/g, "''");
         const epEsc = ep.replace(/'/g, "''");
         const secretName = `s3_${target.target_id || bucketName || 'default'}`.replace(/[^a-z0-9_]/gi, '_');
-        const scopeClause = bucketName ? `, SCOPE 's3://${bucketName.replace(/'/g, "''")}/'` : '';
 
         const cmds = [
             `SET s3_url_style='path'`,
@@ -549,23 +494,31 @@ async function initSecret(target) {
                 REGION '${region}',
                 ENDPOINT '${epEsc}',
                 URL_STYLE 'path',
-                USE_SSL ${ssl}${scopeClause}
+                USE_SSL ${ssl}
             )`
         ];
         for (const cmd of cmds) {
-            try { await _runSqlCmd(cmd); } catch (_) {}
+            await _runSqlCmd(cmd);
         }
 
     } else if (type === 'azure' || type === 'adls') {
         await ensureExtension('azure');
-        if (!_loadedExtensions.has('azure')) return;
+        let connStr = (target.endpoint || '').trim();
         const bucketName = _cleanBucketName(target.bucket) || 'datalake';
-        let connStr = '';
-        try {
-            const { buildAzureConnectionString } = require('../drivers/storage');
-            connStr = buildAzureConnectionString(target);
-        } catch (_) {
-            connStr = (target.endpoint || '').trim();
+        
+        // Auto-build connection string if only AccountName and keys were provided
+        if (connStr && !connStr.includes('AccountKey=')) {
+            let accountName = (target.access_key || '').trim();
+            let accountKey = (target.secret_key || '').trim();
+            if (!accountName && connStr.includes('.blob.core.windows.net')) {
+                const m = connStr.match(/https?:\/\/([^.]+)\.blob\.core\.windows\.net/);
+                if (m) accountName = m[1];
+            } else if (!accountName && !connStr.includes('.')) {
+                accountName = connStr;
+            }
+            if (accountName && accountKey) {
+                connStr = `DefaultEndpointsProtocol=https;AccountName=${accountName};AccountKey=${accountKey};EndpointSuffix=core.windows.net`;
+            }
         }
 
         if (connStr && (connStr.includes('AccountKey=') || connStr.includes('SharedAccessSignature='))) {
@@ -595,43 +548,19 @@ async function runQuery(userId, sql, targetId, options = {}) {
     await _bootPromise;
 
     const originalUserSql = sql;
+    const target = await getTarget(targetId);
     const startTime = Date.now();
     const executionId = options.executionId || crypto.randomUUID();
     const skipLog = Boolean(options.skipLog);
 
-    try {
-        // Resolve user context for RBAC and tenant isolation
-        let userObj = options.user || null;
-        if (!userObj && userId && userId !== 'admin') {
-            userObj = await db.get('SELECT user_id, email, role, tenant_id FROM users WHERE user_id = ?', [userId]);
-        }
-        if (!userObj) {
-            userObj = {
-                user_id: userId || 'admin',
-                role: userId === 'admin' ? 'admin' : 'user',
-                tenant_id: options.tenantId || 'default'
-            };
-        }
+    return enqueue(async () => {
+        try {
 
-        const target = targetId
-            ? await getTarget(targetId)
-            : (await db.get('SELECT * FROM targets WHERE is_active = 1 LIMIT 1') || await db.get('SELECT * FROM targets LIMIT 1'));
-        if (!target) {
-            throw new Error('No active storage target configured.');
-        }
-
-        // Enforce tenant isolation on primary target
-        const userTenant = userObj.tenant_id || 'default';
-        if ((target.tenant_id || 'default') !== userTenant) {
-            const tenantErr = new Error(`Tenant security violation: User in tenant '${userTenant}' cannot query target '${target.target_name}' in tenant '${target.tenant_id || 'default'}'.`);
-            tenantErr.code = 'TENANT_ISOLATION_VIOLATION';
-            tenantErr.statusCode = 403;
-            throw tenantErr;
-        }
-
-        // Block raw cloud storage URIs entered directly by user
-        if (originalUserSql.match(/s3:\/\//i) || originalUserSql.match(/az:\/\//i)) {
-            throw new Error('Direct cloud storage URIs are disabled. Please use the logical catalog table name or filename registered in the Metadata Catalog.');
+            
+        // [NEW] Metadata Catalog Verification
+        // Block raw URIs
+        if (sql.match(/s3:\/\//i) || sql.match(/az:\/\//i)) {
+            throw new Error('Direct cloud storage URIs are disabled. Please use the filename registered in the Metadata Catalog.');
         }
 
         // Intercept INSERT INTO for Iceberg tables
@@ -646,7 +575,7 @@ async function runQuery(userId, sql, targetId, options = {}) {
                 sourceSql = `SELECT * FROM (${sourceSql})`;
             }
             const { appendIcebergRecords } = require('../drivers/storage');
-            const appendRes = await appendIcebergRecords(target.target_id, icebergTable, sourceSql);
+            const appendRes = await appendIcebergRecords(targetId, icebergTable, sourceSql);
             return [{
                 status: 'SUCCESS',
                 operation: 'ICEBERG_APPEND',
@@ -660,79 +589,38 @@ async function runQuery(userId, sql, targetId, options = {}) {
             }];
         }
 
-        // 1. Resolve 3-part federated logical table names (e.g. aws_customers.crm.customers, azure_sales.sales.orders)
-        const fedResolved = await resolveFederatedSql(sql, { user: userObj, userId });
-        sql = fedResolved.rewrittenSql;
-        const referencedTargetsMap = new Map([[target.target_id, target]]);
-        for (const rt of fedResolved.referencedTargets) {
-            referencedTargetsMap.set(rt.target_id, rt);
-        }
-        const referencedTables = fedResolved.referencedTables || [];
-
-        // Map any federated table whose file_path already points to a local file (e.g. local staging/sample) before remote fetch
-        for (const refTbl of referencedTables) {
-            const tblTarget = referencedTargetsMap.get(refTbl.targetId) || target;
-            const hasLiveRemoteEndpoint = tblTarget.endpoint && /^https?:\/\//i.test(tblTarget.endpoint);
-            refTbl.isRemoteSource = Boolean(hasLiveRemoteEndpoint);
-
-            const localCandidates = [
-                path.isAbsolute(refTbl.filePath || '') ? refTbl.filePath : null,
-                path.join(__dirname, '..', '..', 'data', 'samples', refTbl.filePath || ''),
-                path.join(__dirname, '..', '..', 'minio_data', _cleanBucketName(tblTarget.bucket) || 'datalake', refTbl.filePath || '')
-            ].filter(Boolean);
-
-            let resolvedLocal = null;
-            for (const cand of localCandidates) {
-                if (fs.existsSync(cand)) {
-                    resolvedLocal = cand.replace(/\\/g, '/');
-                    break;
-                }
-            }
-
-            if (resolvedLocal && !hasLiveRemoteEndpoint) {
-                sql = sql
-                    .split(`'${refTbl.storageUri}'`).join(`'${resolvedLocal}'`)
-                    .split(`"${refTbl.storageUri}"`).join(`'${resolvedLocal}'`);
-                refTbl.resolvedPath = resolvedLocal;
-            } else {
-                refTbl.resolvedPath = refTbl.storageUri;
-            }
-        }
-
-        // 2. Resolve single-target file references (e.g. 'customers.parquet', 'iris.parquet') not already resolved by 3-part catalog resolver
-        const federatedUris = new Set(referencedTables.map(t => t.storageUri).concat(referencedTables.map(t => t.resolvedPath)).filter(Boolean));
         const fileRefRegex = /(?:from\s+|join\s+|read_[a-z0-9_]+\s*\(\s*|iceberg_[a-z0-9_]+\s*\(\s*)['"]([^'"]+)['"]/gi;
         const pathMatches = Array.from(sql.matchAll(fileRefRegex));
         const rewrittenRefs = new Set();
 
         for (const pathMatch of pathMatches) {
             const rawMatchedPath = pathMatch[1];
-            if (rewrittenRefs.has(rawMatchedPath) || federatedUris.has(rawMatchedPath)) continue;
-            if (/^(?:s3|az|r2|gdrive):\/\//i.test(rawMatchedPath)) continue;
+            if (rewrittenRefs.has(rawMatchedPath)) continue;
             rewrittenRefs.add(rawMatchedPath);
             let logicalName = rawMatchedPath;
-
+            
             // Look up in metadata catalog for this target
-            let row = await db.get('SELECT * FROM metadata_catalog WHERE target_id = ? AND file_name = ?', [target.target_id, logicalName]);
+            let row = await db.get('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND file_name = ?', [targetId, logicalName]);
             if (!row) {
-                row = await db.get('SELECT * FROM metadata_catalog WHERE target_id = ? AND file_path = ?', [target.target_id, logicalName]);
+                row = await db.get('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND file_path = ?', [targetId, logicalName]);
             }
             if (!row) {
                 const cleanName = logicalName.replace(/\.iceberg$/i, '');
-                row = await db.get('SELECT * FROM metadata_catalog WHERE target_id = ? AND (file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?)', [target.target_id, cleanName, `${cleanName}.iceberg`, cleanName, `${cleanName}.iceberg`]);
+                row = await db.get('SELECT file_path, format FROM metadata_catalog WHERE target_id = ? AND (file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?)', [targetId, cleanName, `${cleanName}.iceberg`, cleanName, `${cleanName}.iceberg`]);
             }
+            // Cross-target catalog resolution
             if (!row) {
                 const cleanName = logicalName.replace(/\.iceberg$/i, '');
-                row = await db.get('SELECT * FROM metadata_catalog WHERE file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?', [logicalName, `${cleanName}.iceberg`, cleanName, logicalName]);
+                row = await db.get('SELECT file_path, format FROM metadata_catalog WHERE file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?', [logicalName, `${cleanName}.iceberg`, cleanName, logicalName]);
             }
 
+            // Local sample & cache directory resolution
             let localSamplePath = null;
             const sampleCandidates = [
-                path.isAbsolute(logicalName) ? logicalName : null,
                 path.join(__dirname, '..', '..', 'data', 'samples', logicalName),
                 path.join(__dirname, '..', '..', 'minio_data', 'datalake', logicalName),
                 path.join(process.env.USERPROFILE || 'C:\\Users\\tadim', '.gdrive_cache', logicalName)
-            ].filter(Boolean);
+            ];
             for (const sp of sampleCandidates) {
                 if (fs.existsSync(sp)) {
                     localSamplePath = sp.replace(/\\/g, '/');
@@ -750,7 +638,7 @@ async function runQuery(userId, sql, targetId, options = {}) {
                             break;
                         }
                     }
-                    row = await db.get('SELECT * FROM metadata_catalog WHERE file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?', [logicalName, `${logicalName}.iceberg`, logicalName.replace(/\.iceberg$/i, ''), logicalName]);
+                    row = await db.get('SELECT file_path, format FROM metadata_catalog WHERE file_name = ? OR file_name = ? OR file_path = ? OR file_path = ?', [logicalName, `${logicalName}.iceberg`, logicalName.replace(/\.iceberg$/i, ''), logicalName]);
                 } catch (e) {}
             }
 
@@ -758,6 +646,7 @@ async function runQuery(userId, sql, targetId, options = {}) {
                 logicalName = row.file_path;
             }
 
+            // Construct physical URI (prefer real cloud bucket for remote cloud targets; use localSamplePath for local/demo targets or fallback)
             const isLocalTarget = !target.endpoint || target.endpoint.includes('localhost') || target.endpoint.includes('127.0.0.1') || target.provider_type === 'local';
             let physicalUri;
             if (localSamplePath && (isLocalTarget || !row)) {
@@ -768,6 +657,7 @@ async function runQuery(userId, sql, targetId, options = {}) {
                 physicalUri = prefix + cleanBkt + '/' + logicalName.replace(/^\/+/, '');
             }
 
+            // If table format is iceberg and not already using iceberg_scan/iceberg_*, wrap in iceberg_scan
             const isIcebergTable = (row && row.format === 'iceberg') || logicalName.toLowerCase().endsWith('.iceberg') || logicalName.toLowerCase().includes('iceberg');
             const escapedRaw = rawMatchedPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const bareFromOrJoinRegex = new RegExp(`((?:FROM|JOIN)\\s+)['"]${escapedRaw}['"]`, 'gi');
@@ -777,44 +667,28 @@ async function runQuery(userId, sql, targetId, options = {}) {
             } else {
                 sql = sql.split(`'${rawMatchedPath}'`).join(`'${physicalUri}'`).split(`"${rawMatchedPath}"`).join(`'${physicalUri}'`);
             }
-
-            referencedTables.push({
-                fullName: row?.catalog_name && row?.schema_name && row?.table_name
-                    ? `${row.catalog_name}.${row.schema_name}.${row.table_name}`
-                    : path.posix.basename(logicalName),
-                catalogName: row?.catalog_name || target.catalog_name || 'default',
-                schemaName: row?.schema_name || target.default_schema || 'default',
-                tableName: row?.table_name || path.posix.basename(logicalName),
-                targetId: target.target_id,
-                targetName: target.target_name,
-                providerType: target.provider_type,
-                bucket: target.bucket,
-                filePath: logicalName,
-                storageUri: physicalUri,
-                resolvedPath: physicalUri,
-                fileSize: Number(row?.file_size || 0),
-                isRemoteSource: !isLocalTarget
-            });
         }
+    
 
-        // 3. Initialize DuckDB secrets for all referenced targets (simultaneous S3 + ADLS Gen2 support)
-        for (const refTarget of referencedTargetsMap.values()) {
             try {
-                await initSecret(refTarget);
+                await initSecret(target);
             } catch (secErr) {
+                if (/s3:\/\/|r2:\/\/|az:\/\//i.test(sql)) {
+                    throw secErr;
+                }
                 console.warn('[DuckDB Secret Notice]', secErr.message);
             }
-        }
 
-        let executableSql = sql;
+            let executableSql = sql;
 
-        // Translate r2:// to s3:// for DuckDB
-        executableSql = executableSql.replace(/r2:\/\//gi, 's3://');
+            // Handle R2 path prefix (translate r2:// to s3:// for DuckDB)
+            if (target.provider_type === 'r2' || target.provider_type === 'cloudflare') {
+                executableSql = executableSql.replace(/r2:\/\//gi, 's3://');
+            }
 
-        // Handle Google Drive file caching and path transformation
-        for (const refTarget of referencedTargetsMap.values()) {
-            if (refTarget.provider_type === 'gdrive' || refTarget.provider_type === 'googledrive') {
-                const fileRefMatches = executableSql.match(/['"](gdrive:\/\/[^'"]+|[^'"]+\.(?:parquet|csv|json|orc|tsv|txt))['"]/gi) || [];
+            // Handle Google Drive file caching and path transformation
+            if (target.provider_type === 'gdrive' || target.provider_type === 'googledrive') {
+                const fileRefMatches = sql.match(/['"](gdrive:\/\/[^'"]+|[^'"]+\.(?:parquet|csv|json|orc|tsv|txt))['"]/gi) || [];
                 for (const matchStr of fileRefMatches) {
                     const rawPath = matchStr.replace(/^['"]|['"]$/g, '');
                     const filename = path.basename(rawPath);
@@ -822,7 +696,7 @@ async function runQuery(userId, sql, targetId, options = {}) {
                     if (!localCached || !fs.existsSync(localCached)) {
                         const targetDest = path.join(gdrive.CACHE_DIR, filename);
                         try {
-                            await gdrive.downloadFile(refTarget, filename, targetDest);
+                            await gdrive.downloadFile(target, filename, targetDest);
                             localCached = targetDest;
                         } catch (err) {
                             console.warn(`[GDrive Engine] Could not download ${filename} on demand:`, err.message);
@@ -834,263 +708,269 @@ async function runQuery(userId, sql, targetId, options = {}) {
                     }
                 }
             }
-        }
 
-        // Handle Iceberg path mapping for local/demo sample tables
-        if (executableSql.includes('iceberg_scan')) {
-            const icebergMatches = executableSql.match(/iceberg_scan\s*\(\s*['"]([^'"]+)['"]\s*\)/gi) || [];
-            for (const matchStr of icebergMatches) {
-                const m = matchStr.match(/iceberg_scan\s*\(\s*['"]([^'"]+)['"]\s*\)/i);
-                if (m && m[1]) {
-                    const rawPath = m[1];
-                    const tableName = path.basename(rawPath);
-                    const possibleLocalDirs = [
-                        path.join(__dirname, '..', '..', 'data', 'samples', tableName),
-                        path.join(__dirname, '..', '..', 'minio_data', 'datalake', tableName),
-                        path.join(process.env.USERPROFILE || 'C:\\Users\\tadim', '.gdrive_cache', tableName)
-                    ];
-                    if (target.endpoint && target.endpoint.includes('localhost')) {
+            // Handle Iceberg path mapping for local/demo sample tables
+            if (executableSql.includes('iceberg_scan')) {
+                const icebergMatches = executableSql.match(/iceberg_scan\s*\(\s*['"]([^'"]+)['"]\s*\)/gi) || [];
+                for (const matchStr of icebergMatches) {
+                    const m = matchStr.match(/iceberg_scan\s*\(\s*['"]([^'"]+)['"]\s*\)/i);
+                    if (m && m[1]) {
+                        const rawPath = m[1];
+                        const tableName = path.basename(rawPath);
+                        const possibleLocalDirs = [
+                            path.join(__dirname, '..', '..', 'data', 'samples', tableName),
+                            path.join(__dirname, '..', '..', 'minio_data', 'datalake', tableName),
+                            path.join(process.env.USERPROFILE || 'C:\\Users\\tadim', '.gdrive_cache', tableName)
+                        ];
+                        if (target.endpoint && target.endpoint.includes('localhost')) {
+                            for (const dir of possibleLocalDirs) {
+                                const dataDir = path.join(dir, 'data');
+                                if (fs.existsSync(dataDir)) {
+                                    const normPath = path.join(dataDir, '*.parquet').replace(/\\/g, '/');
+                                    executableSql = executableSql.replace(m[0], `read_parquet('${normPath}')`);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Lazy-load heavy extensions only when needed by the query
+            if (/iceberg/i.test(executableSql)) {
+                await ensureExtension('iceberg');
+            }
+            if (/\bfts_main_|\bcreate_fts_index\b/i.test(executableSql)) {
+                await ensureExtension('fts');
+            }
+            if (/read_orc/i.test(executableSql) || /\.orc\b/i.test(executableSql)) {
+                await ensureExtension('orc');
+            }
+
+            // Stream-cache remote cloud Parquet files onto local SSD to eliminate httpfs/TLS heap overhead on 10M+ row joins
+            const cacheResult = await cacheRemoteParquetFiles(targetId, target, executableSql);
+            executableSql = cacheResult.executableSql || executableSql;
+            const cacheReport = cacheResult.cacheReport || null;
+
+            console.log(`🔍 [Query] Executing: ${executableSql.substring(0, 80)}...`);
+
+            let rows;
+            let usedOutOfCore = false;
+            try {
+                if (shouldProactivelyStageOutOfCore(executableSql, _engineLimits.containerMB)) {
+                    usedOutOfCore = true;
+                    rows = await executeOutOfCore(_runSqlCmd, _allSqlCmd, executableSql, SPILL_DIR);
+                } else {
+                    rows = await _allSqlCmd(executableSql);
+                }
+            } catch (queryErr) {
+                // Reset transaction state on failure before attempting any fallback query
+                await new Promise(r => conn.run('ROLLBACK', () => r()));
+
+                if (!usedOutOfCore && /out of memory|could not allocate block/i.test(queryErr.message)) {
+                    console.log('🧊 [Engine OOM Recovery] DuckDB hit memory ceiling; retrying via Out-of-Core SSD Spill Executor...');
+                    try { await _runSqlCmd('SET threads=1'); } catch (_) {}
+                    try {
+                        rows = await executeOutOfCore(_runSqlCmd, _allSqlCmd, executableSql, SPILL_DIR);
+                    } finally {
+                        if (_engineLimits.threads > 1) {
+                            try { await _runSqlCmd(`SET threads=${_engineLimits.threads}`); } catch (_) {}
+                        }
+                    }
+                // If Azure direct connection failed (e.g. SSL CA error or Azure C++ driver issue),
+                // fall back to downloading via Node.js Azure SDK and running query locally!
+                } else if ((target.provider_type === 'azure' || target.provider_type === 'adls') &&
+                    (queryErr.message.includes('SSL CA cert') || queryErr.message.includes('Fail to get a new connection') || queryErr.message.includes('AzureStorageFileSystem'))) {
+                    
+                    console.log('🔄 [Engine Fallback] Direct Azure DuckDB query failed with SSL/connection error. Falling back to Azure Blob SDK...');
+                    const { downloadFile } = require('../drivers/storage');
+                    const fileRefMatches = sql.match(/['"](az:\/\/[^'"]+|[^'"]+\.(?:parquet|csv|json|orc|tsv|txt))['"]/gi) || [];
+                    
+                    let fallbackSql = sql;
+                    for (const matchStr of fileRefMatches) {
+                        const rawPath = matchStr.replace(/^['"]|['"]$/g, '');
+                        const filename = path.basename(rawPath);
+                        const localCached = path.join(PARQUET_CACHE_DIR, `az-cache-${filename}`);
+                        
+                        try {
+                            if (!fs.existsSync(localCached)) {
+                                await downloadFile(targetId, rawPath, localCached);
+                            }
+                            const normalizedPath = localCached.replace(/\\/g, '/');
+                            fallbackSql = fallbackSql.split(rawPath).join(normalizedPath);
+                        } catch (dlErr) {
+                            console.error(`[Azure Fallback] Download failed for ${rawPath}:`, dlErr.message);
+                        }
+                    }
+
+                    console.log(`🔍 [Engine Fallback] Executing fallback query: ${fallbackSql.substring(0, 80)}...`);
+                    rows = await new Promise((res, rej) => {
+                        conn.all(fallbackSql, (err, rows) => {
+                            if (err) rej(err);
+                            else res(rows);
+                        });
+                    });
+                } else if (/iceberg_scan/i.test(executableSql) || /iceberg/i.test(queryErr.message) || /Failed to read iceberg table/i.test(queryErr.message)) {
+                    // Iceberg direct parquet data fallback if MinIO/S3 version-hint is missing or offline
+                    const m = executableSql.match(/iceberg_scan\s*\(\s*['"]([^'"]+)['"]\s*\)/i);
+                    if (m && m[1]) {
+                        const rawPath = m[1];
+                        const tableName = path.basename(rawPath);
+                        const possibleLocalDirs = [
+                            path.join(__dirname, '..', '..', 'minio_data', 'datalake', tableName),
+                            path.join(__dirname, '..', '..', 'data', 'samples', tableName),
+                            path.join(process.env.USERPROFILE || 'C:\\Users\\tadim', '.gdrive_cache', tableName)
+                        ];
+                        let found = false;
                         for (const dir of possibleLocalDirs) {
                             const dataDir = path.join(dir, 'data');
                             if (fs.existsSync(dataDir)) {
                                 const normPath = path.join(dataDir, '*.parquet').replace(/\\/g, '/');
-                                executableSql = executableSql.replace(m[0], `read_parquet('${normPath}')`);
+                                const fallbackSql = executableSql.replace(m[0], `read_parquet('${normPath}')`);
+                                console.log(`🔄 [Iceberg Fallback] Querying local table data: ${fallbackSql.substring(0, 80)}...`);
+                                rows = await new Promise((res, rej) => {
+                                    conn.all(fallbackSql, (err, rows) => {
+                                        if (err) rej(err);
+                                        else res(rows);
+                                    });
+                                });
+                                found = true;
                                 break;
                             }
                         }
-                    }
-                }
-            }
-        }
-
-        // Lazy-load heavy extensions only when needed by the query
-        if (/iceberg/i.test(executableSql)) {
-            await ensureExtension('iceberg');
-        }
-        if (/\bfts_main_|\bcreate_fts_index\b/i.test(executableSql)) {
-            await ensureExtension('fts');
-        }
-        if (/read_orc/i.test(executableSql) || /\.orc\b/i.test(executableSql)) {
-            await ensureExtension('orc');
-        }
-
-        // 4. Stream-cache remote cloud Parquet files across ALL referenced targets (S3 + ADLS Gen2)
-        const combinedCacheReport = {
-            hits: 0,
-            misses: 0,
-            bytesDownloaded: 0,
-            perFile: []
-        };
-        for (const refTarget of referencedTargetsMap.values()) {
-            const cacheResult = await cacheRemoteParquetFiles(refTarget.target_id, refTarget, executableSql);
-            executableSql = cacheResult.executableSql || executableSql;
-            if (cacheResult.cacheReport) {
-                combinedCacheReport.hits += cacheResult.cacheReport.hits || 0;
-                combinedCacheReport.misses += cacheResult.cacheReport.misses || 0;
-                combinedCacheReport.bytesDownloaded += cacheResult.cacheReport.bytesDownloaded || 0;
-                for (const pf of (cacheResult.cacheReport.perFile || [])) {
-                    combinedCacheReport.perFile.push(pf);
-                    for (const rt of referencedTables) {
-                        if (rt.storageUri === pf.originalUri || rt.filePath === pf.objectKey) {
-                            rt.resolvedPath = pf.physPath;
+                        if (!found) {
+                            // Try scanning S3 data parquet directly
+                            const dataFallbackSql = executableSql.replace(m[0], `read_parquet('${rawPath}/data/*.parquet')`);
+                            console.log(`🔄 [Iceberg Remote Fallback] Scanning remote data directory: ${dataFallbackSql.substring(0, 80)}...`);
+                            rows = await new Promise((res, rej) => {
+                                conn.all(dataFallbackSql, (err, rows) => {
+                                    if (err) rej(err);
+                                    else res(rows);
+                                });
+                            });
                         }
-                    }
-                }
-            }
-        }
+                    } else {
+                        if (queryErr.message.includes('404') || queryErr.message.includes('Not Found') || queryErr.message.includes('NoSuchKey')) {
+                            const fileMatch = sql.match(/['"]([^'"]+\.(?:parquet|csv|json|orc|iceberg))['"]/i);
+                            if (fileMatch) {
+                                const searchedFile = path.basename(fileMatch[1]);
+                                try {
+                                    const otherTarget = await db.get(`
+                                        SELECT m.*, t.target_name 
+                                        FROM metadata_catalog m
+                                        JOIN targets t ON m.target_id = t.target_id
+                                        WHERE (m.file_name = ? OR m.file_path LIKE ?) AND m.target_id != ?
+                                        LIMIT 1
+                                    `, [searchedFile, `%${searchedFile}%`, targetId]);
 
-        console.log(`🔍 [Query] Executing [${executionId.slice(0, 8)}]: ${executableSql.substring(0, 100)}...`);
-
-        // 5. Execute on a dedicated connection handle for concurrent query isolation
-        const queryConn = engineDb.connect();
-        const runIsolatedSql = (cmd) => new Promise((res, rej) => queryConn.run(cmd, (e) => e ? rej(e) : res()));
-        const allIsolatedSql = (cmd) => new Promise((res, rej) => queryConn.all(cmd, (e, r) => e ? rej(e) : res(r)));
-
-        let rows;
-        let usedOutOfCore = false;
-        try {
-            if (shouldProactivelyStageOutOfCore(executableSql, _engineLimits.containerMB)) {
-                usedOutOfCore = true;
-                rows = await executeOutOfCore(runIsolatedSql, allIsolatedSql, executableSql, SPILL_DIR);
-            } else {
-                rows = await allIsolatedSql(executableSql);
-            }
-        } catch (queryErr) {
-            await new Promise(r => queryConn.run('ROLLBACK', () => r()));
-
-            if (!usedOutOfCore && /out of memory|could not allocate block/i.test(queryErr.message)) {
-                console.log('🧊 [Engine OOM Recovery] DuckDB hit memory ceiling; retrying via Out-of-Core SSD Spill Executor...');
-                try { await runIsolatedSql('SET threads=1'); } catch (_) {}
-                try {
-                    rows = await executeOutOfCore(runIsolatedSql, allIsolatedSql, executableSql, SPILL_DIR);
-                } finally {
-                    if (_engineLimits.threads > 1) {
-                        try { await runIsolatedSql(`SET threads=${_engineLimits.threads}`); } catch (_) {}
-                    }
-                }
-            } else if (/iceberg_scan/i.test(executableSql) || /iceberg/i.test(queryErr.message) || /Failed to read iceberg table/i.test(queryErr.message)) {
-                const m = executableSql.match(/iceberg_scan\s*\(\s*['"]([^'"]+)['"]\s*\)/i);
-                if (m && m[1]) {
-                    const rawPath = m[1];
-                    const tableName = path.basename(rawPath);
-                    const possibleLocalDirs = [
-                        path.join(__dirname, '..', '..', 'minio_data', 'datalake', tableName),
-                        path.join(__dirname, '..', '..', 'data', 'samples', tableName),
-                        path.join(process.env.USERPROFILE || 'C:\\Users\\tadim', '.gdrive_cache', tableName)
-                    ];
-                    let found = false;
-                    for (const dir of possibleLocalDirs) {
-                        const dataDir = path.join(dir, 'data');
-                        if (fs.existsSync(dataDir)) {
-                            const normPath = path.join(dataDir, '*.parquet').replace(/\\/g, '/');
-                            const fallbackSql = executableSql.replace(m[0], `read_parquet('${normPath}')`);
-                            rows = await allIsolatedSql(fallbackSql);
-                            found = true;
-                            break;
+                                    if (otherTarget) {
+                                        throw new Error(`File '${searchedFile}' does not exist in target '${target.target_name}'. It is located in target '${otherTarget.target_name}'. Please switch your Active Target to '${otherTarget.target_name}'.`);
+                                    }
+                                } catch (e) {
+                                    if (e.message.includes('does not exist in target')) throw e;
+                                }
+                            }
                         }
-                    }
-                    if (!found) {
-                        const dataFallbackSql = executableSql.replace(m[0], `read_parquet('${rawPath}/data/*.parquet')`);
-                        rows = await allIsolatedSql(dataFallbackSql);
+                        throw queryErr;
                     }
                 } else {
-                    throw queryErr;
-                }
-            } else {
-                if (queryErr.message.includes('404') || queryErr.message.includes('Not Found') || queryErr.message.includes('NoSuchKey')) {
-                    const fileMatch = sql.match(/['"]([^'"]+\.(?:parquet|csv|json|orc|iceberg))['"]/i);
-                    if (fileMatch) {
-                        const searchedFile = path.basename(fileMatch[1]);
-                        try {
-                            const otherTarget = await db.get(`
-                                SELECT m.*, t.target_name 
-                                FROM metadata_catalog m
-                                JOIN targets t ON m.target_id = t.target_id
-                                WHERE (m.file_name = ? OR m.file_path LIKE ?) AND m.target_id != ?
-                                LIMIT 1
-                            `, [searchedFile, `%${searchedFile}%`, target.target_id]);
+                    if (queryErr.message.includes('404') || queryErr.message.includes('Not Found') || queryErr.message.includes('NoSuchKey')) {
+                        const fileMatch = sql.match(/['"]([^'"]+\.(?:parquet|csv|json|orc|iceberg))['"]/i);
+                        if (fileMatch) {
+                            const searchedFile = path.basename(fileMatch[1]);
+                            try {
+                                const otherTarget = await db.get(`
+                                    SELECT m.*, t.target_name 
+                                    FROM metadata_catalog m
+                                    JOIN targets t ON m.target_id = t.target_id
+                                    WHERE (m.file_name = ? OR m.file_path LIKE ?) AND m.target_id != ?
+                                    LIMIT 1
+                                `, [searchedFile, `%${searchedFile}%`, targetId]);
 
-                            if (otherTarget) {
-                                throw new Error(`File '${searchedFile}' does not exist in target '${target.target_name}'. It is located in target '${otherTarget.target_name}'. Please switch your Active Target to '${otherTarget.target_name}'.`);
+                                if (otherTarget) {
+                                    throw new Error(`File '${searchedFile}' does not exist in target '${target.target_name}'. It is located in target '${otherTarget.target_name}'. Please switch your Active Target to '${otherTarget.target_name}'.`);
+                                }
+                            } catch (e) {
+                                if (e.message.includes('does not exist in target')) throw e;
                             }
-                        } catch (e) {
-                            if (e.message.includes('does not exist in target')) throw e;
                         }
                     }
+                    throw queryErr;
                 }
-                throw queryErr;
             }
-        }
 
-        const duration = Date.now() - startTime;
-        const scanMeta = await computeQueryScanMetrics({
-            originalSql: originalUserSql,
-            executableSql,
-            rows,
-            targetId: target.target_id,
-            allSqlCmd: allIsolatedSql,
-            db,
-            cacheReport: combinedCacheReport,
-            executionId,
-            referencedTables
-        });
-        scanMeta.durationMs = duration;
-        scanMeta.rowCount = Array.isArray(rows) ? rows.length : 0;
-        scanMeta.status = 'success';
-        scanMeta.isFederated = referencedTargetsMap.size > 1 || referencedTables.length > 1;
-
-        if (Array.isArray(rows)) {
-            Object.defineProperty(rows, '_scanMeta', {
-                value: scanMeta,
-                enumerable: false,
-                configurable: true
+            const duration = Date.now() - startTime;
+            const scanMeta = await computeQueryScanMetrics({
+                originalSql: originalUserSql,
+                executableSql,
+                rows,
+                targetId,
+                allSqlCmd: _allSqlCmd,
+                db,
+                cacheReport,
+                executionId
             });
-        }
-        if (!skipLog && !/^\s*DESCRIBE\b/i.test(originalUserSql)) {
-            await logQuery(userId, target.target_id, originalUserSql, rows.length, duration, 'success', scanMeta);
-        }
-        if (typeof global.gc === 'function') {
-            try { global.gc(); } catch (_) {}
-        }
-        return rows;
+            if (Array.isArray(rows)) {
+                Object.defineProperty(rows, '_scanMeta', {
+                    value: scanMeta,
+                    enumerable: false,
+                    configurable: true
+                });
+            }
+            if (!skipLog && !/^\s*DESCRIBE\b/i.test(originalUserSql)) {
+                await logQuery(userId, targetId, originalUserSql, rows.length, duration, 'success', scanMeta);
+            }
+            if (typeof global.gc === 'function') {
+                try { global.gc(); } catch (_) {}
+            }
+            return rows;
 
-    } catch (err) {
-        const duration = Date.now() - startTime;
-        console.error(`❌ [Query] Failed (${duration}ms): ${err.message}`);
-        if (!skipLog && !/^\s*DESCRIBE\b/i.test(originalUserSql)) {
-            await logQuery(userId, targetId || 'unknown', originalUserSql, 0, duration, 'failed', {
-                executionId,
-                errorMessage: err.message
-            });
+        } catch (err) {
+            const duration = Date.now() - startTime;
+            console.error(`❌ [Query] Failed (${duration}ms): ${err.message}`);
+            if (!skipLog && !/^\s*DESCRIBE\b/i.test(originalUserSql)) {
+                await logQuery(userId, targetId, originalUserSql, 0, duration, 'failed', { executionId });
+            }
+            if (typeof global.gc === 'function') {
+                try { global.gc(); } catch (_) {}
+            }
+            throw err;
         }
-        if (typeof global.gc === 'function') {
-            try { global.gc(); } catch (_) {}
-        }
-        throw err;
-    }
+    });
 }
 
 // ── Audit Logging ─────────────────────────────────────────────
 async function logQuery(userId, targetId, sql, rowCount, duration, status, scanMeta = {}) {
     const executionId = scanMeta.executionId || crypto.randomUUID();
     const scannedBytes = Number(scanMeta.logicalScannedBytes || scanMeta.estimatedScan || 0);
-    const compressedObjectBytes = Number(scanMeta.compressedObjectBytes || scanMeta.totalDatasetBytes || 0);
-    const costUsd = Number(scanMeta.billedCostUsd !== undefined ? scanMeta.billedCostUsd : (scanMeta.estimatedCost || 0));
+    const costUsd = Number(scanMeta.billedCostUsd || scanMeta.estimatedCost || 0);
     const onDemandCostUsd = Number(scanMeta.onDemandCostUsd || 0);
-    const storageDownloadedBytes = Number(scanMeta.bytesTransferred !== undefined ? scanMeta.bytesTransferred : (scanMeta.storageBytesDownloaded || 0));
+    const storageDownloadedBytes = Number(scanMeta.storageBytesDownloaded || 0);
     const cacheStatus = scanMeta.cacheStatus || 'MISS';
-    const errorMessage = scanMeta.errorMessage || null;
-    const sourceBreakdownJson = Array.isArray(scanMeta.sourceBreakdown) && scanMeta.sourceBreakdown.length > 0
-        ? JSON.stringify(scanMeta.sourceBreakdown)
-        : null;
 
     try {
         const queryId = crypto.randomUUID();
         await db.run(`
-            INSERT INTO query_history (
-                id, execution_id, user_id, target_id, sql_query, duration_ms, row_count,
-                status, error_message, cost_usd, on_demand_cost_usd, scan_bytes,
-                compressed_object_bytes, storage_downloaded_bytes, cache_status, source_breakdown_json
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [
-            queryId, executionId, userId, targetId, sql, duration, rowCount,
-            status, errorMessage, costUsd, onDemandCostUsd, scannedBytes,
-            compressedObjectBytes, storageDownloadedBytes, cacheStatus, sourceBreakdownJson
-        ]);
+            INSERT INTO query_history (id, execution_id, user_id, target_id, sql_query, duration_ms, row_count, cost_usd, on_demand_cost_usd, scan_bytes, storage_downloaded_bytes, cache_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [queryId, executionId, userId, targetId, sql, duration, rowCount, costUsd, onDemandCostUsd, scannedBytes, storageDownloadedBytes, cacheStatus]);
     } catch (err) {
         console.warn('[Query History Log Notice]', err.message);
     }
 
     try {
         await db.run(`
-            INSERT INTO query_logs (
-                execution_id, user_id, target_id, query_text, row_count, execution_time_ms,
-                status, error_message, data_scanned_bytes, compressed_object_bytes,
-                storage_downloaded_bytes, cache_status, calculated_cost_usd, on_demand_cost_usd,
-                source_breakdown_json
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [
-            executionId, userId, targetId, sql, rowCount, duration,
-            status, errorMessage, scannedBytes, compressedObjectBytes,
-            storageDownloadedBytes, cacheStatus, costUsd, onDemandCostUsd,
-            sourceBreakdownJson
-        ]);
+            INSERT INTO query_logs (execution_id, user_id, target_id, query_text, row_count, execution_time_ms, status, data_scanned_bytes, storage_downloaded_bytes, cache_status, calculated_cost_usd, on_demand_cost_usd)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [executionId, userId, targetId, sql, rowCount, duration, status, scannedBytes, storageDownloadedBytes, cacheStatus, costUsd, onDemandCostUsd]);
     } catch (e) {
         console.warn('[Query Audit Log Notice]', e.message);
     }
 
     if (status === 'success') {
-        logger.logInfo('duckdb', `Query Executed (${duration}ms) [${executionId}]`, {
-            sql, rowCount, scannedBytes, compressedObjectBytes, storageDownloadedBytes,
-            costUsd, onDemandCostUsd, cacheStatus, targetId, userId,
-            sources: scanMeta.sourceBreakdown?.length || 1
-        });
+        logger.logInfo('duckdb', `Query Executed (${duration}ms) [${executionId}]`, { sql, rowCount, scannedBytes, costUsd, onDemandCostUsd, storageDownloadedBytes, cacheStatus, targetId, userId });
     } else {
-        logger.logError('duckdb', `Query Failed (${duration}ms) [${executionId}]`, {
-            sql, targetId, userId, error: errorMessage
-        });
+        logger.logError('duckdb', `Query Failed (${duration}ms) [${executionId}]`, { sql, targetId, userId });
     }
 }
 

@@ -242,107 +242,8 @@ window.renderTabTelemetry = (tab) => {
             execBadge.innerText = `#${shortId}`;
             execBadge.title = `Execution ID: ${tab.meta.executionId || 'N/A'}`;
         }
-
-        // ── Render Federation Telemetry Panel & Source-Level Breakdown (Module 4 & 5) ──
-        const fedPanel = document.getElementById('federation-telemetry-panel');
-        const fedSummary = document.getElementById('federation-telemetry-summary');
-        const fedBreakdown = document.getElementById('federation-source-breakdown');
-        if (fedPanel && fedSummary && fedBreakdown) {
-            fedPanel.style.display = 'block';
-            const dur = tab.meta.durationMs || tab.meta.duration || 0;
-            const rows = tab.meta.rowCount !== undefined ? tab.meta.rowCount : (tab.results ? tab.results.length : 0);
-            const compObj = window.formatScanVolume(tab.meta.compressedObjectBytes || tab.meta.totalDatasetBytes || 0);
-            const netTrans = window.formatScanVolume(tab.meta.bytesTransferred !== undefined ? tab.meta.bytesTransferred : (tab.meta.storageBytesDownloaded || 0));
-            const logScan = window.formatScanVolume(tab.meta.logicalScannedBytes || tab.meta.estimatedScan || 0);
-            const billedUsd = Number(tab.meta.billedCostUsd !== undefined ? tab.meta.billedCostUsd : 0);
-            const isFed = Boolean(tab.meta.isFederated || (Array.isArray(tab.meta.sourceBreakdown) && tab.meta.sourceBreakdown.length > 1));
-
-            fedSummary.innerHTML = `
-                <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:6px 10px; text-align:center;">
-                    <div style="font-size:0.62rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Query Type</div>
-                    <div style="font-size:0.75rem; font-weight:800; color:${isFed ? '#4f46e5' : '#0f172a'};">${isFed ? '🌐 Cross-Source Federated' : 'Single Source'}</div>
-                </div>
-                <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:6px 10px; text-align:center;">
-                    <div style="font-size:0.62rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Duration / Rows</div>
-                    <div style="font-size:0.75rem; font-weight:800; color:#0f172a;">${dur}ms · ${rows} rows</div>
-                </div>
-                <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:6px 10px; text-align:center;" title="Total size of underlying Parquet files in S3/ADLS storage">
-                    <div style="font-size:0.62rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Compressed Size</div>
-                    <div style="font-size:0.75rem; font-weight:800; color:#0f172a;">${compObj.text}</div>
-                </div>
-                <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:6px 10px; text-align:center;" title="Actual network payload downloaded from remote storage (0 if cached)">
-                    <div style="font-size:0.62rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Bytes Transferred</div>
-                    <div style="font-size:0.75rem; font-weight:800; color:${netTrans.value > 0 ? '#ea580c' : '#10b981'};">${netTrans.text}</div>
-                </div>
-                <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:6px 10px; text-align:center;" title="DuckDB column-projected & row-group-pruned bytes scanned">
-                    <div style="font-size:0.62rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Logical Scanned</div>
-                    <div style="font-size:0.75rem; font-weight:800; color:#0284c7;">${logScan.text}</div>
-                </div>
-                <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:6px 10px; text-align:center;" title="Live Query Burn at $5.00 / TiB">
-                    <div style="font-size:0.62rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Billed Cost</div>
-                    <div style="font-size:0.75rem; font-weight:800; color:#dc2626;">$${billedUsd.toFixed(6)}</div>
-                </div>
-            `;
-
-            if (Array.isArray(tab.meta.sourceBreakdown) && tab.meta.sourceBreakdown.length > 0) {
-                fedBreakdown.innerHTML = `
-                    <div style="font-size:0.68rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px;">
-                        Source-Level Live Burn Breakdown
-                    </div>
-                    <table style="width:100%; border-collapse:collapse; background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; overflow:hidden; font-size:0.72rem;">
-                        <thead>
-                            <tr style="background:#f1f5f9; text-align:left; border-bottom:1px solid #e2e8f0; font-size:0.65rem; color:var(--text-muted); text-transform:uppercase;">
-                                <th style="padding:6px 10px;">Source Table</th>
-                                <th style="padding:6px 10px;">Provider</th>
-                                <th style="padding:6px 10px;">Compressed Size</th>
-                                <th style="padding:6px 10px;">Transferred</th>
-                                <th style="padding:6px 10px;">Logical Scanned</th>
-                                <th style="padding:6px 10px;">Projection</th>
-                                <th style="padding:6px 10px;">Filters & Pruning</th>
-                                <th style="padding:6px 10px;">Cache</th>
-                                <th style="padding:6px 10px;">Cost (USD)</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${tab.meta.sourceBreakdown.map(sb => {
-                                const provType = String(sb.provider || sb.providerType || '').toLowerCase();
-                                const isS3 = provType.includes('s3') || provType.includes('aws');
-                                const badgeBg = isS3 ? '#fef3c7' : '#e0e7ff';
-                                const badgeColor = isS3 ? '#b45309' : '#4338ca';
-                                const provLabel = isS3 ? 'AWS S3' : (provType.includes('adls') || provType.includes('azure') ? 'Azure ADLS Gen2' : (sb.provider || 'Storage'));
-                                const compFmt = window.formatScanVolume(sb.compressedObjectBytes || 0);
-                                const transFmt = window.formatScanVolume(sb.bytesTransferred || 0);
-                                const scanFmt = window.formatScanVolume(sb.logicalBytesScanned || sb.logicalScannedBytes || 0);
-                                const projCols = Array.isArray(sb.projectedColumns) ? sb.projectedColumns.length : 0;
-                                const totCols = sb.totalColumns || projCols;
-                                const filters = Array.isArray(sb.pushedFilters) && sb.pushedFilters.length > 0 ? sb.pushedFilters.join(', ') : 'None';
-                                const costVal = Number(sb.billedCostUsd !== undefined ? sb.billedCostUsd : (sb.estimatedCostUsd || 0));
-
-                                return `
-                                    <tr style="border-bottom:1px solid #f1f5f9;">
-                                        <td style="padding:5px 10px; font-family:monospace; font-weight:700; color:#0f172a;">${sb.fullName || sb.tableName}</td>
-                                        <td style="padding:5px 10px;"><span style="background:${badgeBg}; color:${badgeColor}; font-weight:700; font-size:0.62rem; padding:1px 6px; border-radius:4px;">${provLabel}</span></td>
-                                        <td style="padding:5px 10px;">${compFmt.text}</td>
-                                        <td style="padding:5px 10px; color:${transFmt.value > 0 ? '#ea580c' : '#10b981'}; font-weight:600;">${transFmt.text}</td>
-                                        <td style="padding:5px 10px; color:#0284c7; font-weight:700;">${scanFmt.text}</td>
-                                        <td style="padding:5px 10px;" title="${(sb.projectedColumns || []).join(', ')}">${projCols} / ${totCols} cols</td>
-                                        <td style="padding:5px 10px; font-size:0.68rem;" title="${filters}">${filters} ${sb.pruningSavedPct > 0 ? `<b style="color:#10b981;">(-${sb.pruningSavedPct}%)</b>` : ''}</td>
-                                        <td style="padding:5px 10px;"><span style="font-weight:700; font-size:0.62rem; color:${sb.cacheStatus === 'HIT' ? '#10b981' : (sb.cacheStatus === 'LOCAL' ? '#0284c7' : '#f59e0b')};">${sb.cacheStatus || 'MISS'}</span></td>
-                                        <td style="padding:5px 10px; font-weight:700; color:#dc2626;">$${costVal.toFixed(6)}</td>
-                                    </tr>
-                                `;
-                            }).join('')}
-                        </tbody>
-                    </table>
-                `;
-            } else {
-                fedBreakdown.innerHTML = '';
-            }
-        }
-    } else {
-        if (meter) meter.style.display = 'none';
-        const fedPanel = document.getElementById('federation-telemetry-panel');
-        if (fedPanel) fedPanel.style.display = 'none';
+    } else if (meter) {
+        meter.style.display = 'none';
     }
 
     if (tab.results && tab.results.length > 0) {
@@ -408,302 +309,6 @@ function createStatusContainer() {
     return div;
 }
 
-// ── Federated Catalog Explorer & Workstation Integration (Module 2 & 5) ──
-let _catalogTreeData = [];
-let _autocompleteItems = [];
-
-window.loadCatalogTree = async () => {
-    const listEl = document.getElementById('catalog-tree-list');
-    if (!listEl) return;
-    try {
-        const res = await apiFetch('/api/catalog/tree');
-        if (res && res.success && Array.isArray(res.catalogs)) {
-            _catalogTreeData = res.catalogs;
-            renderCatalogTree(res.catalogs);
-            rebuildAutocompleteIndex();
-        } else {
-            listEl.innerHTML = `<div style="color:var(--text-muted); font-size:0.72rem; padding:8px;">No logical catalogs registered. Configure S3/ADLS targets with catalog names.</div>`;
-        }
-    } catch (e) {
-        listEl.innerHTML = `<div style="color:#ef4444; font-size:0.72rem; padding:8px;">Error loading catalogs: ${e.message}</div>`;
-    }
-};
-
-window.refreshCatalogExplorer = async (notify = false) => {
-    const btn = document.getElementById('catalog-refresh-btn');
-    if (btn) {
-        btn.disabled = true;
-        btn.innerText = '⏳';
-    }
-    try {
-        const res = await apiFetch('/api/catalog/refresh', { method: 'POST' });
-        if (res && res.success) {
-            await window.loadCatalogTree();
-            if (notify) showToast(`Catalog refreshed! Discovered ${res.tablesCount || 0} tables.`, 'success');
-        } else {
-            if (notify) showToast(res?.error || 'Catalog refresh failed', 'error');
-        }
-    } catch (e) {
-        if (notify) showToast(`Refresh error: ${e.message}`, 'error');
-    } finally {
-        if (btn) {
-            btn.disabled = false;
-            btn.innerText = '🔄';
-        }
-    }
-};
-
-function renderCatalogTree(catalogs) {
-    const listEl = document.getElementById('catalog-tree-list');
-    if (!listEl) return;
-    if (!catalogs || catalogs.length === 0) {
-        listEl.innerHTML = `<div style="color:var(--text-muted); font-size:0.72rem; padding:8px;">No logical catalogs registered yet.</div>`;
-        return;
-    }
-
-    listEl.innerHTML = catalogs.map(cat => {
-        const prov = (cat.providerType || '').toLowerCase();
-        const isS3 = prov.includes('s3') || prov.includes('aws');
-        const badge = isS3
-            ? '<span style="background:#fef3c7; color:#b45309; font-size:0.6rem; font-weight:700; padding:1px 5px; border-radius:4px;">S3</span>'
-            : '<span style="background:#e0e7ff; color:#4338ca; font-size:0.6rem; font-weight:700; padding:1px 5px; border-radius:4px;">ADLS</span>';
-
-        const schemasHtml = (cat.schemas || []).map(sch => {
-            const tablesHtml = (sch.tables || []).map(tbl => {
-                const cols = Array.isArray(tbl.columns) ? tbl.columns : [];
-                const colsPreview = cols.map(c => `${c.name}: ${c.type}`).join('\n');
-                const rowCountStr = tbl.rowCount !== undefined && tbl.rowCount !== null ? `${tbl.rowCount} rows` : '';
-                return `
-                    <div style="margin-left:14px; margin-top:3px; padding:3px 6px; background:#ffffff; border:1px solid #e2e8f0; border-radius:5px; display:flex; justify-content:space-between; align-items:center;" title="${colsPreview}">
-                        <div style="cursor:pointer; display:flex; align-items:center; gap:6px; flex:1; min-width:0;" onclick="window.insertTableRef('${tbl.fullName || `${cat.catalogName}.${sch.schemaName}.${tbl.tableName}`}')">
-                            <span style="font-size:0.72rem;">📄</span>
-                            <span style="font-family:monospace; font-weight:700; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${tbl.tableName}</span>
-                            ${rowCountStr ? `<span style="font-size:0.62rem; color:var(--text-muted);">(${rowCountStr})</span>` : ''}
-                        </div>
-                        <button onclick="window.insertSampleTableQuery('${tbl.fullName || `${cat.catalogName}.${sch.schemaName}.${tbl.tableName}`}')" style="background:none; border:none; cursor:pointer; font-size:0.7rem; color:#4f46e5; padding:1px 4px;" title="Query this table">⚡</button>
-                    </div>
-                `;
-            }).join('');
-
-            return `
-                <div style="margin-left:8px; margin-top:4px;">
-                    <div style="font-size:0.7rem; color:var(--text-muted); font-weight:600; display:flex; align-items:center; gap:4px;">
-                        <span>📁</span> <span>${sch.schemaName}</span>
-                    </div>
-                    ${tablesHtml}
-                </div>
-            `;
-        }).join('');
-
-        return `
-            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:6px 8px;">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <div style="display:flex; align-items:center; gap:6px; font-weight:700; color:#0f172a;">
-                        <span>🏛️</span>
-                        <span>${cat.catalogName}</span>
-                    </div>
-                    ${badge}
-                </div>
-                ${schemasHtml}
-            </div>
-        `;
-    }).join('');
-}
-
-window.insertTableRef = (fullName) => {
-    const editor = document.getElementById('query-editor');
-    if (!editor) return;
-    const start = editor.selectionStart || editor.value.length;
-    const end = editor.selectionEnd || editor.value.length;
-    const text = editor.value;
-    editor.value = text.slice(0, start) + fullName + text.slice(end);
-    editor.focus();
-    editor.setSelectionRange(start + fullName.length, start + fullName.length);
-    if (_notebooks[_activeTabIdx]) {
-        _notebooks[_activeTabIdx].sql = editor.value;
-        saveNotebooks();
-    }
-};
-
-window.insertSampleTableQuery = (fullName) => {
-    const sql = `SELECT * FROM ${fullName} LIMIT 100;`;
-    const editor = document.getElementById('query-editor');
-    if (editor) {
-        editor.value = sql;
-        if (_notebooks[_activeTabIdx]) {
-            _notebooks[_activeTabIdx].sql = sql;
-            saveNotebooks();
-        }
-    }
-    window.executeQuery();
-};
-
-window.insertFederatedJoinTemplate = () => {
-    const sql = `-- Cross-Source Data Federation: AWS S3 + Azure ADLS Gen2
-SELECT 
-    c.customer_id, 
-    c.customer_name, 
-    c.country, 
-    o.order_id, 
-    o.amount, 
-    o.status
-FROM aws_customers.crm.customers c
-INNER JOIN azure_sales.sales.orders o ON c.customer_id = o.customer_id
-ORDER BY o.order_id;`;
-    const editor = document.getElementById('query-editor');
-    if (editor) {
-        editor.value = sql;
-        if (_notebooks[_activeTabIdx]) {
-            _notebooks[_activeTabIdx].sql = sql;
-            saveNotebooks();
-        }
-    }
-    showToast('Cross-source federated JOIN template inserted!', 'info');
-};
-
-function rebuildAutocompleteIndex() {
-    const items = new Set();
-    ['SELECT', 'FROM', 'WHERE', 'INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL OUTER JOIN', 'ON', 'GROUP BY', 'ORDER BY', 'LIMIT', 'COUNT(*)', 'SUM()', 'AVG()'].forEach(k => items.add({ text: k, type: 'keyword' }));
-
-    items.add({ text: 'aws_customers.crm.customers', type: 'table' });
-    items.add({ text: 'azure_sales.sales.orders', type: 'table' });
-
-    (_catalogTreeData || []).forEach(cat => {
-        items.add({ text: cat.catalogName, type: 'catalog' });
-        (cat.schemas || []).forEach(sch => {
-            items.add({ text: `${cat.catalogName}.${sch.schemaName}`, type: 'schema' });
-            (sch.tables || []).forEach(tbl => {
-                if (tbl.fullName) items.add({ text: tbl.fullName, type: 'table' });
-                items.add({ text: tbl.tableName, type: 'table' });
-                (tbl.columns || []).forEach(col => {
-                    items.add({ text: col.name, type: 'column' });
-                });
-            });
-        });
-    });
-
-    _autocompleteItems = Array.from(items);
-}
-
-function setupCatalogAutocomplete() {
-    const editor = document.getElementById('query-editor');
-    const popup = document.getElementById('sql-autocomplete-popup');
-    if (!editor || !popup) return;
-
-    rebuildAutocompleteIndex();
-
-    let selectedIdx = 0;
-    let currentMatches = [];
-
-    function hidePopup() {
-        popup.style.display = 'none';
-        currentMatches = [];
-    }
-
-    function showPopup(matches, word) {
-        currentMatches = matches;
-        selectedIdx = 0;
-        popup.innerHTML = matches.map((m, idx) => `
-            <div class="ac-item" data-idx="${idx}" style="padding:6px 12px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; ${idx === 0 ? 'background:#f1f5f9; font-weight:700;' : ''}">
-                <span style="color:#0f172a;">${m.text}</span>
-                <span style="font-size:0.62rem; color:var(--text-muted); text-transform:uppercase;">${m.type}</span>
-            </div>
-        `).join('');
-
-        popup.querySelectorAll('.ac-item').forEach(el => {
-            el.addEventListener('click', () => {
-                const idx = parseInt(el.getAttribute('data-idx'), 10);
-                if (currentMatches[idx]) applyMatch(currentMatches[idx].text, word);
-            });
-        });
-
-        popup.style.display = 'block';
-    }
-
-    function applyMatch(replacement, word) {
-        const cursor = editor.selectionEnd;
-        const text = editor.value;
-        const before = text.slice(0, cursor - word.length);
-        const after = text.slice(cursor);
-        editor.value = before + replacement + after;
-        const newPos = before.length + replacement.length;
-        editor.setSelectionRange(newPos, newPos);
-        editor.focus();
-        if (_notebooks[_activeTabIdx]) {
-            _notebooks[_activeTabIdx].sql = editor.value;
-            saveNotebooks();
-        }
-        hidePopup();
-    }
-
-    editor.addEventListener('input', () => {
-        const cursor = editor.selectionEnd;
-        const text = editor.value.slice(0, cursor);
-        const match = text.match(/([a-zA-Z0-9_.]+)$/);
-        if (!match || match[1].length < 2) {
-            hidePopup();
-            return;
-        }
-        const word = match[1];
-        const lowerWord = word.toLowerCase();
-        const matches = _autocompleteItems.filter(item => item.text.toLowerCase().includes(lowerWord)).slice(0, 8);
-        if (matches.length > 0) {
-            showPopup(matches, word);
-        } else {
-            hidePopup();
-        }
-    });
-
-    editor.addEventListener('keydown', (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-            e.preventDefault();
-            hidePopup();
-            window.executeQuery();
-            return;
-        }
-
-        if (popup.style.display !== 'none' && currentMatches.length > 0) {
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                selectedIdx = (selectedIdx + 1) % currentMatches.length;
-                updateSelectedAc();
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                selectedIdx = (selectedIdx - 1 + currentMatches.length) % currentMatches.length;
-                updateSelectedAc();
-            } else if (e.key === 'Tab' || e.key === 'Enter') {
-                e.preventDefault();
-                const cursor = editor.selectionEnd;
-                const match = editor.value.slice(0, cursor).match(/([a-zA-Z0-9_.]+)$/);
-                if (match && currentMatches[selectedIdx]) {
-                    applyMatch(currentMatches[selectedIdx].text, match[1]);
-                }
-            } else if (e.key === 'Escape') {
-                hidePopup();
-            }
-        }
-    });
-
-    function updateSelectedAc() {
-        const items = popup.querySelectorAll('.ac-item');
-        items.forEach((el, idx) => {
-            if (idx === selectedIdx) {
-                el.style.background = '#f1f5f9';
-                el.style.fontWeight = '700';
-            } else {
-                el.style.background = 'transparent';
-                el.style.fontWeight = 'normal';
-            }
-        });
-    }
-
-    document.addEventListener('click', (e) => {
-        if (!popup.contains(e.target) && e.target !== editor) {
-            hidePopup();
-        }
-    });
-}
-
 window.onload = () => {
     const savedToken = localStorage.getItem('ciq_token');
     const savedUser  = localStorage.getItem('ciq_user');
@@ -719,9 +324,7 @@ window.onload = () => {
         if (_user.role === 'admin') renderAdminButton();
         
         loadTargets();
-        loadCatalogTree();
         renderNotebookTabs();
-        setupCatalogAutocomplete();
 
         const curTab = _notebooks[_activeTabIdx];
         if (curTab) {
@@ -3500,27 +3103,19 @@ window.openTargetEditor = async (targetId = null) => {
                         <option value="databricks" ${target.provider_type === 'databricks'?'selected':''}>Databricks (DBFS)</option>
                     </select>
                 </div>
-                <div><label class="cfg-lbl" id="lbl-endpoint">Endpoint URL</label><input id="tgt-endpoint" class="cfg-input" placeholder="https://s3.amazonaws.com or https://<account>.dfs.core.windows.net" value="${target.endpoint || ''}"></div>
+                <div><label class="cfg-lbl" id="lbl-endpoint">Endpoint URL</label><input id="tgt-endpoint" class="cfg-input" placeholder="https://<ACCOUNT_ID>.r2.cloudflarestorage.com" value="${target.endpoint || ''}"></div>
                 <div id="krb-fields-edit" style="display:${target.provider_type==='hdfs'?'block':'none'}; border-top:1px solid var(--border); padding-top:10px; margin-top:10px;">
                      <div><label class="cfg-lbl" style="color:#fbbf24;">Kerberos Principal</label><input id="tgt-principal" class="cfg-input" value="${target.krb_principal || ''}"></div>
-                     <div><label class="cfg-lbl" style="color:#fbbf24;">Kerberos Keytab Path</label><input id="tgt-keytab" class="cfg-input" value="" placeholder="${target.has_credentials ? 'Stored securely (leave blank to keep)' : ''}"></div>
+                     <div><label class="cfg-lbl" style="color:#fbbf24;">Kerberos Keytab Path</label><input id="tgt-keytab" class="cfg-input" value="${target.krb_keytab || ''}"></div>
                 </div>
-                <div><label class="cfg-lbl" id="lbl-bucket">Bucket / ADLS Container</label><input id="tgt-bucket" class="cfg-input" placeholder="bucket-or-container-name" value="${target.bucket || ''}"></div>
-                <div><label class="cfg-lbl" id="lbl-access">Access Key ID / Storage Account Name</label><input id="tgt-access" class="cfg-input" value="" placeholder="${target.has_credentials ? (target.access_key_masked || '••••') + ' (stored encrypted — leave blank to keep)' : 'Enter Access Key or Account Name'}"></div>
-                <div><label class="cfg-lbl" id="lbl-secret">Secret Access Key / Account Key / Connection String</label><input id="tgt-secret" class="cfg-input" type="password" value="" placeholder="${target.has_credentials ? '•••••••• (stored encrypted — leave blank to keep)' : 'Enter Secret Key or Account Key'}"></div>
-                <div><label class="cfg-lbl">Region</label><input id="tgt-region" class="cfg-input" placeholder="us-east-1 / auto" value="${target.region || ''}"></div>
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                    <div><label class="cfg-lbl">Federation Logical Catalog (Optional)</label><input id="tgt-catalog" class="cfg-input" placeholder="e.g. aws_customers or azure_sales" value="${target.catalog_name || ''}"></div>
-                    <div><label class="cfg-lbl">Default Schema</label><input id="tgt-schema" class="cfg-input" placeholder="e.g. crm or sales" value="${target.default_schema || 'default'}"></div>
-                </div>
-                <div id="tgt-test-status" style="display:none; padding:10px 12px; border-radius:8px; font-size:0.82rem; font-weight:600;"></div>
+                <div><label class="cfg-lbl" id="lbl-bucket">Bucket / Folder ID</label><input id="tgt-bucket" class="cfg-input" placeholder="bucket-name" value="${target.bucket || ''}"></div>
+                <div><label class="cfg-lbl" id="lbl-access">Access Key ID / Account Email</label><input id="tgt-access" class="cfg-input" value="${target.access_key || ''}"></div>
+                <div><label class="cfg-lbl" id="lbl-secret">Secret Access Key / Private Key (Optional)</label><input id="tgt-secret" class="cfg-input" type="password" value="${target.secret_key || ''}"></div>
+                <div><label class="cfg-lbl">Region</label><input id="tgt-region" class="cfg-input" placeholder="auto" value="${target.region || ''}"></div>
             </div>
-            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:20px;">
-                <button class="btn btn-secondary" id="btn-test-conn" onclick="window.testTargetConnection('${targetId || ''}')">🔌 Validate Storage Connectivity</button>
-                <div style="display:flex; gap:10px;">
-                    <button class="btn btn-secondary" onclick="window.showAdminTab('targets')">Cancel</button>
-                    <button class="btn btn-primary" onclick="window.saveTarget('${targetId || ''}')">💾 ${targetId ? 'Update' : 'Create'} Target</button>
-                </div>
+            <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
+                <button class="btn btn-secondary" onclick="window.showAdminTab('targets')">Cancel</button>
+                <button class="btn btn-primary" onclick="window.saveTarget('${targetId || ''}')">💾 ${targetId ? 'Update' : 'Create'} Target</button>
             </div>
         </div>
     `;
@@ -3574,70 +3169,6 @@ window.fillDemoGDrive = () => {
     document.getElementById('tgt-region').value = 'global';
 };
 
-window.testTargetConnection = async (id) => {
-    const statusBox = document.getElementById('tgt-test-status');
-    const btn = document.getElementById('btn-test-conn');
-    const accessVal = (document.getElementById('tgt-access')?.value || '').trim();
-    const secretVal = (document.getElementById('tgt-secret')?.value || '').trim();
-    const payload = {
-        target_id: id || undefined,
-        type: (document.getElementById('tgt-type')?.value || '').trim(),
-        endpoint: (document.getElementById('tgt-endpoint')?.value || '').trim(),
-        bucket: (document.getElementById('tgt-bucket')?.value || '').trim(),
-        region: (document.getElementById('tgt-region')?.value || '').trim(),
-        access_key: accessVal,
-        secret_key: secretVal,
-        credentials: (accessVal || secretVal) ? `${accessVal}:${secretVal}` : ''
-    };
-
-    if (btn) {
-        btn.disabled = true;
-        btn.innerText = '⏳ Validating...';
-    }
-    if (statusBox) {
-        statusBox.style.display = 'block';
-        statusBox.style.background = 'rgba(59, 130, 246, 0.1)';
-        statusBox.style.color = '#60a5fa';
-        statusBox.innerText = 'Connecting to storage endpoint...';
-    }
-
-    try {
-        const res = await fetch('/api/admin/test-connection', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${authToken}`
-            },
-            body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        if (res.ok && data.success) {
-            if (statusBox) {
-                statusBox.style.background = 'rgba(16, 185, 129, 0.12)';
-                statusBox.style.color = '#10b981';
-                statusBox.innerText = `✅ Connected (${data.provider?.toUpperCase() || payload.type}) — Bucket/Container '${data.bucket || payload.bucket}' reachable in ${data.latencyMs || 0}ms (${data.sampleObjectsCount ?? 0} sample objects verified).`;
-            }
-        } else {
-            if (statusBox) {
-                statusBox.style.background = 'rgba(239, 68, 68, 0.12)';
-                statusBox.style.color = '#ef4444';
-                statusBox.innerText = `❌ ${data.error || 'Connection validation failed'}`;
-            }
-        }
-    } catch (err) {
-        if (statusBox) {
-            statusBox.style.background = 'rgba(239, 68, 68, 0.12)';
-            statusBox.style.color = '#ef4444';
-            statusBox.innerText = `❌ Network error: ${err.message}`;
-        }
-    } finally {
-        if (btn) {
-            btn.disabled = false;
-            btn.innerText = '🔌 Validate Storage Connectivity';
-        }
-    }
-};
-
 window.saveTarget = async (id) => {
     const accessVal = (document.getElementById('tgt-access').value || '').trim();
     const secretVal = (document.getElementById('tgt-secret').value || '').trim();
@@ -3648,10 +3179,8 @@ window.saveTarget = async (id) => {
         bucket: (document.getElementById('tgt-bucket').value || '').trim(),
         access_key: accessVal,
         secret_key: secretVal,
-        credentials: (accessVal || secretVal) ? `${accessVal}:${secretVal}` : '',
+        credentials: `${accessVal}:${secretVal}`,
         region: (document.getElementById('tgt-region').value || '').trim(),
-        catalog_name: (document.getElementById('tgt-catalog')?.value || '').trim() || null,
-        default_schema: (document.getElementById('tgt-schema')?.value || '').trim() || 'default',
         krb_principal: (document.getElementById('tgt-principal')?.value || '').trim(),
         krb_keytab: (document.getElementById('tgt-keytab')?.value || '').trim()
     };
