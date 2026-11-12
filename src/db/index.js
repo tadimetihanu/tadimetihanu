@@ -382,7 +382,10 @@ async function ensureSqliteMigrations() {
         ['query_logs', 'execution_id', 'TEXT'],
         ['query_logs', 'storage_downloaded_bytes', 'INTEGER DEFAULT 0'],
         ['query_logs', 'cache_status', "TEXT DEFAULT 'MISS'"],
-        ['query_logs', 'on_demand_cost_usd', 'REAL DEFAULT 0']
+        ['query_logs', 'on_demand_cost_usd', 'REAL DEFAULT 0'],
+        ['users', 'tenant_id', "TEXT DEFAULT 'default'"],
+        ['query_history', 'tenant_id', "TEXT DEFAULT 'default'"],
+        ['query_logs', 'tenant_id', "TEXT DEFAULT 'default'"]
     ];
     for (const [table, col, colType] of migrations) {
         try {

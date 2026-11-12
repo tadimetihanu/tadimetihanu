@@ -114,6 +114,118 @@ window.purgeDataCache = async () => {
     }
 };
 
+window.predictCostIntelligence = async () => {
+    const editor = document.getElementById('query-editor');
+    const sql = editor ? editor.value : '';
+    const btn = document.getElementById('ml-predict-btn');
+    if (!sql || !sql.trim()) {
+        showToast('Please enter a SQL query to forecast cost & execution', 'warning');
+        return;
+    }
+
+    const originalText = btn ? btn.innerText : '🔮 Predict Cost';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '🔮 Forecasting...';
+    }
+
+    try {
+        const targetId = _activeTargetId || (_targets && _targets[0] ? _targets[0].target_id : null);
+        const curTab = _notebooks[_activeTabIdx];
+        const cacheStatus = (curTab && curTab.meta && curTab.meta.cacheStatus) ? curTab.meta.cacheStatus : 'MISS';
+
+        const res = await apiFetch('/api/ml/predict-query-cost', {
+            method: 'POST',
+            body: JSON.stringify({
+                sql,
+                targetId,
+                cacheStatus
+            })
+        });
+
+        if (res && res.success) {
+            const panel = document.getElementById('ml-prediction-panel');
+            if (panel) panel.style.display = 'block';
+
+            // Metrics
+            const scanEl = document.getElementById('ml-pred-scan-val');
+            const scanCiEl = document.getElementById('ml-pred-scan-ci');
+            const durEl = document.getElementById('ml-pred-duration-val');
+            const durCiEl = document.getElementById('ml-pred-duration-ci');
+            const costEl = document.getElementById('ml-pred-cost-val');
+            const costCiEl = document.getElementById('ml-pred-cost-ci');
+            const confScoreEl = document.getElementById('ml-pred-confidence-score');
+            const confLevelEl = document.getElementById('ml-pred-confidence-level');
+            const versionEl = document.getElementById('ml-pred-version-badge');
+
+            if (scanEl) scanEl.innerText = res.predicted_scan_volume_formatted || '0 MB';
+            if (scanCiEl && res.confidence_interval?.scan_bytes) {
+                const low = (res.confidence_interval.scan_bytes.lower / (1024 * 1024)).toFixed(1);
+                const high = (res.confidence_interval.scan_bytes.upper / (1024 * 1024)).toFixed(1);
+                scanCiEl.innerText = `95% CI: [${low} MB - ${high} MB]`;
+            }
+            if (durEl) durEl.innerText = res.predicted_execution_duration_formatted || '0 ms';
+            if (durCiEl && res.confidence_interval?.duration_ms) {
+                durCiEl.innerText = `95% CI: [${res.confidence_interval.duration_ms.lower} ms - ${res.confidence_interval.duration_ms.upper} ms]`;
+            }
+            if (costEl) costEl.innerText = res.predicted_cost_formatted || '$0.000000 USD';
+            if (costCiEl && res.confidence_interval?.cost_usd) {
+                costCiEl.innerText = `95% CI: [$${res.confidence_interval.cost_usd.lower.toFixed(6)} - $${res.confidence_interval.cost_usd.upper.toFixed(6)}]`;
+            }
+
+            if (confScoreEl) confScoreEl.innerText = `${res.confidence_score}%`;
+            if (confLevelEl) {
+                confLevelEl.innerText = (res.confidence_level || 'HIGH').toUpperCase();
+                confLevelEl.style.background = res.confidence_score >= 85 ? 'rgba(16,185,129,0.12)' : 'rgba(245,158,11,0.12)';
+                confLevelEl.style.color = res.confidence_score >= 85 ? '#059669' : '#d97706';
+            }
+            if (versionEl) versionEl.innerText = `${res.model_version || 'v1.0.0'} (${res.algorithm?.split(' ')[0] || 'XGBoost'})`;
+
+            // Recommendations
+            const recsList = document.getElementById('ml-pred-recommendations-list');
+            if (recsList) {
+                if (res.optimization_recommendations && res.optimization_recommendations.length > 0) {
+                    recsList.innerHTML = res.optimization_recommendations.map(r => {
+                        const icon = r.severity === 'critical' ? '🚨' : (r.severity === 'warning' ? '⚠️' : '💡');
+                        const borderCol = r.severity === 'critical' ? 'rgba(239,68,68,0.3)' : (r.severity === 'warning' ? 'rgba(245,158,11,0.3)' : 'rgba(99,102,241,0.2)');
+                        const bgCol = r.severity === 'critical' ? 'rgba(239,68,68,0.06)' : (r.severity === 'warning' ? 'rgba(245,158,11,0.06)' : 'rgba(99,102,241,0.04)');
+                        const textCol = r.severity === 'critical' ? '#b91c1c' : (r.severity === 'warning' ? '#b45309' : '#4338ca');
+                        return `
+                            <div style="background:${bgCol}; border:1px solid ${borderCol}; border-radius:6px; padding:6px 10px; font-size:0.75rem; color:${textCol};">
+                                <strong>${icon} ${r.type.replace(/_/g, ' ').toUpperCase()}:</strong> ${r.message}
+                                ${r.potential_savings ? `<span style="display:inline-block; margin-left:6px; font-weight:700; background:rgba(255,255,255,0.7); padding:1px 6px; border-radius:4px;">💰 ${r.potential_savings}</span>` : ''}
+                            </div>
+                        `;
+                    }).join('');
+                } else {
+                    recsList.innerHTML = `<div style="font-size:0.75rem; color:#059669;">✅ Query plan is optimized for columnar lakehouse execution. No anti-patterns detected.</div>`;
+                }
+            }
+
+            // Hide variance card until query execution
+            const varianceCard = document.getElementById('ml-pred-variance-card');
+            if (varianceCard) varianceCard.style.display = 'none';
+
+            // Store prediction on current notebook tab
+            if (curTab) {
+                curTab.lastPrediction = res;
+                saveNotebooks();
+            }
+
+            showToast('ML Cost & Latency Forecast Generated', 'info');
+        } else {
+            showToast(res?.error || 'Prediction service error', 'error');
+        }
+    } catch (e) {
+        showToast(`ML Prediction failed: ${e.message}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = originalText;
+        }
+    }
+};
+
 window.renderTabTelemetry = (tab) => {
     if (!tab) return;
     const meter = document.getElementById('live-burn-meter');
@@ -241,6 +353,35 @@ window.renderTabTelemetry = (tab) => {
             const shortId = tab.meta.executionId ? tab.meta.executionId.slice(0, 8) : '—';
             execBadge.innerText = `#${shortId}`;
             execBadge.title = `Execution ID: ${tab.meta.executionId || 'N/A'}`;
+        }
+
+        // ML Closed Feedback Loop: Update Prediction Variance Card
+        const varianceCard = document.getElementById('ml-pred-variance-card');
+        const accuracyBadge = document.getElementById('ml-pred-accuracy-badge');
+        const varianceDetails = document.getElementById('ml-pred-variance-details');
+
+        if (tab.lastPrediction && tab.meta && varianceCard && accuracyBadge && varianceDetails) {
+            varianceCard.style.display = 'block';
+            const predScan = Number(tab.lastPrediction.predicted_scan_volume_bytes || 0);
+            const actualScan = Number(tab.meta.logicalScannedBytes !== undefined ? tab.meta.logicalScannedBytes : (tab.meta.estimatedScan || 0));
+
+            let accuracy = 100.0;
+            if (actualScan > 0 && predScan > 0) {
+                const errPct = (Math.abs(actualScan - predScan) / actualScan) * 100.0;
+                accuracy = Math.max(10.0, Math.min(99.9, 100.0 - errPct)).toFixed(1);
+            } else if (actualScan === 0 && predScan === 0) {
+                accuracy = '100.0';
+            }
+
+            accuracyBadge.innerText = `${accuracy}% Forecast Accuracy`;
+            const actualScanMb = (actualScan / (1024 * 1024)).toFixed(1);
+            const predScanMb = (predScan / (1024 * 1024)).toFixed(1);
+            varianceDetails.innerHTML = `
+                <strong>Feedback Loop:</strong> 
+                Scanned: Forecast <strong>${predScanMb} MB</strong> vs Actual <strong>${actualScanMb} MB</strong> | 
+                Latency: Forecast <strong>${tab.lastPrediction.predicted_execution_duration_formatted}</strong> vs Actual <strong>${tab.meta.duration} ms</strong> |
+                Billed: <strong>$${Number(tab.meta.billedCostUsd || 0).toFixed(6)} USD</strong>
+            `;
         }
     } else if (meter) {
         meter.style.display = 'none';

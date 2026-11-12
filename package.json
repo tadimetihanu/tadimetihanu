@@ -3,6 +3,8 @@
   "version": "1.0.1",
   "scripts": {
     "start": "node src/server.js",
+    "start:ml": "python -m uvicorn ml_service.app:app --host 0.0.0.0 --port 8000",
+    "test:ml": "python test_ml_service.py",
     "migrate": "npx db-migrate up --config database.json -e sqlite",
     "migrate:postgres": "node scripts/migrate_sqlite_to_postgres.js",
     "test": "node final_test.js",

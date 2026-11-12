@@ -156,6 +156,72 @@ CREATE TABLE IF NOT EXISTS pipelines (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS query_telemetry (
+    id TEXT PRIMARY KEY,
+    execution_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    user_id TEXT,
+    target_id TEXT,
+    query_text TEXT NOT NULL,
+    query_type TEXT,
+    storage_provider TEXT,
+    file_format TEXT,
+    file_count INTEGER DEFAULT 1,
+    total_file_size_bytes INTEGER DEFAULT 0,
+    join_count INTEGER DEFAULT 0,
+    filter_count INTEGER DEFAULT 0,
+    projection_count INTEGER DEFAULT 0,
+    aggregation_count INTEGER DEFAULT 0,
+    has_wildcard INTEGER DEFAULT 0,
+    query_plan_features TEXT,
+    cache_status TEXT DEFAULT 'MISS',
+    estimated_scan_bytes INTEGER DEFAULT 0,
+    actual_scan_bytes INTEGER DEFAULT 0,
+    duration_ms INTEGER DEFAULT 0,
+    actual_cost_usd REAL DEFAULT 0,
+    on_demand_cost_usd REAL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS prediction_feedback (
+    id TEXT PRIMARY KEY,
+    execution_id TEXT,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    user_id TEXT,
+    query_text TEXT,
+    predicted_scan_bytes INTEGER,
+    predicted_duration_ms INTEGER,
+    predicted_cost_usd REAL,
+    confidence_score REAL,
+    confidence_interval TEXT,
+    recommendations TEXT,
+    actual_scan_bytes INTEGER,
+    actual_duration_ms INTEGER,
+    actual_cost_usd REAL,
+    scan_error INTEGER,
+    duration_error_ms INTEGER,
+    cost_error_usd REAL,
+    scan_error_pct REAL,
+    duration_error_pct REAL,
+    cost_error_pct REAL,
+    model_version TEXT DEFAULT 'v1.0.0',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    validated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ml_model_registry (
+    model_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    model_type TEXT NOT NULL,
+    algorithm TEXT NOT NULL,
+    version TEXT NOT NULL,
+    metrics TEXT,
+    hyperparameters TEXT,
+    model_path TEXT,
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 `;
 
 const POSTGRES_SCHEMA = `
@@ -317,6 +383,76 @@ CREATE TABLE IF NOT EXISTS pipelines (
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS query_telemetry (
+    id VARCHAR(64) PRIMARY KEY DEFAULT md5(random()::text || clock_timestamp()::text),
+    execution_id VARCHAR(64) UNIQUE NOT NULL,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id VARCHAR(64),
+    target_id VARCHAR(64),
+    query_text TEXT NOT NULL,
+    query_type VARCHAR(64),
+    storage_provider VARCHAR(64),
+    file_format VARCHAR(64),
+    file_count INTEGER DEFAULT 1,
+    total_file_size_bytes BIGINT DEFAULT 0,
+    join_count INTEGER DEFAULT 0,
+    filter_count INTEGER DEFAULT 0,
+    projection_count INTEGER DEFAULT 0,
+    aggregation_count INTEGER DEFAULT 0,
+    has_wildcard INTEGER DEFAULT 0,
+    query_plan_features TEXT,
+    cache_status VARCHAR(32) DEFAULT 'MISS',
+    estimated_scan_bytes BIGINT DEFAULT 0,
+    actual_scan_bytes BIGINT DEFAULT 0,
+    duration_ms INTEGER DEFAULT 0,
+    actual_cost_usd NUMERIC(12, 6) DEFAULT 0,
+    on_demand_cost_usd NUMERIC(12, 6) DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS prediction_feedback (
+    id VARCHAR(64) PRIMARY KEY DEFAULT md5(random()::text || clock_timestamp()::text),
+    execution_id VARCHAR(64),
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id VARCHAR(64),
+    query_text TEXT,
+    predicted_scan_bytes BIGINT,
+    predicted_duration_ms INTEGER,
+    predicted_cost_usd NUMERIC(12, 6),
+    confidence_score NUMERIC(5, 2),
+    confidence_interval TEXT,
+    recommendations TEXT,
+    actual_scan_bytes BIGINT,
+    actual_duration_ms INTEGER,
+    actual_cost_usd NUMERIC(12, 6),
+    scan_error BIGINT,
+    duration_error_ms INTEGER,
+    cost_error_usd NUMERIC(12, 6),
+    scan_error_pct NUMERIC(8, 2),
+    duration_error_pct NUMERIC(8, 2),
+    cost_error_pct NUMERIC(8, 2),
+    model_version VARCHAR(64) DEFAULT 'v1.0.0',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    validated_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS ml_model_registry (
+    model_id VARCHAR(64) PRIMARY KEY DEFAULT md5(random()::text || clock_timestamp()::text),
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
+    model_type VARCHAR(64) NOT NULL,
+    algorithm VARCHAR(64) NOT NULL,
+    version VARCHAR(64) NOT NULL,
+    metrics TEXT,
+    hyperparameters TEXT,
+    model_path TEXT,
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_query_telemetry_tenant ON query_telemetry(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_query_telemetry_execution ON query_telemetry(execution_id);
+CREATE INDEX IF NOT EXISTS idx_prediction_feedback_tenant ON prediction_feedback(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_ml_model_registry_tenant ON ml_model_registry(tenant_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_metadata_catalog_target ON metadata_catalog(target_id);
 CREATE INDEX IF NOT EXISTS idx_metadata_catalog_filename ON metadata_catalog(file_name);
 CREATE INDEX IF NOT EXISTS idx_query_logs_timestamp ON query_logs(timestamp DESC);
@@ -345,7 +481,10 @@ const POSTGRES_MIGRATIONS = [
     `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS execution_id VARCHAR(64)`,
     `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS storage_downloaded_bytes BIGINT DEFAULT 0`,
     `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS cache_status VARCHAR(32) DEFAULT 'MISS'`,
-    `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS on_demand_cost_usd NUMERIC(12, 6) DEFAULT 0`
+    `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS on_demand_cost_usd NUMERIC(12, 6) DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(64) DEFAULT 'default'`,
+    `ALTER TABLE query_history ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(64) DEFAULT 'default'`,
+    `ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(64) DEFAULT 'default'`
 ];
 
 const DEFAULT_TARGETS = [

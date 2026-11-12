@@ -929,6 +929,7 @@ async function runQuery(userId, sql, targetId, options = {}) {
                 cacheReport,
                 executionId
             });
+            scanMeta.tenantId = options.tenantId || 'default';
             if (Array.isArray(rows)) {
                 Object.defineProperty(rows, '_scanMeta', {
                     value: scanMeta,
@@ -988,6 +989,20 @@ async function logQuery(userId, targetId, sql, rowCount, duration, status, scanM
 
     if (status === 'success') {
         logger.logInfo('duckdb', `Query Executed (${duration}ms) [${executionId}]`, { sql, rowCount, scannedBytes, costUsd, onDemandCostUsd, storageDownloadedBytes, cacheStatus, targetId, userId });
+        try {
+            const { recordExecutionTelemetryAndFeedback } = require('../services/ml_prediction');
+            const tenantId = (scanMeta && scanMeta.tenantId) || 'default';
+            recordExecutionTelemetryAndFeedback({
+                executionId,
+                tenantId,
+                userId,
+                targetId,
+                sql,
+                durationMs: duration,
+                rowCount,
+                scanMeta
+            }).catch(e => console.warn('[ML Telemetry Notice]', e.message));
+        } catch (_) {}
     } else {
         logger.logError('duckdb', `Query Failed (${duration}ms) [${executionId}]`, { sql, targetId, userId });
     }

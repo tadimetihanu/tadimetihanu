@@ -910,9 +910,10 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
 
     const isOrcQuery = sql.toLowerCase().includes('read_orc');
     const startTime = Date.now();
+    const tenantId = req.user.tenant_id || req.headers['x-tenant-id'] || 'default';
 
     try {
-        const results = await runQuery(userId, sql, targetId);
+        const results = await runQuery(userId, sql, targetId, { tenantId });
         const duration = Date.now() - startTime;
         const scanMeta = results._scanMeta || calculateCost(sql, results);
         res.json({ 
@@ -1005,6 +1006,77 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
             });
         }
         console.error(`❌ [Query] Error:`, err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── ML PREDICTIVE COST INTELLIGENCE ROUTES ─────────────────
+const { predictQueryCost, triggerModelTraining } = require('./services/ml_prediction');
+
+// POST /api/ml/predict-query-cost
+app.post('/api/ml/predict-query-cost', authenticate, async (req, res) => {
+    try {
+        const { sql, targetId, cacheStatus } = req.body;
+        const tenantId = req.user.tenant_id || req.headers['x-tenant-id'] || 'default';
+        const userId = req.user.user_id;
+
+        if (!sql || !sql.trim()) {
+            return res.status(400).json({ error: 'SQL query text is required' });
+        }
+
+        const prediction = await predictQueryCost({
+            sql,
+            targetId,
+            tenantId,
+            userId,
+            cacheStatus: cacheStatus || 'MISS'
+        });
+
+        res.json(prediction);
+    } catch (err) {
+        console.error('[ML Predict Error]', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/ml/train
+app.post('/api/ml/train', authenticate, isAdmin, async (req, res) => {
+    try {
+        const tenantId = req.body.tenantId || req.user.tenant_id || 'default';
+        const trainResult = await triggerModelTraining(tenantId);
+        res.json(trainResult);
+    } catch (err) {
+        console.error('[ML Train Error]', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/ml/feedback
+app.get('/api/ml/feedback', authenticate, async (req, res) => {
+    try {
+        const tenantId = req.user.tenant_id || 'default';
+        const rows = await db.all(`
+            SELECT * FROM prediction_feedback 
+            WHERE tenant_id = ? 
+            ORDER BY created_at DESC LIMIT 50
+        `, [tenantId]);
+        res.json({ success: true, count: rows ? rows.length : 0, data: rows || [] });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/ml/telemetry
+app.get('/api/ml/telemetry', authenticate, async (req, res) => {
+    try {
+        const tenantId = req.user.tenant_id || 'default';
+        const rows = await db.all(`
+            SELECT * FROM query_telemetry 
+            WHERE tenant_id = ? 
+            ORDER BY created_at DESC LIMIT 50
+        `, [tenantId]);
+        res.json({ success: true, count: rows ? rows.length : 0, data: rows || [] });
+    } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });

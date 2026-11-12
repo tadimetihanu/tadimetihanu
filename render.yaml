@@ -33,6 +33,10 @@ services:
         value: "--conf spark.testing.memory=471859200 --driver-memory 200m --executor-memory 512m pyspark-shell"
       - key: DATABASE_URL
         sync: false
+      - key: ML_SERVICE_URL
+        value: "http://127.0.0.1:8000"
+      - key: ML_SERVICE_API_KEY
+        generateValue: true
       - key: JWT_SECRET
         generateValue: true
       - key: SESSION_SECRET

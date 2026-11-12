@@ -25,11 +25,13 @@ ENV PYSPARK_SUBMIT_ARGS="--conf spark.testing.memory=471859200 --driver-memory 2
 COPY package*.json ./
 RUN npm install
 
-# Install Python requirements for RAG / Analytics Engine and Apache Spark (PySpark)
+# Install Python requirements for ML Predictive Cost Intelligence, RAG, and Apache Spark
 RUN pip3 install --no-cache-dir --break-system-packages \
+    pandas scikit-learn xgboost fastapi uvicorn \
     pyspark==3.5.1 \
     pymilvus langchain-community langchain-text-splitters langchain-openai langchain-core pypdf \
     || pip3 install --no-cache-dir \
+    pandas scikit-learn xgboost fastapi uvicorn \
     pyspark==3.5.1 \
     pymilvus langchain-community langchain-text-splitters langchain-openai langchain-core pypdf \
     || true
@@ -43,6 +45,8 @@ RUN PYSPARK_JARS=$(python3 -c "import pyspark, os; print(os.path.join(os.path.di
 
 COPY . .
 
+RUN chmod +x /app/start.sh || true
+
 ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_DIR=/etc/ssl/certs
@@ -50,8 +54,9 @@ ENV AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED
 ENV AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED
 ENV MALLOC_ARENA_MAX=2
 ENV NODE_OPTIONS="--max-old-space-size=160 --max-semi-space-size=4 --expose-gc"
+ENV ML_SERVICE_URL="http://127.0.0.1:8000"
 
 RUN mkdir -p /app/data/.duckdb_spill /app/data/.parquet_cache /app/data/.upload_tmp
 
-EXPOSE 3001
-CMD ["node", "src/server.js"]
+EXPOSE 3001 8000
+CMD ["/bin/bash", "./start.sh"]
