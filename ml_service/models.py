@@ -11,6 +11,9 @@ class ExecutionPlanFeatures(BaseModel):
     join_count: Optional[int] = 0
     filter_count: Optional[int] = 0
     projection_count: Optional[int] = 1
+    selected_column_count: Optional[int] = 1
+    column_count: Optional[int] = 10
+    has_partition_filter: Optional[int] = 0
     aggregation_count: Optional[int] = 0
     has_wildcard: Optional[int] = 0
     has_group_by: Optional[int] = 0

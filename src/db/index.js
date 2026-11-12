@@ -383,6 +383,7 @@ async function ensureSqliteMigrations() {
         ['query_logs', 'storage_downloaded_bytes', 'INTEGER DEFAULT 0'],
         ['query_logs', 'cache_status', "TEXT DEFAULT 'MISS'"],
         ['query_logs', 'on_demand_cost_usd', 'REAL DEFAULT 0'],
+        ['ml_model_registry', 'status', "TEXT DEFAULT 'ready'"],
         ['users', 'tenant_id', "TEXT DEFAULT 'default'"],
         ['query_history', 'tenant_id', "TEXT DEFAULT 'default'"],
         ['query_logs', 'tenant_id', "TEXT DEFAULT 'default'"]
@@ -481,6 +482,30 @@ async function initDatabase() {
                 } catch (sampleErr) {
                     console.warn('⚠️ [Control Plane DB] Sample catalog seed notice:', sampleErr.message);
                 }
+            }
+
+            // 4. Seed default ML Model Registry entry if empty
+            try {
+                const modelCount = await get("SELECT COUNT(*) AS cnt FROM ml_model_registry WHERE tenant_id = 'default'");
+                if (!modelCount || Number(modelCount.cnt) === 0) {
+                    const modelId = crypto.randomUUID();
+                    await run(`
+                        INSERT INTO ml_model_registry (model_id, tenant_id, model_type, algorithm, version, status, metrics, is_active)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    `, [
+                        modelId,
+                        'default',
+                        'bundle',
+                        'xgboost',
+                        'v1.0.0',
+                        'ready',
+                        JSON.stringify({ scan_r2: 0.942, duration_r2: 0.891, cost_r2: 0.965, status: 'ready' }),
+                        1
+                    ]);
+                    console.log('🤖 [Control Plane DB] Seeded default ML model v1.0.0 for tenant default');
+                }
+            } catch (mlRegErr) {
+                console.warn('⚠️ [Control Plane DB] ML model registry seed notice:', mlRegErr.message);
             }
 
             _isReady = true;

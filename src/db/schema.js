@@ -216,10 +216,46 @@ CREATE TABLE IF NOT EXISTS ml_model_registry (
     model_type TEXT NOT NULL,
     algorithm TEXT NOT NULL,
     version TEXT NOT NULL,
+    status TEXT DEFAULT 'ready',
     metrics TEXT,
     hyperparameters TEXT,
     model_path TEXT,
     is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS query_optimization_runs (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    execution_id TEXT,
+    original_sql TEXT NOT NULL,
+    optimized_sql TEXT NOT NULL,
+    recommendation_type TEXT,
+    estimated_scan_before INTEGER DEFAULT 0,
+    estimated_scan_after INTEGER DEFAULT 0,
+    actual_scan_before INTEGER DEFAULT 0,
+    actual_scan_after INTEGER DEFAULT 0,
+    estimated_cost_before REAL DEFAULT 0,
+    estimated_cost_after REAL DEFAULT 0,
+    actual_cost_before REAL DEFAULT 0,
+    actual_cost_after REAL DEFAULT 0,
+    execution_time_before INTEGER DEFAULT 0,
+    execution_time_after INTEGER DEFAULT 0,
+    model_version TEXT DEFAULT 'v1.0.0',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ml_prediction_history (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    execution_id TEXT,
+    predicted_scan_bytes INTEGER DEFAULT 0,
+    actual_scan_bytes INTEGER DEFAULT 0,
+    predicted_execution_ms INTEGER DEFAULT 0,
+    actual_execution_ms INTEGER DEFAULT 0,
+    predicted_cost REAL DEFAULT 0,
+    actual_cost REAL DEFAULT 0,
+    model_version TEXT DEFAULT 'v1.0.0',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 `;
@@ -442,6 +478,7 @@ CREATE TABLE IF NOT EXISTS ml_model_registry (
     model_type VARCHAR(64) NOT NULL,
     algorithm VARCHAR(64) NOT NULL,
     version VARCHAR(64) NOT NULL,
+    status VARCHAR(32) DEFAULT 'ready',
     metrics TEXT,
     hyperparameters TEXT,
     model_path TEXT,
@@ -449,6 +486,43 @@ CREATE TABLE IF NOT EXISTS ml_model_registry (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS query_optimization_runs (
+    id VARCHAR(64) PRIMARY KEY DEFAULT md5(random()::text || clock_timestamp()::text),
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
+    execution_id VARCHAR(64),
+    original_sql TEXT NOT NULL,
+    optimized_sql TEXT NOT NULL,
+    recommendation_type VARCHAR(64),
+    estimated_scan_before BIGINT DEFAULT 0,
+    estimated_scan_after BIGINT DEFAULT 0,
+    actual_scan_before BIGINT DEFAULT 0,
+    actual_scan_after BIGINT DEFAULT 0,
+    estimated_cost_before NUMERIC(12, 6) DEFAULT 0,
+    estimated_cost_after NUMERIC(12, 6) DEFAULT 0,
+    actual_cost_before NUMERIC(12, 6) DEFAULT 0,
+    actual_cost_after NUMERIC(12, 6) DEFAULT 0,
+    execution_time_before INTEGER DEFAULT 0,
+    execution_time_after INTEGER DEFAULT 0,
+    model_version VARCHAR(64) DEFAULT 'v1.0.0',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ml_prediction_history (
+    id VARCHAR(64) PRIMARY KEY DEFAULT md5(random()::text || clock_timestamp()::text),
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
+    execution_id VARCHAR(64),
+    predicted_scan_bytes BIGINT DEFAULT 0,
+    actual_scan_bytes BIGINT DEFAULT 0,
+    predicted_execution_ms INTEGER DEFAULT 0,
+    actual_execution_ms INTEGER DEFAULT 0,
+    predicted_cost NUMERIC(12, 6) DEFAULT 0,
+    actual_cost NUMERIC(12, 6) DEFAULT 0,
+    model_version VARCHAR(64) DEFAULT 'v1.0.0',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_query_opt_runs_tenant ON query_optimization_runs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_ml_pred_hist_tenant ON ml_prediction_history(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_query_telemetry_tenant ON query_telemetry(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_query_telemetry_execution ON query_telemetry(execution_id);
 CREATE INDEX IF NOT EXISTS idx_prediction_feedback_tenant ON prediction_feedback(tenant_id);
@@ -468,6 +542,7 @@ const POSTGRES_MIGRATIONS = [
     `ALTER TABLE targets ADD COLUMN IF NOT EXISTS credentials TEXT`,
     `ALTER TABLE targets ADD COLUMN IF NOT EXISTS access_key TEXT`,
     `ALTER TABLE targets ADD COLUMN IF NOT EXISTS secret_key TEXT`,
+    `ALTER TABLE ml_model_registry ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'ready'`,
     `ALTER TABLE targets ADD COLUMN IF NOT EXISTS krb_principal TEXT`,
     `ALTER TABLE targets ADD COLUMN IF NOT EXISTS krb_keytab TEXT`,
     `ALTER TABLE permissions ALTER COLUMN id SET DEFAULT md5(random()::text || clock_timestamp()::text)`,

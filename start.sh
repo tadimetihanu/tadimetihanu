@@ -22,3 +22,4 @@ EXIT_CODE=$?
 echo "⚠️ Service process exited with code $EXIT_CODE"
 kill $ML_PID $NODE_PID 2>/dev/null || true
 exit $EXIT_CODE
+

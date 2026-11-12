@@ -226,6 +226,245 @@ window.predictCostIntelligence = async () => {
     }
 };
 
+let _currentOptimizationAnalysis = null;
+
+window.analyzeQueryOptimization = async () => {
+    const editor = document.getElementById('query-editor');
+    const sql = editor ? editor.value : '';
+    const btn = document.getElementById('ai-optimize-btn');
+    if (!sql || !sql.trim()) {
+        showToast('Please enter a SQL query to analyze optimization opportunities', 'warning');
+        return;
+    }
+
+    const originalText = btn ? btn.innerText : '⚡ AI Optimize';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '⚡ Analyzing...';
+    }
+
+    try {
+        const targetId = _activeTargetId || (_targets && _targets[0] ? _targets[0].target_id : null);
+        const res = await apiFetch('/api/query-intelligence/analyze', {
+            method: 'POST',
+            body: JSON.stringify({ sql, targetId })
+        });
+
+        if (res && res.success) {
+            _currentOptimizationAnalysis = res;
+            const panel = document.getElementById('ai-query-optimization-panel');
+            if (panel) panel.style.display = 'block';
+
+            // Populate Summary
+            const oppsEl = document.getElementById('opt-summary-opportunities');
+            const scanRedEl = document.getElementById('opt-summary-scan-reduction');
+            const costSavEl = document.getElementById('opt-summary-cost-savings');
+            const timeImpEl = document.getElementById('opt-summary-time-improvement');
+
+            if (oppsEl) oppsEl.innerText = `${res.summary.total_opportunities} Detected`;
+            if (scanRedEl) scanRedEl.innerText = `${res.summary.potential_scan_reduction_pct}%`;
+            if (costSavEl) costSavEl.innerText = `$${res.summary.potential_cost_savings_usd.toFixed(6)} USD`;
+            if (timeImpEl) timeImpEl.innerText = `${res.summary.potential_execution_time_improvement_pct}%`;
+
+            // Card 1: Projection
+            const cProj = res.cards.projection;
+            const pBadge = document.getElementById('opt-proj-badge');
+            const pMsg = document.getElementById('opt-proj-message');
+            const pUnnec = document.getElementById('opt-proj-unnecessary-cols');
+            const pSavings = document.getElementById('opt-proj-savings');
+
+            if (pBadge) {
+                pBadge.innerText = cProj.detected ? 'SELECT * DETECTED' : 'EXPLICIT PROJECTION';
+                pBadge.style.background = cProj.detected ? 'rgba(245,158,11,0.12)' : 'rgba(16,185,129,0.12)';
+                pBadge.style.color = cProj.detected ? '#b45309' : '#059669';
+            }
+            if (pMsg) pMsg.innerText = cProj.message;
+            if (pUnnec) {
+                pUnnec.innerText = (cProj.unnecessary_columns && cProj.unnecessary_columns.length > 0)
+                    ? cProj.unnecessary_columns.slice(0, 5).join(', ') + (cProj.unnecessary_columns.length > 5 ? '...' : '')
+                    : 'None (Optimal)';
+            }
+            if (pSavings) pSavings.innerText = `${cProj.estimated_scan_reduction_pct}% Scan Reduction`;
+
+            // Card 2: Partition
+            const cPart = res.cards.partition;
+            const partBadge = document.getElementById('opt-part-badge');
+            const partMsg = document.getElementById('opt-part-message');
+            const partCols = document.getElementById('opt-part-available-cols');
+            const partPrune = document.getElementById('opt-part-file-prune');
+
+            if (partBadge) {
+                partBadge.innerText = cPart.detected ? 'MISSING FILTER' : 'FILTER ACTIVE';
+                partBadge.style.background = cPart.detected ? 'rgba(239,68,68,0.12)' : 'rgba(16,185,129,0.12)';
+                partBadge.style.color = cPart.detected ? '#b91c1c' : '#059669';
+            }
+            if (partMsg) partMsg.innerText = cPart.message;
+            if (partCols) {
+                partCols.innerText = (cPart.available_partition_columns && cPart.available_partition_columns.length > 0)
+                    ? cPart.available_partition_columns.join(', ')
+                    : 'None';
+            }
+            if (partPrune) partPrune.innerText = `${cPart.estimated_file_pruning_pct}% Partition File Skipping`;
+
+            // Card 3: Storage Format
+            const cFmt = res.cards.storage_format;
+            const fBadge = document.getElementById('opt-format-badge');
+            const fMsg = document.getElementById('opt-format-message');
+            const fCur = document.getElementById('opt-format-current');
+            const fRec = document.getElementById('opt-format-recommended');
+            const fImpact = document.getElementById('opt-format-impact');
+
+            if (fBadge) {
+                fBadge.innerText = cFmt.detected ? 'CONVERSION RECOMMENDED' : 'OPTIMAL FORMAT';
+                fBadge.style.background = cFmt.detected ? 'rgba(245,158,11,0.12)' : 'rgba(16,185,129,0.12)';
+                fBadge.style.color = cFmt.detected ? '#b45309' : '#059669';
+            }
+            if (fMsg) fMsg.innerText = cFmt.message;
+            if (fCur) fCur.innerText = cFmt.current_format;
+            if (fRec) fRec.innerText = cFmt.recommended_format;
+            if (fImpact) fImpact.innerText = cFmt.estimated_query_speedup;
+
+            // Card 4: Execution Plan
+            const cPlan = res.cards.execution_plan;
+            const planBadge = document.getElementById('opt-plan-badge');
+            const planMsg = document.getElementById('opt-plan-message');
+            const planPush = document.getElementById('opt-plan-pushdown');
+            const planJoins = document.getElementById('opt-plan-joins');
+
+            if (planBadge) {
+                planBadge.innerText = cPlan.detected ? 'OPPORTUNITIES FOUND' : 'OPTIMAL PLAN';
+            }
+            if (planMsg) {
+                planMsg.innerText = (cPlan.expensive_operators && cPlan.expensive_operators.length > 0)
+                    ? cPlan.expensive_operators[0]
+                    : 'Plan is vectorized and efficient.';
+            }
+            if (planPush) planPush.innerText = cPlan.filter_pushdown_status;
+            if (planJoins) planJoins.innerText = cPlan.join_optimization_status;
+
+            // Update SQL Code preview display if already open
+            const codeDisplay = document.getElementById('opt-sql-code-display');
+            if (codeDisplay) codeDisplay.innerText = res.optimized_sql;
+
+            showToast(`Optimization Analysis: ${res.summary.total_opportunities} opportunities found!`, 'info');
+        } else {
+            showToast(res?.error || 'Analysis failed', 'error');
+        }
+    } catch (e) {
+        showToast(`AI Optimization failed: ${e.message}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = originalText;
+        }
+    }
+};
+
+window.toggleShowOptimizedSql = () => {
+    const box = document.getElementById('opt-sql-preview-box');
+    if (!box) return;
+    const isHidden = box.style.display === 'none';
+    if (isHidden) {
+        const codeDisplay = document.getElementById('opt-sql-code-display');
+        if (codeDisplay && _currentOptimizationAnalysis) {
+            codeDisplay.innerText = _currentOptimizationAnalysis.optimized_sql;
+        }
+        box.style.display = 'block';
+    } else {
+        box.style.display = 'none';
+    }
+};
+
+window.copyOptimizedSql = async () => {
+    if (!_currentOptimizationAnalysis || !_currentOptimizationAnalysis.optimized_sql) {
+        showToast('Please run AI Optimize first to generate recommended SQL', 'warning');
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(_currentOptimizationAnalysis.optimized_sql);
+        showToast('📋 Optimized SQL copied to clipboard!', 'success');
+    } catch (e) {
+        showToast('Clipboard access unavailable', 'error');
+    }
+};
+
+window.toggleComparePlans = () => {
+    const box = document.getElementById('opt-plan-comparison-box');
+    if (!box) return;
+    box.style.display = box.style.display === 'none' ? 'block' : 'none';
+};
+
+window.runOptimizationBenchmark = async () => {
+    if (!_currentOptimizationAnalysis) {
+        showToast('Please analyze the query first before running benchmark', 'warning');
+        return;
+    }
+
+    const btn = document.getElementById('btn-action-benchmark');
+    const origText = btn ? btn.innerText : '🏁 Run Benchmark';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '🏁 Benchmarking...';
+    }
+
+    try {
+        const targetId = _activeTargetId || (_targets && _targets[0] ? _targets[0].target_id : null);
+        const res = await apiFetch('/api/query-intelligence/benchmark', {
+            method: 'POST',
+            body: JSON.stringify({
+                originalSql: _currentOptimizationAnalysis.original_sql,
+                optimizedSql: _currentOptimizationAnalysis.optimized_sql,
+                targetId
+            })
+        });
+
+        if (res && res.success) {
+            const benchBox = document.getElementById('opt-benchmark-results-box');
+            if (benchBox) benchBox.style.display = 'block';
+
+            const runIdEl = document.getElementById('opt-bench-run-id');
+            const scanSavedEl = document.getElementById('opt-bench-scan-saved');
+            const scanPctEl = document.getElementById('opt-bench-scan-pct');
+            const timeSavedEl = document.getElementById('opt-bench-time-saved');
+            const costPctEl = document.getElementById('opt-bench-cost-pct');
+
+            if (runIdEl) runIdEl.innerText = `Run #${res.benchmark_id.slice(0, 8)}`;
+            if (scanSavedEl) scanSavedEl.innerText = res.savings.scan_saved_formatted;
+            if (scanPctEl) scanPctEl.innerText = `-${res.savings.scan_reduction_pct}%`;
+            if (timeSavedEl) timeSavedEl.innerText = `${res.savings.time_saved_ms} ms (${res.savings.time_reduction_pct}%)`;
+            if (costPctEl) costPctEl.innerText = `-${res.savings.cost_reduction_pct}% ($${res.savings.cost_saved_usd})`;
+
+            showToast(`🏁 Benchmark Completed: -${res.savings.scan_reduction_pct}% Scan Reduction!`, 'success');
+        } else {
+            showToast(res?.error || 'Benchmark failed', 'error');
+        }
+    } catch (e) {
+        showToast(`Benchmark error: ${e.message}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = origText;
+        }
+    }
+};
+
+window.applyOptimizedRecommendation = () => {
+    if (!_currentOptimizationAnalysis || !_currentOptimizationAnalysis.optimized_sql) {
+        showToast('No optimization recommendation available to apply', 'warning');
+        return;
+    }
+
+    const editor = document.getElementById('query-editor');
+    if (editor) {
+        editor.value = _currentOptimizationAnalysis.optimized_sql;
+    }
+    if (_notebooks && _notebooks[_activeTabIdx]) {
+        _notebooks[_activeTabIdx].sql = _currentOptimizationAnalysis.optimized_sql;
+        saveNotebooks();
+    }
+    showToast('✨ Applied AI Recommended SQL into Editor!', 'success');
+};
+
 window.renderTabTelemetry = (tab) => {
     if (!tab) return;
     const meter = document.getElementById('live-burn-meter');

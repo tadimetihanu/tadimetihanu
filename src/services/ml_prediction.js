@@ -196,19 +196,37 @@ function calculateStatisticalFallbackPrediction(sql, planFeatures, cacheStatus, 
 async function recordExecutionTelemetryAndFeedback({
     executionId,
     tenantId = 'default',
-    userId,
-    targetId,
+    userId = 'anonymous',
+    targetId = null,
     sql,
     durationMs,
-    rowCount,
-    scanMeta = {}
+    rowCount = 0,
+    scanMeta = {},
+    storageProvider,
+    fileFormat,
+    fileCount,
+    totalFileSizeBytes,
+    actualScanBytes: directActualScan,
+    actualDurationMs: directActualDuration,
+    actualCostUsd: directActualCost,
+    cacheStatus: directCacheStatus,
+    joinCount: directJoinCount,
+    filterCount: directFilterCount,
+    hasWildcard: directHasWildcard,
+    predictedScanBytes,
+    predictedDurationMs,
+    predictedCostUsd,
+    modelVersion = 'v1.0.0'
 }) {
-    if (!executionId || !sql) return;
+    if (!executionId || !sql) return { success: false, error: 'executionId and sql required' };
 
-    const actualScanBytes = Number(scanMeta.logicalScannedBytes || scanMeta.estimatedScan || 0);
-    const actualCostUsd = Number(scanMeta.billedCostUsd || scanMeta.estimatedCost || 0);
-    const onDemandCostUsd = Number(scanMeta.onDemandCostUsd || 0);
-    const cacheStatus = scanMeta.cacheStatus || 'MISS';
+    const finalActualScan = directActualScan !== undefined ? Number(directActualScan) : Number(scanMeta.logicalScannedBytes || scanMeta.estimatedScan || 0);
+    const finalActualCost = directActualCost !== undefined ? Number(directActualCost) : Number(scanMeta.billedCostUsd || scanMeta.estimatedCost || 0);
+    const onDemandCostUsd = Number(scanMeta.onDemandCostUsd || finalActualCost || 0);
+    const finalDuration = directActualDuration !== undefined ? Number(directActualDuration) : Number(durationMs || 0);
+    const finalCacheStatus = directCacheStatus || scanMeta.cacheStatus || 'MISS';
+
+    let feedbackId = null;
 
     // 1. Save to query_telemetry
     try {
@@ -232,51 +250,53 @@ async function recordExecutionTelemetryAndFeedback({
             targetId,
             sql,
             planFeatures.query_type,
-            planFeatures.storage_provider,
-            planFeatures.file_format,
-            planFeatures.file_count,
-            planFeatures.total_file_size_bytes,
-            planFeatures.join_count,
-            planFeatures.filter_count,
+            storageProvider || planFeatures.storage_provider,
+            fileFormat || planFeatures.file_format,
+            fileCount !== undefined ? fileCount : planFeatures.file_count,
+            totalFileSizeBytes !== undefined ? totalFileSizeBytes : planFeatures.total_file_size_bytes,
+            directJoinCount !== undefined ? directJoinCount : planFeatures.join_count,
+            directFilterCount !== undefined ? directFilterCount : planFeatures.filter_count,
             planFeatures.projection_count,
             planFeatures.aggregation_count,
-            planFeatures.has_wildcard,
+            directHasWildcard !== undefined ? directHasWildcard : planFeatures.has_wildcard,
             JSON.stringify(planFeatures),
-            cacheStatus,
-            Number(scanMeta.estimatedScan || 0),
-            actualScanBytes,
-            durationMs,
-            actualCostUsd,
+            finalCacheStatus,
+            Number(scanMeta.estimatedScan || predictedScanBytes || 0),
+            finalActualScan,
+            finalDuration,
+            finalActualCost,
             onDemandCostUsd
         ]);
     } catch (e) {
         console.warn('[Telemetry Notice]', e.message);
     }
 
-    // 2. Feedback loop: Check if a prediction exists for this query
+    // 2. Feedback loop: Check if a prediction exists for this query or direct feedback provided
     try {
         const recentPred = await db.get(`
             SELECT * FROM prediction_feedback 
-            WHERE tenant_id = ? AND (execution_id = ? OR query_text = ?)
+            WHERE tenant_id = ? AND (execution_id = ? OR (query_text = ? AND validated_at IS NULL))
             ORDER BY created_at DESC LIMIT 1
         `, [tenantId, executionId, sql]);
 
         if (recentPred) {
+            feedbackId = recentPred.id;
             const predScan = Number(recentPred.predicted_scan_bytes || 0);
             const predDur = Number(recentPred.predicted_duration_ms || 0);
             const predCost = Number(recentPred.predicted_cost_usd || 0);
 
-            const scanError = actualScanBytes - predScan;
-            const durError = durationMs - predDur;
-            const costError = actualCostUsd - predCost;
+            const scanError = finalActualScan - predScan;
+            const durError = finalDuration - predDur;
+            const costError = finalActualCost - predCost;
 
-            const scanErrPct = actualScanBytes > 0 ? (Math.abs(scanError) / actualScanBytes) * 100 : 0;
-            const durErrPct = durationMs > 0 ? (Math.abs(durError) / durationMs) * 100 : 0;
-            const costErrPct = actualCostUsd > 0 ? (Math.abs(costError) / actualCostUsd) * 100 : 0;
+            const scanErrPct = finalActualScan > 0 ? (Math.abs(scanError) / finalActualScan) * 100 : 0;
+            const durErrPct = finalDuration > 0 ? (Math.abs(durError) / finalDuration) * 100 : 0;
+            const costErrPct = finalActualCost > 0 ? (Math.abs(costError) / finalActualCost) * 100 : 0;
 
             await db.run(`
                 UPDATE prediction_feedback
-                SET actual_scan_bytes = ?,
+                SET execution_id = ?,
+                    actual_scan_bytes = ?,
                     actual_duration_ms = ?,
                     actual_cost_usd = ?,
                     scan_error = ?,
@@ -288,9 +308,10 @@ async function recordExecutionTelemetryAndFeedback({
                     validated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             `, [
-                actualScanBytes,
-                durationMs,
-                actualCostUsd,
+                executionId,
+                finalActualScan,
+                finalDuration,
+                finalActualCost,
                 scanError,
                 durError,
                 costError,
@@ -299,29 +320,59 @@ async function recordExecutionTelemetryAndFeedback({
                 costErrPct.toFixed(2),
                 recentPred.id
             ]);
+        } else if (predictedScanBytes !== undefined || predictedDurationMs !== undefined || predictedCostUsd !== undefined) {
+            feedbackId = crypto.randomUUID();
+            const predScan = Number(predictedScanBytes || 0);
+            const predDur = Number(predictedDurationMs || 0);
+            const predCost = Number(predictedCostUsd || 0);
 
-            // Notify Python ML service feedback endpoint asynchronously
-            fetch(`${ML_SERVICE_URL}/api/ml/feedback`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-API-Key': ML_SERVICE_API_KEY },
-                body: JSON.stringify({
-                    execution_id: executionId,
-                    tenant_id: tenantId,
-                    user_id: userId,
-                    query_text: sql,
-                    predicted_scan_bytes: predScan,
-                    predicted_duration_ms: predDur,
-                    predicted_cost_usd: predCost,
-                    actual_scan_bytes: actualScanBytes,
-                    actual_duration_ms: durationMs,
-                    actual_cost_usd: actualCostUsd,
-                    model_version: recentPred.model_version
-                })
-            }).catch(() => {});
+            const scanError = finalActualScan - predScan;
+            const durError = finalDuration - predDur;
+            const costError = finalActualCost - predCost;
+
+            const scanErrPct = finalActualScan > 0 ? (Math.abs(scanError) / finalActualScan) * 100 : 0;
+            const durErrPct = finalDuration > 0 ? (Math.abs(durError) / finalDuration) * 100 : 0;
+            const costErrPct = finalActualCost > 0 ? (Math.abs(costError) / finalActualCost) * 100 : 0;
+
+            await db.run(`
+                INSERT INTO prediction_feedback (
+                    id, execution_id, tenant_id, user_id, query_text,
+                    predicted_scan_bytes, predicted_duration_ms, predicted_cost_usd,
+                    actual_scan_bytes, actual_duration_ms, actual_cost_usd,
+                    scan_error, duration_error_ms, cost_error_usd,
+                    scan_error_pct, duration_error_pct, cost_error_pct,
+                    model_version, created_at, validated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            `, [
+                feedbackId,
+                executionId,
+                tenantId,
+                userId,
+                sql,
+                predScan,
+                predDur,
+                predCost,
+                finalActualScan,
+                finalDuration,
+                finalActualCost,
+                scanError,
+                durError,
+                costError,
+                scanErrPct.toFixed(2),
+                durErrPct.toFixed(2),
+                costErrPct.toFixed(2),
+                modelVersion
+            ]);
         }
     } catch (fbErr) {
         console.warn('[Feedback Notice]', fbErr.message);
     }
+
+    return {
+        success: true,
+        execution_id: executionId,
+        feedback_id: feedbackId
+    };
 }
 
 /**

@@ -98,6 +98,9 @@ def generate_synthetic_seed_telemetry(tenant_id: str = "default", sample_count: 
             "join_count": join_count,
             "filter_count": filter_count,
             "projection_count": projection_count,
+            "selected_column_count": projection_count,
+            "column_count": 15,
+            "has_partition_filter": 1 if filter_count > 0 and np.random.rand() < 0.7 else 0,
             "aggregation_count": aggregation_count,
             "has_wildcard": has_wildcard,
             "has_group_by": has_group_by,
@@ -145,8 +148,26 @@ def load_historical_telemetry(tenant_id: str = "default") -> pd.DataFrame:
         seed_df = generate_synthetic_seed_telemetry(tenant_id=tenant_id, sample_count=150)
         if not db_df.empty:
             combined = pd.concat([seed_df, db_df], ignore_index=True)
-            return combined
-        return seed_df
-        
-    return db_df
+            result_df = combined
+        else:
+            result_df = seed_df
+    else:
+        result_df = db_df
+
+    # Ensure all required training feature columns are populated
+    from ml_service.trainer import ALL_FEATURE_COLUMNS, NUMERICAL_FEATURES
+    for col in ALL_FEATURE_COLUMNS:
+        if col not in result_df.columns:
+            if col in ["selected_column_count", "projection_count"]:
+                result_df[col] = result_df.get("projection_count", 1)
+            elif col == "column_count":
+                result_df[col] = 12
+            elif col == "has_partition_filter":
+                result_df[col] = (result_df.get("filter_count", 0) > 0).astype(int)
+            elif col in NUMERICAL_FEATURES:
+                result_df[col] = 0
+            else:
+                result_df[col] = "unknown"
+
+    return result_df
 

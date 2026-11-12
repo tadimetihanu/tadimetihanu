@@ -643,6 +643,11 @@
                             title="Run Dual-Pass DuckDB Ground-Truth & Repeatability Benchmark">
                             🔬 Validate
                         </button>
+                        <button class="btn btn-secondary" onclick="window.analyzeQueryOptimization()" id="ai-optimize-btn"
+                            style="background:rgba(79, 70, 229, 0.12); border-color:#6366f1; color:#4f46e5; font-weight:700; white-space:nowrap; flex-shrink:0;"
+                            title="AI Query Optimization & Cost Intelligence Engine: Automated rewrite, partition pruning & scan reduction">
+                            ⚡ AI Optimize
+                        </button>
                         <button class="btn btn-secondary" onclick="window.predictCostIntelligence()" id="ml-predict-btn"
                             style="background:rgba(124,58,237,0.1); border-color:#8b5cf6; color:#7c3aed; font-weight:700; white-space:nowrap; flex-shrink:0;"
                             title="ML Predictive Cost Intelligence: Pre-execution forecast of data scan volume, duration & query cost">
@@ -670,6 +675,174 @@
                     </div>
                     <div style="flex: 1; min-width: 10px;"></div>
                     <span id="exec-status" style="font-size: 0.82rem; color: var(--text-muted); white-space:nowrap; flex-shrink:0;"></span>
+                </div>
+
+                <!-- AI Query Optimization & Cost Intelligence Panel -->
+                <div id="ai-query-optimization-panel" style="display:none; margin: 12px 20px 16px 20px; border-radius:12px; border:1px solid rgba(79,70,229,0.3); background:linear-gradient(135deg, rgba(248,250,252,0.98) 0%, rgba(241,245,249,0.98) 100%); padding:16px 20px; box-shadow:0 6px 20px rgba(79,70,229,0.08);">
+                    <!-- Top Bar: Title & Dismiss -->
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; flex-wrap:wrap; gap:10px; border-bottom:1px solid rgba(0,0,0,0.06); padding-bottom:10px;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <div style="width:10px; height:10px; border-radius:50%; background:#4f46e5; box-shadow:0 0 10px rgba(79,70,229,0.7);"></div>
+                            <span style="font-size:0.82rem; font-weight:800; color:#3730a3; text-transform:uppercase; letter-spacing:0.06em;">AI Query Optimization & Cost Intelligence</span>
+                            <span style="background:rgba(79,70,229,0.12); color:#4338ca; border:1px solid rgba(79,70,229,0.25); font-size:0.65rem; font-weight:700; padding:2px 8px; border-radius:999px;">AUTOMATED QUERY RE-WRITING & COST ENGINE</span>
+                        </div>
+                        <button onclick="document.getElementById('ai-query-optimization-panel').style.display='none'" style="background:transparent; border:none; cursor:pointer; font-size:1.1rem; color:#9ca3af;" title="Close Panel">✕</button>
+                    </div>
+
+                    <!-- Optimization Summary Section -->
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px; margin-bottom:14px;">
+                        <div style="background:#ffffff; border-radius:8px; border:1px solid rgba(0,0,0,0.08); padding:10px 14px;">
+                            <div style="font-size:0.68rem; color:#6b7280; font-weight:700; text-transform:uppercase;">Opportunities Detected</div>
+                            <div id="opt-summary-opportunities" style="font-size:1.15rem; font-weight:800; color:#4f46e5; margin-top:2px;">0 Detected</div>
+                        </div>
+                        <div style="background:#ffffff; border-radius:8px; border:1px solid rgba(0,0,0,0.08); padding:10px 14px;">
+                            <div style="font-size:0.68rem; color:#6b7280; font-weight:700; text-transform:uppercase;">Potential Scan Reduction</div>
+                            <div id="opt-summary-scan-reduction" style="font-size:1.15rem; font-weight:800; color:#059669; margin-top:2px;">0.0%</div>
+                        </div>
+                        <div style="background:#ffffff; border-radius:8px; border:1px solid rgba(0,0,0,0.08); padding:10px 14px;">
+                            <div style="font-size:0.68rem; color:#6b7280; font-weight:700; text-transform:uppercase;">Potential Cost Savings</div>
+                            <div id="opt-summary-cost-savings" style="font-size:1.15rem; font-weight:800; color:#10b981; margin-top:2px;">$0.000000 USD</div>
+                        </div>
+                        <div style="background:#ffffff; border-radius:8px; border:1px solid rgba(0,0,0,0.08); padding:10px 14px;">
+                            <div style="font-size:0.68rem; color:#6b7280; font-weight:700; text-transform:uppercase;">Est. Time Improvement</div>
+                            <div id="opt-summary-time-improvement" style="font-size:1.15rem; font-weight:800; color:#2563eb; margin-top:2px;">0.0%</div>
+                        </div>
+                    </div>
+
+                    <!-- 4 Recommendation Cards Grid -->
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px; margin-bottom:14px;">
+                        <!-- Card 1: Projection Optimization -->
+                        <div id="opt-card-projection" style="background:#ffffff; border-radius:8px; border:1px solid rgba(245,158,11,0.3); padding:12px 14px;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+                                <span style="font-size:0.75rem; font-weight:800; color:#b45309; text-transform:uppercase;">Card 1: Projection Optimization</span>
+                                <span id="opt-proj-badge" style="font-size:0.65rem; font-weight:700; background:rgba(245,158,11,0.12); color:#b45309; padding:2px 6px; border-radius:4px;">SELECT * DETECTED</span>
+                            </div>
+                            <div id="opt-proj-message" style="font-size:0.75rem; color:#4b5563; margin-bottom:6px;">Analyzing column projection efficiency...</div>
+                            <div id="opt-proj-cols-container" style="font-size:0.7rem; color:#6b7280; margin-bottom:4px;">
+                                <strong>Unnecessary Columns:</strong> <span id="opt-proj-unnecessary-cols">—</span>
+                            </div>
+                            <div style="font-size:0.7rem; color:#059669; font-weight:700;">
+                                Est. Scan Savings: <span id="opt-proj-savings">0%</span>
+                            </div>
+                        </div>
+
+                        <!-- Card 2: Partition Pruning -->
+                        <div id="opt-card-partition" style="background:#ffffff; border-radius:8px; border:1px solid rgba(239,68,68,0.3); padding:12px 14px;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+                                <span style="font-size:0.75rem; font-weight:800; color:#b91c1c; text-transform:uppercase;">Card 2: Partition Pruning</span>
+                                <span id="opt-part-badge" style="font-size:0.65rem; font-weight:700; background:rgba(239,68,68,0.12); color:#b91c1c; padding:2px 6px; border-radius:4px;">MISSING FILTER</span>
+                            </div>
+                            <div id="opt-part-message" style="font-size:0.75rem; color:#4b5563; margin-bottom:6px;">Scanning partition directory boundaries...</div>
+                            <div style="font-size:0.7rem; color:#6b7280; margin-bottom:4px;">
+                                <strong>Partition Columns:</strong> <span id="opt-part-available-cols">—</span>
+                            </div>
+                            <div style="font-size:0.7rem; color:#059669; font-weight:700;">
+                                Est. File Pruning: <span id="opt-part-file-prune">0%</span>
+                            </div>
+                        </div>
+
+                        <!-- Card 3: Storage Format -->
+                        <div id="opt-card-format" style="background:#ffffff; border-radius:8px; border:1px solid rgba(99,102,241,0.25); padding:12px 14px;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+                                <span style="font-size:0.75rem; font-weight:800; color:#4338ca; text-transform:uppercase;">Card 3: Storage Format</span>
+                                <span id="opt-format-badge" style="font-size:0.65rem; font-weight:700; background:rgba(99,102,241,0.1); color:#4338ca; padding:2px 6px; border-radius:4px;">PARQUET READY</span>
+                            </div>
+                            <div id="opt-format-message" style="font-size:0.75rem; color:#4b5563; margin-bottom:6px;">Inspecting underlying storage file format...</div>
+                            <div style="font-size:0.7rem; color:#6b7280; margin-bottom:4px;">
+                                Format: <strong id="opt-format-current">PARQUET</strong> ➔ Recommended: <strong id="opt-format-recommended" style="color:#059669;">PARQUET</strong>
+                            </div>
+                            <div style="font-size:0.7rem; color:#059669; font-weight:700;">
+                                Impact: <span id="opt-format-impact">Optimal</span>
+                            </div>
+                        </div>
+
+                        <!-- Card 4: Query Execution Plan -->
+                        <div id="opt-card-plan" style="background:#ffffff; border-radius:8px; border:1px solid rgba(16,185,129,0.25); padding:12px 14px;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+                                <span style="font-size:0.75rem; font-weight:800; color:#047857; text-transform:uppercase;">Card 4: Query Execution Plan</span>
+                                <span id="opt-plan-badge" style="font-size:0.65rem; font-weight:700; background:rgba(16,185,129,0.12); color:#047857; padding:2px 6px; border-radius:4px;">PLAN VERIFIED</span>
+                            </div>
+                            <div id="opt-plan-message" style="font-size:0.75rem; color:#4b5563; margin-bottom:6px;">Analyzing physical DuckDB execution vectors...</div>
+                            <div style="font-size:0.7rem; color:#6b7280; margin-bottom:4px;">
+                                <strong>Pushdown:</strong> <span id="opt-plan-pushdown">Enabled</span>
+                            </div>
+                            <div style="font-size:0.7rem; color:#4b5563;">
+                                <strong>Joins:</strong> <span id="opt-plan-joins">Single table scan</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Collapsible Optimized SQL Preview Box -->
+                    <div id="opt-sql-preview-box" style="display:none; margin-bottom:14px; background:#0f172a; border-radius:8px; padding:12px 14px; border:1px solid #1e293b;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+                            <span style="font-size:0.72rem; font-weight:700; color:#a5b4fc; text-transform:uppercase;">✨ Recommended Optimized SQL (Safe Rewrite)</span>
+                            <span style="font-size:0.68rem; color:#94a3b8;">Original SQL semantics preserved</span>
+                        </div>
+                        <pre id="opt-sql-code-display" style="margin:0; font-family:'Menlo', monospace; font-size:0.82rem; color:#e2e8f0; white-space:pre-wrap; word-break:break-all; max-height:120px; overflow-y:auto;"></pre>
+                    </div>
+
+                    <!-- Collapsible Execution Plan Comparison Modal/Container -->
+                    <div id="opt-plan-comparison-box" style="display:none; margin-bottom:14px; background:#ffffff; border-radius:8px; padding:12px 14px; border:1px solid #cbd5e1;">
+                        <div style="font-size:0.75rem; font-weight:800; color:#1e293b; margin-bottom:8px;">🔬 Side-by-Side Execution Plan Comparison</div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                            <div style="background:#f8fafc; border-radius:6px; padding:8px 10px; border:1px solid #e2e8f0;">
+                                <div style="font-size:0.7rem; font-weight:700; color:#b91c1c; margin-bottom:4px;">Original Query Operators</div>
+                                <div id="opt-plan-orig-details" style="font-size:0.72rem; color:#475569; font-family:monospace; line-height:1.4;">SeqScan ➔ Full Column Decode ➔ Buffer Sort</div>
+                            </div>
+                            <div style="background:#f0fdf4; border-radius:6px; padding:8px 10px; border:1px solid #bbf7d0;">
+                                <div style="font-size:0.7rem; font-weight:700; color:#15803d; margin-bottom:4px;">Optimized Query Operators</div>
+                                <div id="opt-plan-opt-details" style="font-size:0.72rem; color:#166534; font-family:monospace; line-height:1.4;">Vectorized Column Prune ➔ Partition Skip ➔ Pushed Predicates</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Benchmark Results Section -->
+                    <div id="opt-benchmark-results-box" style="display:none; margin-bottom:14px; background:rgba(16,185,129,0.06); border:1px solid rgba(16,185,129,0.3); border-radius:8px; padding:12px 14px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                            <span style="font-size:0.75rem; font-weight:800; color:#065f46; text-transform:uppercase;">🏁 Live Dual-Pass Benchmark Results</span>
+                            <span id="opt-bench-run-id" style="font-size:0.65rem; color:#047857; font-family:monospace;"></span>
+                        </div>
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:8px;">
+                            <div style="background:white; border-radius:6px; padding:8px; border:1px solid rgba(16,185,129,0.2);">
+                                <div style="font-size:0.65rem; color:#6b7280;">Actual Scan Saved</div>
+                                <div id="opt-bench-scan-saved" style="font-size:0.95rem; font-weight:800; color:#059669;">—</div>
+                            </div>
+                            <div style="background:white; border-radius:6px; padding:8px; border:1px solid rgba(16,185,129,0.2);">
+                                <div style="font-size:0.65rem; color:#6b7280;">Scan Reduction</div>
+                                <div id="opt-bench-scan-pct" style="font-size:0.95rem; font-weight:800; color:#059669;">—</div>
+                            </div>
+                            <div style="background:white; border-radius:6px; padding:8px; border:1px solid rgba(16,185,129,0.2);">
+                                <div style="font-size:0.65rem; color:#6b7280;">Execution Time Saved</div>
+                                <div id="opt-bench-time-saved" style="font-size:0.95rem; font-weight:800; color:#2563eb;">—</div>
+                            </div>
+                            <div style="background:white; border-radius:6px; padding:8px; border:1px solid rgba(16,185,129,0.2);">
+                                <div style="font-size:0.65rem; color:#6b7280;">Cost Reduction</div>
+                                <div id="opt-bench-cost-pct" style="font-size:0.95rem; font-weight:800; color:#10b981;">—</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- The 6 User Action Buttons -->
+                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; border-top:1px solid rgba(0,0,0,0.06); padding-top:10px;">
+                        <button class="btn btn-secondary" onclick="window.analyzeQueryOptimization()" id="btn-action-analyze" style="font-size:0.75rem; padding:6px 12px; background:#4f46e5; color:#ffffff; border:none; font-weight:700;">
+                            🔍 Analyze Query
+                        </button>
+                        <button class="btn btn-secondary" onclick="window.toggleShowOptimizedSql()" id="btn-action-show" style="font-size:0.75rem; padding:6px 12px;">
+                            👁️ Show Optimized SQL
+                        </button>
+                        <button class="btn btn-secondary" onclick="window.copyOptimizedSql()" id="btn-action-copy" style="font-size:0.75rem; padding:6px 12px;">
+                            📋 Copy Optimized SQL
+                        </button>
+                        <button class="btn btn-secondary" onclick="window.toggleComparePlans()" id="btn-action-compare" style="font-size:0.75rem; padding:6px 12px;">
+                            🔬 Compare Execution Plans
+                        </button>
+                        <button class="btn btn-secondary" onclick="window.runOptimizationBenchmark()" id="btn-action-benchmark" style="font-size:0.75rem; padding:6px 12px; background:rgba(16,185,129,0.1); border-color:#10b981; color:#059669; font-weight:700;">
+                            🏁 Run Benchmark
+                        </button>
+                        <button class="btn btn-primary" onclick="window.applyOptimizedRecommendation()" id="btn-action-apply" style="font-size:0.75rem; padding:6px 14px; background:#10b981; border:none; font-weight:800; color:#ffffff; margin-left:auto;">
+                            ✅ Apply Recommendation
+                        </button>
+                    </div>
                 </div>
 
                 <!-- ML Predictive Cost Intelligence Panel -->
