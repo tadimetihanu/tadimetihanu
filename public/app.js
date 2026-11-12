@@ -391,7 +391,37 @@ window.copyOptimizedSql = async () => {
 window.toggleComparePlans = () => {
     const box = document.getElementById('opt-plan-comparison-box');
     if (!box) return;
-    box.style.display = box.style.display === 'none' ? 'block' : 'none';
+    const isHidden = box.style.display === 'none';
+    if (isHidden) {
+        if (_currentOptimizationAnalysis) {
+            const cards = _currentOptimizationAnalysis.cards || {};
+            const origDetails = document.getElementById('opt-plan-orig-details');
+            const optDetails = document.getElementById('opt-plan-opt-details');
+
+            if (origDetails) {
+                const issues = cards.execution_plan?.expensive_operators || [];
+                origDetails.innerHTML = `
+                    <div style="margin-bottom:4px;"><strong>Physical Scan:</strong> Full-width SeqScan (All columns read)</div>
+                    <div style="margin-bottom:4px;"><strong>Column Decoding:</strong> Decodes all chunks off storage</div>
+                    <div><strong>Operators:</strong> ${issues.length > 0 ? issues.join(' • ') : 'SeqScan ➔ Full Column Decode'}</div>
+                `;
+            }
+
+            if (optDetails) {
+                const projSavings = cards.projection?.estimated_scan_reduction_pct || 0;
+                const prunedCols = cards.projection?.unnecessary_columns || [];
+                optDetails.innerHTML = `
+                    <div style="margin-bottom:4px;"><strong>Projection Pushdown:</strong> Vectorized column pruning active</div>
+                    <div style="margin-bottom:4px;"><strong>Pruned Columns:</strong> ${prunedCols.length > 0 ? prunedCols.join(', ') : 'Unneeded columns skipped'} (-${projSavings}% scan)</div>
+                    <div><strong>Execution Pipeline:</strong> Direct column chunk projection ➔ DuckDB SIMD stream</div>
+                `;
+            }
+        }
+        box.style.display = 'block';
+        box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else {
+        box.style.display = 'none';
+    }
 };
 
 window.runOptimizationBenchmark = async () => {
