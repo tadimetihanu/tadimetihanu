@@ -1085,7 +1085,9 @@ app.get('/api/ml/telemetry', authenticate, async (req, res) => {
 const {
     analyzeQueryIntelligence,
     generateRecommendedSql,
-    runQueryBenchmark
+    runQueryBenchmark,
+    getDuckDbExecutionPlan,
+    compareExecutionPlans
 } = require('./services/query_optimizer');
 
 // POST /api/query-intelligence/analyze
@@ -1171,6 +1173,29 @@ app.post('/api/query-intelligence/benchmark', authenticate, async (req, res) => 
         res.json(benchmark);
     } catch (err) {
         console.error('[QI Benchmark Error]', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/query-intelligence/compare-plans
+app.post('/api/query-intelligence/compare-plans', authenticate, async (req, res) => {
+    try {
+        const { originalSql, optimizedSql, targetId } = req.body;
+        const userId = req.user.user_id;
+        if (!originalSql || !optimizedSql) {
+            return res.status(400).json({ error: 'Both originalSql and optimizedSql are required' });
+        }
+        const planOrig = await getDuckDbExecutionPlan(originalSql, targetId, userId);
+        const planOpt = await getDuckDbExecutionPlan(optimizedSql, targetId, userId);
+        const comparison = compareExecutionPlans(planOrig, planOpt);
+        res.json({
+            success: true,
+            original_plan: planOrig,
+            optimized_plan: planOpt,
+            comparison
+        });
+    } catch (err) {
+        console.error('[QI Compare Plans Error]', err.message);
         res.status(500).json({ error: err.message });
     }
 });

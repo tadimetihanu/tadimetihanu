@@ -314,7 +314,8 @@ window.analyzeQueryOptimization = async () => {
             const cProj = res.cards.projection;
             const pBadge = document.getElementById('opt-proj-badge');
             const pMsg = document.getElementById('opt-proj-message');
-            const pUnnec = document.getElementById('opt-proj-unnecessary-cols');
+            const pColsSummary = document.getElementById('opt-proj-cols-summary');
+            const pBytesElim = document.getElementById('opt-proj-bytes-eliminated');
             const pSavings = document.getElementById('opt-proj-savings');
 
             if (pBadge) {
@@ -323,18 +324,26 @@ window.analyzeQueryOptimization = async () => {
                 pBadge.style.color = cProj.detected ? '#b45309' : '#059669';
             }
             if (pMsg) pMsg.innerText = cProj.message;
-            if (pUnnec) {
-                pUnnec.innerText = (cProj.unnecessary_columns && cProj.unnecessary_columns.length > 0)
-                    ? cProj.unnecessary_columns.slice(0, 5).join(', ') + (cProj.unnecessary_columns.length > 5 ? '...' : '')
-                    : 'None (Optimal)';
+            if (pColsSummary) {
+                const totalC = cProj.total_available_columns || (cProj.all_columns ? cProj.all_columns.length : 0);
+                const reqC = cProj.required_columns_count || (cProj.recommended_columns ? cProj.recommended_columns.length : 0);
+                const elimC = cProj.columns_eliminated_count ?? (cProj.unnecessary_columns ? cProj.unnecessary_columns.length : 0);
+                pColsSummary.innerText = `${totalC} available, ${reqC} required (${elimC} eliminated)`;
             }
-            if (pSavings) pSavings.innerText = `${cProj.estimated_scan_reduction_pct}% Scan Savings`;
+            if (pBytesElim) {
+                pBytesElim.innerText = cProj.estimated_bytes_eliminated_formatted || '0 B';
+            }
+            if (pSavings) {
+                const safePct = Math.max(0.0, cProj.estimated_scan_reduction_pct || 0.0);
+                pSavings.innerText = `${safePct}% Scan Savings`;
+            }
 
             // 4. Card 2: Partition
             const cPart = res.cards.partition;
             const partBadge = document.getElementById('opt-part-badge');
             const partMsg = document.getElementById('opt-part-message');
             const partCols = document.getElementById('opt-part-available-cols');
+            const partMetric = document.getElementById('opt-part-metric-summary');
             const partPrune = document.getElementById('opt-part-file-prune');
 
             if (partBadge) {
@@ -356,10 +365,17 @@ window.analyzeQueryOptimization = async () => {
                     ? cPart.available_partition_columns.join(', ')
                     : 'None';
             }
+            if (partMetric) {
+                const tot = cPart.total_files || 1;
+                const scn = cPart.scanned_files || 1;
+                const skp = cPart.skipped_files || 0;
+                const prn = cPart.pruning_pct || 0.0;
+                partMetric.innerText = `Total: ${tot} | Scanned: ${scn} | Skipped: ${skp} (${prn}% Pruned)`;
+            }
             if (partPrune) {
-                const elig = cPart.eligible_files || 1;
+                const elig = cPart.scanned_files || cPart.eligible_files || 1;
                 const skip = cPart.skipped_files || 0;
-                partPrune.innerText = `${cPart.estimated_file_pruning_pct}% Skipping (${elig} eligible, ${skip} skipped)`;
+                partPrune.innerText = `${cPart.potential_scan_reduction_pct || cPart.estimated_file_pruning_pct || 0}% Skipping (${elig} eligible, ${skip} skipped)`;
             }
 
             // 5. Card 3: Storage Format
@@ -436,9 +452,21 @@ function renderExecutionPlanDetails(executionPlans, cards = {}) {
     const vBadge = document.getElementById('opt-plan-verification-badge');
     const origDetails = document.getElementById('opt-plan-orig-details');
     const optDetails = document.getElementById('opt-plan-opt-details');
+    const identicalNotice = document.getElementById('opt-plan-identical-notice');
 
     const orig = executionPlans.original || {};
     const opt = executionPlans.optimized || {};
+    const comparison = executionPlans.comparison || {};
+    const isIdentical = Boolean(executionPlans.is_identical || comparison.is_identical);
+
+    if (identicalNotice) {
+        if (isIdentical) {
+            identicalNotice.style.display = 'block';
+            identicalNotice.innerText = 'ℹ️ Native DuckDB optimizer already applied this optimization. No additional rewrite benefit detected.';
+        } else {
+            identicalNotice.style.display = 'none';
+        }
+    }
 
     if (vBadge) {
         vBadge.innerText = executionPlans.is_verified ? 'VERIFIED EXPLAIN (DUCKDB)' : 'PREDICTED PLAN (AST)';
@@ -448,28 +476,61 @@ function renderExecutionPlanDetails(executionPlans, cards = {}) {
 
     if (origDetails) {
         const origOps = (orig.operators && orig.operators.length > 0) ? orig.operators.join(' ➔ ') : 'Seq Scan ➔ Projection';
-        const origProjs = Array.isArray(orig.projections) ? orig.projections.join(', ') : (orig.projections || 'All columns');
+        const origProjs = Array.isArray(orig.projected_columns || orig.projections) 
+            ? (orig.projected_columns || orig.projections).join(', ') 
+            : 'All columns';
+        const origPruned = Array.isArray(orig.pruned_columns) && orig.pruned_columns.length > 0 
+            ? orig.pruned_columns.join(', ') 
+            : 'None';
+        const origScans = (orig.table_scans && orig.table_scans.length > 0)
+            ? orig.table_scans.map(s => `${s.table} [${s.scan_type}]`).join(', ')
+            : ((orig.tables && orig.tables.length > 0) ? orig.tables.join(', ') : 'Single table');
+        const origJoins = (orig.join_operators && orig.join_operators.length > 0)
+            ? orig.join_operators.join(', ')
+            : 'None';
+        const origAggs = (orig.aggregation_operators && orig.aggregation_operators.length > 0)
+            ? orig.aggregation_operators.join(', ')
+            : 'None';
+
         origDetails.innerHTML = `
-            <div style="margin-bottom:4px;"><strong>Physical Operators:</strong> ${origOps}</div>
-            <div style="margin-bottom:4px;"><strong>Projection Pushdown:</strong> ${orig.projection_pushdown_status || 'None'}</div>
-            <div style="margin-bottom:4px;"><strong>Projected Columns:</strong> ${origProjs}</div>
-            <div style="margin-bottom:4px;"><strong>Filter Pushdown:</strong> ${orig.filter_pushdown_status || 'None'}</div>
-            <div><strong>Scanned Source(s):</strong> ${(orig.tables && orig.tables.length > 0) ? orig.tables.join(', ') : 'Single table'}</div>
+            <div style="margin-bottom:3px;"><strong>Physical Operators:</strong> ${origOps}</div>
+            <div style="margin-bottom:3px;"><strong>Table Scan:</strong> ${origScans}</div>
+            <div style="margin-bottom:3px;"><strong>Projection Pushdown:</strong> ${orig.projection_pushdown_status || 'None'}</div>
+            <div style="margin-bottom:3px;"><strong>Projected Columns:</strong> ${origProjs}</div>
+            <div style="margin-bottom:3px;"><strong>Pruned Columns:</strong> ${origPruned}</div>
+            <div style="margin-bottom:3px;"><strong>Filter Pushdown:</strong> ${orig.filter_pushdown_status || 'None'}</div>
+            <div style="margin-bottom:3px;"><strong>Join Operators:</strong> ${origJoins}</div>
+            <div><strong>Aggregation Operators:</strong> ${origAggs}</div>
         `;
     }
 
     if (optDetails) {
         const optOps = (opt.operators && opt.operators.length > 0) ? opt.operators.join(' ➔ ') : 'Parquet Scan (Vectorized) ➔ Projection';
-        const optProjs = Array.isArray(opt.projections) ? opt.projections.join(', ') : (opt.projections || 'Explicit columns');
-        const projSavings = cards.projection?.estimated_scan_reduction_pct || 0;
-        const unnecCols = cards.projection?.unnecessary_columns || [];
+        const optProjs = Array.isArray(opt.projected_columns || opt.projections) 
+            ? (opt.projected_columns || opt.projections).join(', ') 
+            : 'Explicit columns';
+        const optPruned = Array.isArray(opt.pruned_columns) && opt.pruned_columns.length > 0 
+            ? opt.pruned_columns.join(', ') 
+            : (cards.projection?.unnecessary_columns && cards.projection.unnecessary_columns.length > 0 ? cards.projection.unnecessary_columns.join(', ') : 'None (Optimal)');
+        const optScans = (opt.table_scans && opt.table_scans.length > 0)
+            ? opt.table_scans.map(s => `${s.table} [${s.scan_type}]`).join(', ')
+            : ((opt.tables && opt.tables.length > 0) ? opt.tables.join(', ') : 'Vector stream');
+        const optJoins = (opt.join_operators && opt.join_operators.length > 0)
+            ? opt.join_operators.join(', ')
+            : 'None';
+        const optAggs = (opt.aggregation_operators && opt.aggregation_operators.length > 0)
+            ? opt.aggregation_operators.join(', ')
+            : 'None';
+
         optDetails.innerHTML = `
-            <div style="margin-bottom:4px;"><strong>Physical Operators:</strong> ${optOps}</div>
-            <div style="margin-bottom:4px;"><strong>Projection Pushdown:</strong> ${opt.projection_pushdown_status || 'Active'} (-${projSavings}% scan)</div>
-            <div style="margin-bottom:4px;"><strong>Projected Columns:</strong> ${optProjs}</div>
-            <div style="margin-bottom:4px;"><strong>Pruned Columns:</strong> ${unnecCols.length > 0 ? unnecCols.join(', ') : 'None (Optimal)'}</div>
-            <div style="margin-bottom:4px;"><strong>Filter Pushdown:</strong> ${opt.filter_pushdown_status || 'Active'}</div>
-            <div><strong>Execution Engine:</strong> Direct DuckDB SIMD column-vector stream</div>
+            <div style="margin-bottom:3px;"><strong>Physical Operators:</strong> ${optOps}</div>
+            <div style="margin-bottom:3px;"><strong>Table Scan:</strong> ${optScans}</div>
+            <div style="margin-bottom:3px;"><strong>Projection Pushdown:</strong> ${opt.projection_pushdown_status || 'Active'}</div>
+            <div style="margin-bottom:3px;"><strong>Projected Columns:</strong> ${optProjs}</div>
+            <div style="margin-bottom:3px;"><strong>Pruned Columns:</strong> ${optPruned}</div>
+            <div style="margin-bottom:3px;"><strong>Filter Pushdown:</strong> ${opt.filter_pushdown_status || 'Active'}</div>
+            <div style="margin-bottom:3px;"><strong>Join Operators:</strong> ${optJoins}</div>
+            <div><strong>Aggregation Operators:</strong> ${optAggs}</div>
         `;
     }
 }
@@ -557,6 +618,68 @@ window.runOptimizationBenchmark = async () => {
             if (timeSavedEl) timeSavedEl.innerText = `${res.savings.time_saved_ms} ms (${res.savings.time_reduction_pct}%)`;
             if (costPctEl) costPctEl.innerText = `-${res.savings.cost_reduction_pct}% ($${res.savings.cost_saved_usd})`;
 
+            // Result Equivalence Banner
+            const eqBadge = document.getElementById('opt-bench-equiv-badge');
+            const eqDetails = document.getElementById('opt-bench-equiv-details');
+            if (eqBadge && res.result_equivalence) {
+                eqBadge.innerText = res.result_equivalence.badge_text;
+                if (res.result_equivalence.verified) {
+                    eqBadge.style.background = '#dcfce7';
+                    eqBadge.style.color = '#15803d';
+                } else {
+                    eqBadge.style.background = '#fee2e2';
+                    eqBadge.style.color = '#b91c1c';
+                }
+            }
+            if (eqDetails && res.result_equivalence) {
+                eqDetails.innerText = res.result_equivalence.details;
+            }
+
+            // Populate Verification Matrix Table
+            const mOrigScan = document.getElementById('opt-matrix-orig-scan');
+            const mOptScan = document.getElementById('opt-matrix-opt-scan');
+            const mActualScanSaved = document.getElementById('opt-matrix-actual-scan-saved');
+            const mPredScan = document.getElementById('opt-matrix-pred-scan');
+            const mOrigTime = document.getElementById('opt-matrix-orig-time');
+            const mOptTime = document.getElementById('opt-matrix-opt-time');
+            const mActualTimeSaved = document.getElementById('opt-matrix-actual-time-saved');
+            const mPredTime = document.getElementById('opt-matrix-pred-time');
+            const mOrigCost = document.getElementById('opt-matrix-orig-cost');
+            const mOptCost = document.getElementById('opt-matrix-opt-cost');
+            const mActualCostSaved = document.getElementById('opt-matrix-actual-cost-saved');
+            const mPredCost = document.getElementById('opt-matrix-pred-cost');
+            const mOrigFiles = document.getElementById('opt-matrix-orig-files');
+            const mOptFiles = document.getElementById('opt-matrix-opt-files');
+            const mActualFilesPruned = document.getElementById('opt-matrix-actual-files-pruned');
+            const mOrigRows = document.getElementById('opt-matrix-orig-rows');
+            const mOptRows = document.getElementById('opt-matrix-opt-rows');
+            const mEquivSummary = document.getElementById('opt-matrix-equiv-summary');
+
+            const predSummary = _currentOptimizationAnalysis?.summary?.predicted || {};
+
+            if (mOrigScan) mOrigScan.innerText = res.original.scan_formatted;
+            if (mOptScan) mOptScan.innerText = res.optimized.scan_formatted;
+            if (mActualScanSaved) mActualScanSaved.innerText = `-${res.savings.scan_reduction_pct}% (-${res.savings.scan_saved_formatted})`;
+            if (mPredScan) mPredScan.innerText = `-${predSummary.scan_reduction_pct || 0}%`;
+
+            if (mOrigTime) mOrigTime.innerText = `${res.original.duration_ms} ms`;
+            if (mOptTime) mOptTime.innerText = `${res.optimized.duration_ms} ms`;
+            if (mActualTimeSaved) mActualTimeSaved.innerText = `-${res.savings.time_reduction_pct}% (-${res.savings.time_saved_ms} ms)`;
+            if (mPredTime) mPredTime.innerText = `-${predSummary.execution_time_improvement_pct || 0}%`;
+
+            if (mOrigCost) mOrigCost.innerText = res.original.cost_formatted;
+            if (mOptCost) mOptCost.innerText = res.optimized.cost_formatted;
+            if (mActualCostSaved) mActualCostSaved.innerText = `-${res.savings.cost_reduction_pct}% (-${res.savings.cost_saved_formatted})`;
+            if (mPredCost) mPredCost.innerText = `-$${Number(predSummary.cost_savings_usd || 0).toFixed(6)} USD`;
+
+            if (mOrigFiles) mOrigFiles.innerText = `${res.original.files_scanned} of ${res.original.total_files} files`;
+            if (mOptFiles) mOptFiles.innerText = `${res.optimized.files_scanned} of ${res.optimized.total_files} files`;
+            if (mActualFilesPruned) mActualFilesPruned.innerText = `${res.savings.files_skipped} skipped (-${res.savings.file_pruning_pct}%)`;
+
+            if (mOrigRows) mOrigRows.innerText = `${res.original.rows.toLocaleString()} rows (${res.original.cache_status})`;
+            if (mOptRows) mOptRows.innerText = `${res.optimized.rows.toLocaleString()} rows (${res.optimized.cache_status})`;
+            if (mEquivSummary) mEquivSummary.innerText = res.result_equivalence?.verified ? 'Verified Equivalent ✅' : 'Review Rewrites ⚠️';
+
             // Update Summary Card ACTUAL values (Clearly distinguishing Predicted from Actual)
             const actScanEl = document.getElementById('opt-kpi-actual-scan');
             const actCostEl = document.getElementById('opt-kpi-actual-cost');
@@ -571,6 +694,7 @@ window.runOptimizationBenchmark = async () => {
                 renderExecutionPlanDetails(res.execution_plans, _currentOptimizationAnalysis.cards);
             }
 
+            benchBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             showToast(`🏁 Benchmark Completed: -${res.savings.scan_reduction_pct}% Scan Reduction!`, 'success');
         } else {
             showToast(res?.error || 'Benchmark failed', 'error');
