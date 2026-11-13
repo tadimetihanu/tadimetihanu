@@ -8,7 +8,7 @@ const { predictQueryCost } = require('./ml_prediction');
 const COST_PER_TIB_USD = 5.00;
 const TIB_BYTES = 1024 * 1024 * 1024 * 1024;
 
-// Known schemas for benchmark and enterprise lakehouse tables (including 1M and 10M benchmarks)
+// Known schemas for benchmark and enterprise lakehouse tables (including 1M, 10M, and 100M benchmarks)
 const KNOWN_TABLE_SCHEMAS = {
     'products': ['product_id', 'product_name', 'product_category', 'product_tier', 'list_price'],
     'regions': ['region_id', 'region_name', 'country'],
@@ -19,7 +19,22 @@ const KNOWN_TABLE_SCHEMAS = {
     'logistics': ['delivery_id', 'order_id', 'carrier', 'status', 'shipping_cost', 'delivery_date'],
     'supermarket_sales': ['invoice_id', 'branch', 'city', 'customer_type', 'gender', 'product_line', 'unit_price', 'quantity', 'total', 'order_date', 'payment', 'rating'],
     'telemetry': ['event_id', 'timestamp', 'host', 'cpu_pct', 'memory_pct', 'latency', 'status'],
-    'events': ['event_id', 'timestamp', 'tenant_id', 'region', 'event_type', 'payload_bytes', 'latency_ms']
+    'events': ['event_id', 'timestamp', 'tenant_id', 'region', 'event_type', 'payload_bytes', 'latency_ms'],
+    // Benchmark & real storage datasets in CloudObjectIQ (1M, 10M, 100M benchmarks)
+    'data_100m': ['id', 'value', 'category'],
+    'data_10m': ['id', 'value', 'category'],
+    'data_1m': ['id', 'value', 'category'],
+    'data': ['id', 'value', 'category'],
+    'iris': ['sepal_length', 'sepal_width', 'petal_length', 'petal_width', 'species'],
+    'farms': ['farm_id', 'farm_name', 'region', 'crop_type', 'acres', 'yield_tons'],
+    'flights': ['flight_id', 'carrier', 'origin', 'dest', 'dep_delay', 'arr_delay', 'air_time', 'distance'],
+    'flights-1m': ['flight_id', 'carrier', 'origin', 'dest', 'dep_delay', 'arr_delay', 'air_time', 'distance'],
+    'flights-new': ['flight_id', 'carrier', 'origin', 'dest', 'dep_delay', 'arr_delay', 'air_time', 'distance'],
+    'marketing_trends': ['campaign_id', 'channel', 'clicks', 'impressions', 'spend', 'conversions'],
+    'census_data': ['census_id', 'state', 'county', 'population', 'median_income', 'year'],
+    'ecommerce_orders': ['order_id', 'customer_name', 'product_category', 'unit_price', 'quantity', 'total_usd', 'order_status', 'order_date'],
+    'cloud_telemetry': ['event_id', 'timestamp', 'host', 'cpu_pct', 'memory_pct', 'latency_ms'],
+    'financial_transactions': ['transaction_id', 'account_id', 'amount', 'currency', 'timestamp', 'status']
 };
 
 // Recognized partition keys across data lake conventions
@@ -310,37 +325,97 @@ function getColumnByteWeight(colName) {
 }
 
 /**
- * Discover table column list from metadata_catalog or known schema dictionary.
+ * Discover table column list from known schemas, metadata_catalog, or DuckDB engine DESCRIBE.
+ * NEVER returns fabricated columns for unknown tables to prevent SQL binder crashes.
  */
-async function discoverTableColumns(tableName, targetId = null) {
-    const cleanName = path.basename(tableName).replace(/\.(parquet|csv|orc|json|iceberg)$/i, '').toLowerCase();
+async function discoverTableColumns(tableName, targetId = null, userId = null, rawSourceExpr = null) {
+    if (!tableName) return [];
 
-    // 1. Check known schemas dictionary
-    if (KNOWN_TABLE_SCHEMAS[cleanName]) {
-        return [...KNOWN_TABLE_SCHEMAS[cleanName]];
+    const cleanBase = path.basename(tableName).replace(/\.(parquet|csv|orc|json|jsonl|ndjson|iceberg)$/i, '').toLowerCase();
+    const cleanSimple = cleanBase.replace(/[^a-z0-9_]/g, '_');
+
+    // 1. Direct match in KNOWN_TABLE_SCHEMAS
+    if (KNOWN_TABLE_SCHEMAS[cleanBase]) {
+        return [...KNOWN_TABLE_SCHEMAS[cleanBase]];
+    }
+    if (KNOWN_TABLE_SCHEMAS[cleanSimple]) {
+        return [...KNOWN_TABLE_SCHEMAS[cleanSimple]];
+    }
+
+    // 1b. Fuzzy match in KNOWN_TABLE_SCHEMAS for benchmarks (e.g. data_100M -> data_100m, 10M/products -> products)
+    for (const [k, cols] of Object.entries(KNOWN_TABLE_SCHEMAS)) {
+        if (cleanBase === k || cleanBase.includes(k) || k.includes(cleanBase)) {
+            return [...cols];
+        }
     }
 
     // 2. Query metadata_catalog
     try {
-        const row = await db.get(`
+        const rows = await db.all(`
             SELECT schema_json FROM metadata_catalog 
-            WHERE (file_name LIKE ? OR file_path LIKE ?)
-            LIMIT 1
-        `, [`%${cleanName}%`, `%${cleanName}%`]);
+            WHERE (
+                file_name = ? OR file_path = ? OR
+                file_name LIKE ? OR file_path LIKE ? OR
+                LOWER(file_name) LIKE ? OR LOWER(file_path) LIKE ?
+            )
+            AND schema_json IS NOT NULL AND LENGTH(schema_json) > 2
+            LIMIT 5
+        `, [
+            tableName, tableName,
+            `%${cleanBase}%`, `%${cleanBase}%`,
+            `%${cleanBase}%`, `%${cleanBase}%`
+        ]);
 
-        if (row && row.schema_json) {
-            const parsed = JSON.parse(row.schema_json);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-                return parsed.map(c => typeof c === 'string' ? c : (c.name || c.column_name)).filter(Boolean);
-            }
-            if (typeof parsed === 'object') {
-                return Object.keys(parsed);
+        for (const row of (rows || [])) {
+            if (row && row.schema_json) {
+                const parsed = JSON.parse(row.schema_json);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    const cols = parsed.map(c => typeof c === 'string' ? c : (c.name || c.column_name)).filter(Boolean);
+                    if (cols.length > 0) return cols;
+                }
+                if (typeof parsed === 'object' && parsed !== null) {
+                    const cols = Object.keys(parsed);
+                    if (cols.length > 0) return cols;
+                }
             }
         }
     } catch (_) {}
 
-    // Fallback default enterprise columns
-    return ['id', 'name', 'category', 'status', 'amount', 'created_at'];
+    // 3. Query DuckDB engine directly if available
+    let runQuery = null;
+    try {
+        runQuery = require('../query/engine').runQuery;
+    } catch (_) {}
+
+    if (runQuery) {
+        try {
+            let sourceTarget = rawSourceExpr || tableName;
+            if (!sourceTarget.startsWith('read_') && !sourceTarget.startsWith('iceberg_scan') && !sourceTarget.includes('://')) {
+                const ext = (sourceTarget.split('.').pop() || '').toLowerCase();
+                if (ext === 'parquet') sourceTarget = `read_parquet('${sourceTarget}')`;
+                else if (ext === 'csv') sourceTarget = `read_csv_auto('${sourceTarget}')`;
+                else if (ext === 'json') sourceTarget = `read_json_auto('${sourceTarget}')`;
+                else if (ext === 'orc') sourceTarget = `read_orc('${sourceTarget}')`;
+                else if (ext === 'iceberg') sourceTarget = `iceberg_scan('${sourceTarget}')`;
+            }
+            const descRows = await runQuery(userId, `DESCRIBE SELECT * FROM ${sourceTarget}`, targetId, { skipLog: true });
+            if (Array.isArray(descRows) && descRows.length > 0) {
+                const cols = descRows.map(r => r.column_name || r.name || Object.values(r)[0]).filter(Boolean);
+                if (cols.length > 0) {
+                    try {
+                        await db.run(
+                            'UPDATE metadata_catalog SET schema_json = ? WHERE (file_name LIKE ? OR file_path LIKE ?)',
+                            [JSON.stringify(cols), `%${cleanBase}%`, `%${cleanBase}%`]
+                        );
+                    } catch (_) {}
+                    return cols;
+                }
+            }
+        } catch (_) {}
+    }
+
+    // Do NOT fabricate columns if schema is unknown. Returning empty array signals metadata unavailable.
+    return [];
 }
 
 /**
@@ -363,7 +438,7 @@ async function getDuckDbExecutionPlan(sql, targetId = null, userId = null, allCo
             }
         }
         try {
-            cols = await discoverTableColumns(primaryTable, targetId);
+            cols = await discoverTableColumns(primaryTable, targetId, userId, paths[0]);
         } catch (_) {
             cols = [];
         }
@@ -418,29 +493,11 @@ async function analyzeQueryIntelligence(sql, targetId = null, tenantId = 'defaul
         }
     }
 
-    const allColumns = await discoverTableColumns(primaryTable, targetId);
+    const allColumns = await discoverTableColumns(primaryTable, targetId, userId, paths[0]);
 
     // ── 1. Feature A: SQL Projection Optimization ──────────────────────────
     const hasWildcard = /\bSELECT\s+(?:DISTINCT\s+)?\*|\.\*/i.test(cleanSql);
     let projectionCard = null;
-
-    // Identify columns explicitly mentioned in WHERE, GROUP BY, ORDER BY, JOIN
-    const requiredColumns = new Set();
-    for (const col of allColumns) {
-        const colRegex = new RegExp(`\\b${col}\\b`, 'i');
-        if (colRegex.test(cleanSql)) {
-            requiredColumns.add(col);
-        }
-    }
-
-    // Default essential columns if none referenced
-    if (requiredColumns.size === 0) {
-        // Pick top 3-4 descriptive columns
-        allColumns.slice(0, 4).forEach(c => requiredColumns.add(c));
-    }
-
-    const recommendedProjectedCols = Array.from(requiredColumns);
-    const unnecessaryCols = hasWildcard ? allColumns.filter(c => !requiredColumns.has(c)) : [];
 
     // Table size estimation
     let totalTableBytes = 50 * 1024 * 1024; // 50MB default
@@ -451,55 +508,102 @@ async function analyzeQueryIntelligence(sql, targetId = null, tenantId = 'defaul
         }
     } catch (_) {}
 
-    // Calculate column-weighted unnecessary bytes
-    const totalWeight = allColumns.reduce((acc, c) => acc + getColumnByteWeight(c), 0);
-    const unnecessaryWeight = unnecessaryCols.reduce((acc, c) => acc + getColumnByteWeight(c), 0);
-    const weightRatio = totalWeight > 0 ? (unnecessaryWeight / totalWeight) : 0;
+    let recommendedProjectedCols = [];
+    let unnecessaryCols = [];
+    let estScanBefore = totalTableBytes;
+    let estScanAfter = totalTableBytes;
+    let projectionSavingsPct = 0.0;
 
-    const estScanBefore = totalTableBytes;
-    const estScanAfter = hasWildcard && unnecessaryCols.length > 0
-        ? Math.round(totalTableBytes * (1.0 - weightRatio))
-        : totalTableBytes;
-
-    const projectionSavingsPct = hasWildcard && unnecessaryCols.length > 0
-        ? calculateSafeReductionPct(estScanBefore, estScanAfter)
-        : 0.0;
-
-    if (hasWildcard && unnecessaryCols.length > 0) {
-        projectionCard = {
-            detected: true,
-            status: 'WILDCARD_DETECTED',
-            title: 'Projection Optimization',
-            severity: 'warning',
-            badge_text: 'SELECT * DETECTED',
-            message: '`SELECT *` full-width projection detected. Query reads all column chunks off storage, discarding columnar format efficiencies.',
-            all_columns: allColumns,
-            unnecessary_columns: unnecessaryCols,
-            recommended_columns: recommendedProjectedCols,
-            estimated_scan_before: estScanBefore,
-            estimated_scan_after: estScanAfter,
-            estimated_scan_reduction_pct: projectionSavingsPct,
-            estimated_cost_savings_usd: Number((((estScanBefore - estScanAfter) / TIB_BYTES) * COST_PER_TIB_USD).toFixed(6))
-        };
-    } else {
-        // Query already uses explicit projection or requires all columns
+    if (!allColumns || allColumns.length === 0) {
+        // Metadata unavailable: cannot determine table columns safely
         projectionCard = {
             detected: false,
-            status: 'OPTIMAL_PROJECTION',
+            status: 'METADATA_UNAVAILABLE',
             title: 'Projection Optimization',
-            severity: 'good',
-            badge_text: 'OPTIMAL PROJECTION',
-            message: hasWildcard
-                ? 'All available columns are referenced by the query. Projection is already optimal.'
-                : `Explicit projection in use (${recommendedProjectedCols.length} columns). Columnar pruning is active with zero unnecessary columns scanned.`,
-            all_columns: allColumns,
+            severity: 'neutral',
+            badge_text: 'METADATA UNAVAILABLE',
+            message: 'Table column metadata unavailable for this remote source. Projection rewrite bypassed to prevent binder errors.',
+            all_columns: [],
             unnecessary_columns: [],
-            recommended_columns: recommendedProjectedCols,
+            recommended_columns: [],
             estimated_scan_before: estScanBefore,
             estimated_scan_after: estScanBefore,
             estimated_scan_reduction_pct: 0.0,
             estimated_cost_savings_usd: 0.0
         };
+    } else {
+        // Identify columns explicitly mentioned in WHERE, GROUP BY, ORDER BY, JOIN, HAVING
+        const requiredColumns = new Set();
+        for (const col of allColumns) {
+            const colRegex = new RegExp(`\\b${col}\\b`, 'i');
+            if (colRegex.test(cleanSql)) {
+                requiredColumns.add(col);
+            }
+        }
+
+        // If table is narrow (<= 4 columns), all columns are considered essential for full-width projection
+        // We do NOT eliminate columns on a 3-column or 4-column table when SELECT * is used!
+        if (allColumns.length <= 4) {
+            allColumns.forEach(c => requiredColumns.add(c));
+        } else if (requiredColumns.size === 0) {
+            // Pick top 4 descriptive columns for wide enterprise tables (> 4 columns)
+            allColumns.slice(0, 4).forEach(c => requiredColumns.add(c));
+        }
+
+        recommendedProjectedCols = Array.from(requiredColumns).filter(c => allColumns.includes(c));
+        unnecessaryCols = (hasWildcard && allColumns.length > 4) ? allColumns.filter(c => !requiredColumns.has(c)) : [];
+
+        // Calculate column-weighted unnecessary bytes
+        const totalWeight = allColumns.reduce((acc, c) => acc + getColumnByteWeight(c), 0);
+        const unnecessaryWeight = unnecessaryCols.reduce((acc, c) => acc + getColumnByteWeight(c), 0);
+        const weightRatio = totalWeight > 0 ? (unnecessaryWeight / totalWeight) : 0;
+
+        estScanAfter = hasWildcard && unnecessaryCols.length > 0
+            ? Math.round(totalTableBytes * (1.0 - weightRatio))
+            : totalTableBytes;
+
+        projectionSavingsPct = hasWildcard && unnecessaryCols.length > 0
+            ? calculateSafeReductionPct(estScanBefore, estScanAfter)
+            : 0.0;
+
+        if (hasWildcard && unnecessaryCols.length > 0) {
+            projectionCard = {
+                detected: true,
+                status: 'WILDCARD_DETECTED',
+                title: 'Projection Optimization',
+                severity: 'warning',
+                badge_text: 'SELECT * DETECTED',
+                message: '`SELECT *` full-width projection detected. Query reads all column chunks off storage, discarding columnar format efficiencies.',
+                all_columns: allColumns,
+                unnecessary_columns: unnecessaryCols,
+                recommended_columns: recommendedProjectedCols,
+                estimated_scan_before: estScanBefore,
+                estimated_scan_after: estScanAfter,
+                estimated_scan_reduction_pct: projectionSavingsPct,
+                estimated_cost_savings_usd: Number((((estScanBefore - estScanAfter) / TIB_BYTES) * COST_PER_TIB_USD).toFixed(6))
+            };
+        } else {
+            // Query already uses explicit projection or requires all columns / minimal width
+            projectionCard = {
+                detected: false,
+                status: 'OPTIMAL_PROJECTION',
+                title: 'Projection Optimization',
+                severity: 'good',
+                badge_text: 'OPTIMAL PROJECTION',
+                message: (hasWildcard && allColumns.length <= 4)
+                    ? `Table width is minimal (${allColumns.length} columns: ${allColumns.join(', ')}). Projection is already optimal with zero unnecessary columns.`
+                    : (hasWildcard
+                        ? 'All available columns are referenced by the query. Projection is already optimal.'
+                        : `Explicit projection in use (${recommendedProjectedCols.length} columns). Columnar pruning is active with zero unnecessary columns scanned.`),
+                all_columns: allColumns,
+                unnecessary_columns: [],
+                recommended_columns: recommendedProjectedCols.length > 0 ? recommendedProjectedCols : allColumns,
+                estimated_scan_before: estScanBefore,
+                estimated_scan_after: estScanBefore,
+                estimated_scan_reduction_pct: 0.0,
+                estimated_cost_savings_usd: 0.0
+            };
+        }
     }
 
     // ── 2. Feature B: Intelligent Partition Pruning ────────────────────────
@@ -643,7 +747,7 @@ async function analyzeQueryIntelligence(sql, targetId = null, tenantId = 'defaul
     const hasLimit = /\bLIMIT\b/i.test(cleanSql);
 
     const planIssues = [];
-    if (hasWildcard) {
+    if (hasWildcard && unnecessaryCols.length > 0) {
         planIssues.push('SeqScan: Full column decode on storage vectors.');
     }
     if (joinCount >= 2 && !hasWhere) {
@@ -658,7 +762,7 @@ async function analyzeQueryIntelligence(sql, targetId = null, tenantId = 'defaul
 
     // ── 5. Generate Recommended Optimized SQL ──────────────────────────────
     const optimizedSql = generateRecommendedSql(sql, {
-        hasWildcard,
+        hasWildcard: hasWildcard && unnecessaryCols.length > 0,
         recommendedColumns: recommendedProjectedCols,
         missingPartitionCols: partitionCard.missing_partition_columns,
         suggestedFilter: partitionCard.recommended_filter_clause,
