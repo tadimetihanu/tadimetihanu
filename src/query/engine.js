@@ -103,6 +103,9 @@ async function ensureExtension(extName) {
     const name = String(extName || '').trim().toLowerCase();
     if (!name || _loadedExtensions.has(name)) return;
     try {
+        const extDir = path.join(process.cwd(), 'data', '.duckdb_extensions').replace(/\\/g, '/');
+        try { fs.mkdirSync(path.join(process.cwd(), 'data', '.duckdb_extensions'), { recursive: true }); } catch (_) {}
+        try { await _runSqlCmd(`SET extension_directory='${extDir}'`); } catch (_) {}
         if (name === 'orc') {
             try {
                 await _runSqlCmd('INSTALL orc FROM community');
@@ -162,6 +165,10 @@ async function boot() {
     }
 
     console.log(`🧠 [DuckDB] Container RAM: ${limits.containerMB}MB → memory_limit=${limits.memoryLimit}, threads=${limits.threads}, spill=${spillNorm}`);
+
+    const extDir = path.join(process.cwd(), 'data', '.duckdb_extensions').replace(/\\/g, '/');
+    try { fs.mkdirSync(path.join(process.cwd(), 'data', '.duckdb_extensions'), { recursive: true }); } catch (_) {}
+    try { await _runSqlCmd(`SET extension_directory='${extDir}'`); } catch (_) {}
 
     // 2. Load httpfs for S3/R2; heavy extensions (azure, iceberg, fts) are lazy-loaded on demand
     try {
@@ -567,7 +574,19 @@ async function runQuery(userId, sql, targetId, options = {}) {
     await _bootPromise;
 
     const originalUserSql = sql;
-    const target = await getTarget(targetId);
+    let target = null;
+    if (targetId) {
+        try { target = await getTarget(targetId); } catch (_) {}
+    }
+    if (!target) {
+        target = {
+            target_id: targetId || 'local',
+            target_name: 'Local DuckDB Engine',
+            provider_type: 'local',
+            endpoint: 'localhost',
+            bucket: 'local'
+        };
+    }
     const startTime = Date.now();
     const executionId = options.executionId || crypto.randomUUID();
     const skipLog = Boolean(options.skipLog);
@@ -667,8 +686,11 @@ async function runQuery(userId, sql, targetId, options = {}) {
 
             // Construct physical URI (prefer real cloud bucket for remote cloud targets; use localSamplePath for local/demo targets or fallback)
             const isLocalTarget = !target.endpoint || target.endpoint.includes('localhost') || target.endpoint.includes('127.0.0.1') || target.provider_type === 'local';
+            const isDirectLocalFile = /^[a-zA-Z]:[/\\]|^\/|^[./\\]/.test(rawMatchedPath) || fs.existsSync(rawMatchedPath);
             let physicalUri;
-            if (localSamplePath && (isLocalTarget || !row)) {
+            if (isDirectLocalFile) {
+                physicalUri = rawMatchedPath.replace(/\\/g, '/');
+            } else if (localSamplePath && (isLocalTarget || !row)) {
                 physicalUri = localSamplePath;
             } else {
                 const prefix = target.provider_type === 'azure' || target.provider_type === 'adls' ? 'az://' : 's3://';

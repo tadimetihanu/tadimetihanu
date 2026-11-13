@@ -416,6 +416,37 @@ window.analyzeQueryOptimization = async () => {
             if (planPush) planPush.innerText = cPlan.filter_pushdown_status || 'None';
             if (planJoins) planJoins.innerText = cPlan.join_optimization_status || 'Single table scan';
 
+            const catContainer = document.getElementById('opt-plan-categorized-container');
+            if (catContainer) {
+                let catHtml = '';
+                if (cPlan.optimization_opportunities && cPlan.optimization_opportunities.length > 0) {
+                    catHtml += `<div style="margin-bottom:4px;"><strong style="color:#b45309;">Opportunities:</strong> ` +
+                        cPlan.optimization_opportunities.map(o => `<span style="display:inline-block; margin:1px 3px; padding:1px 5px; background:#fef3c7; color:#92400e; border-radius:3px; font-weight:700;">${o.badge}: ${o.title}</span>`).join(' ') +
+                        `</div>`;
+                }
+                if (cPlan.performance_warnings && cPlan.performance_warnings.length > 0) {
+                    catHtml += `<div style="margin-bottom:4px;"><strong style="color:#b91c1c;">Warnings:</strong> ` +
+                        cPlan.performance_warnings.map(w => `<span style="display:inline-block; margin:1px 3px; padding:1px 5px; background:#fee2e2; color:#991b1b; border-radius:3px;">${w.badge}: ${w.title}</span>`).join(' ') +
+                        `</div>`;
+                }
+                if (cPlan.informational_observations && cPlan.informational_observations.length > 0) {
+                    catHtml += `<div style="margin-bottom:4px;"><strong style="color:#475569;">Informational:</strong> ` +
+                        cPlan.informational_observations.map(i => `<span style="display:inline-block; margin:1px 3px; padding:1px 5px; background:#f1f5f9; color:#475569; border-radius:3px;">${i.badge}: ${i.title}</span>`).join(' ') +
+                        `</div>`;
+                }
+                if (cPlan.already_optimized_operations && cPlan.already_optimized_operations.length > 0) {
+                    catHtml += `<div><strong style="color:#059669;">Already Optimized:</strong> ` +
+                        cPlan.already_optimized_operations.map(a => `<span style="display:inline-block; margin:1px 3px; padding:1px 5px; background:#ecfdf5; color:#065f46; border-radius:3px;">${a.badge}: ${a.title}</span>`).join(' ') +
+                        `</div>`;
+                }
+                if (catHtml) {
+                    catContainer.innerHTML = catHtml;
+                    catContainer.style.display = 'block';
+                } else {
+                    catContainer.style.display = 'none';
+                }
+            }
+
             // Update SQL Code preview display if already open
             const codeDisplay = document.getElementById('opt-sql-code-display');
             if (codeDisplay) codeDisplay.innerText = res.optimized_sql;
@@ -532,6 +563,36 @@ function renderExecutionPlanDetails(executionPlans, cards = {}) {
             <div style="margin-bottom:3px;"><strong>Join Operators:</strong> ${optJoins}</div>
             <div><strong>Aggregation Operators:</strong> ${optAggs}</div>
         `;
+
+        const planCard = cards.execution_plan || {};
+        let catSection = '';
+        if (planCard.optimization_opportunities && planCard.optimization_opportunities.length > 0) {
+            catSection += `<div style="margin-top:6px; padding:4px 6px; background:#fef3c7; border-radius:4px; border:1px solid #fde68a;">
+                <strong style="color:#b45309;">Optimization Opportunities:</strong>
+                <ul style="margin:2px 0 2px 14px; padding:0;">${planCard.optimization_opportunities.map(o => `<li><strong>${o.badge}:</strong> ${o.title} — <em>${o.impact || o.message}</em></li>`).join('')}</ul>
+            </div>`;
+        }
+        if (planCard.performance_warnings && planCard.performance_warnings.length > 0) {
+            catSection += `<div style="margin-top:6px; padding:4px 6px; background:#fee2e2; border-radius:4px; border:1px solid #fecaca;">
+                <strong style="color:#b91c1c;">Performance Warnings:</strong>
+                <ul style="margin:2px 0 2px 14px; padding:0;">${planCard.performance_warnings.map(w => `<li><strong>${w.badge}:</strong> ${w.title} — <em>${w.message}</em></li>`).join('')}</ul>
+            </div>`;
+        }
+        if (planCard.informational_observations && planCard.informational_observations.length > 0) {
+            catSection += `<div style="margin-top:6px; padding:4px 6px; background:#f1f5f9; border-radius:4px; border:1px solid #e2e8f0;">
+                <strong style="color:#475569;">Informational Observations:</strong>
+                <ul style="margin:2px 0 2px 14px; padding:0;">${planCard.informational_observations.map(i => `<li><strong>${i.badge}:</strong> ${i.title} — <em>${i.message}</em></li>`).join('')}</ul>
+            </div>`;
+        }
+        if (planCard.already_optimized_operations && planCard.already_optimized_operations.length > 0) {
+            catSection += `<div style="margin-top:6px; padding:4px 6px; background:#ecfdf5; border-radius:4px; border:1px solid #a7f3d0;">
+                <strong style="color:#065f46;">Already Optimized:</strong>
+                <ul style="margin:2px 0 2px 14px; padding:0;">${planCard.already_optimized_operations.map(a => `<li><strong>${a.badge}:</strong> ${a.title} — <em>${a.message}</em></li>`).join('')}</ul>
+            </div>`;
+        }
+        if (catSection) {
+            optDetails.innerHTML += `<div style="margin-top:8px; border-top:1px dashed #bbf7d0; padding-top:6px;">${catSection}</div>`;
+        }
     }
 }
 
@@ -655,6 +716,14 @@ window.runOptimizationBenchmark = async () => {
             const mOptRows = document.getElementById('opt-matrix-opt-rows');
             const mEquivSummary = document.getElementById('opt-matrix-equiv-summary');
 
+            const mOrigMem = document.getElementById('opt-matrix-orig-mem');
+            const mOptMem = document.getElementById('opt-matrix-opt-mem');
+            const mActualMemSaved = document.getElementById('opt-matrix-actual-mem-saved');
+
+            const mOrigSpill = document.getElementById('opt-matrix-orig-spill');
+            const mOptSpill = document.getElementById('opt-matrix-opt-spill');
+            const mActualSpillSaved = document.getElementById('opt-matrix-actual-spill-saved');
+
             const predSummary = _currentOptimizationAnalysis?.summary?.predicted || {};
 
             if (mOrigScan) mOrigScan.innerText = res.original.scan_formatted;
@@ -671,6 +740,14 @@ window.runOptimizationBenchmark = async () => {
             if (mOptCost) mOptCost.innerText = res.optimized.cost_formatted;
             if (mActualCostSaved) mActualCostSaved.innerText = `-${res.savings.cost_reduction_pct}% (-${res.savings.cost_saved_formatted})`;
             if (mPredCost) mPredCost.innerText = `-$${Number(predSummary.cost_savings_usd || 0).toFixed(6)} USD`;
+
+            if (mOrigMem) mOrigMem.innerText = res.original.memory_formatted || '—';
+            if (mOptMem) mOptMem.innerText = res.optimized.memory_formatted || '—';
+            if (mActualMemSaved) mActualMemSaved.innerText = res.savings.memory_saved_formatted ? `-${res.savings.memory_reduction_pct}% (-${res.savings.memory_saved_formatted})` : 'Optimal';
+
+            if (mOrigSpill) mOrigSpill.innerText = res.original.temp_disk_formatted || '0 B';
+            if (mOptSpill) mOptSpill.innerText = res.optimized.temp_disk_formatted || '0 B';
+            if (mActualSpillSaved) mActualSpillSaved.innerText = res.savings.temp_disk_saved_formatted && res.savings.temp_disk_saved_bytes > 0 ? `-${res.savings.temp_disk_saved_formatted}` : '0 B (In-Memory)';
 
             if (mOrigFiles) mOrigFiles.innerText = `${res.original.files_scanned} of ${res.original.total_files} files`;
             if (mOptFiles) mOptFiles.innerText = `${res.optimized.files_scanned} of ${res.optimized.total_files} files`;

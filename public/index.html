@@ -794,9 +794,10 @@
                             <div style="font-size:0.7rem; color:#6b7280; margin-bottom:4px;">
                                 <strong>Pushdown:</strong> <span id="opt-plan-pushdown">Active</span>
                             </div>
-                            <div style="font-size:0.7rem; color:#4b5563;">
+                            <div style="font-size:0.7rem; color:#4b5563; margin-bottom:4px;">
                                 <strong>Joins:</strong> <span id="opt-plan-joins">Single table scan</span>
                             </div>
+                            <div id="opt-plan-categorized-container" style="margin-top:8px; display:none; border-top:1px dashed #e2e8f0; padding-top:6px;"></div>
                         </div>
                     </div>
 
@@ -902,6 +903,20 @@
                                         <td id="opt-matrix-opt-cost" style="padding:6px 10px; color:#10b981; font-weight:600;">—</td>
                                         <td id="opt-matrix-actual-cost-saved" style="padding:6px 10px; color:#10b981; font-weight:700;">—</td>
                                         <td id="opt-matrix-pred-cost" style="padding:6px 10px; color:#64748b;">—</td>
+                                    </tr>
+                                    <tr style="border-bottom:1px solid #f1f5f9;">
+                                        <td style="padding:6px 10px; font-weight:600; color:#1e293b;">Peak Memory</td>
+                                        <td id="opt-matrix-orig-mem" style="padding:6px 10px; color:#475569;">—</td>
+                                        <td id="opt-matrix-opt-mem" style="padding:6px 10px; color:#059669; font-weight:600;">—</td>
+                                        <td id="opt-matrix-actual-mem-saved" style="padding:6px 10px; color:#059669; font-weight:700;">—</td>
+                                        <td style="padding:6px 10px; color:#64748b;">Memory Profiler (RSS)</td>
+                                    </tr>
+                                    <tr style="border-bottom:1px solid #f1f5f9;">
+                                        <td style="padding:6px 10px; font-weight:600; color:#1e293b;">Temp Disk Spill</td>
+                                        <td id="opt-matrix-orig-spill" style="padding:6px 10px; color:#475569;">—</td>
+                                        <td id="opt-matrix-opt-spill" style="padding:6px 10px; color:#059669; font-weight:600;">—</td>
+                                        <td id="opt-matrix-actual-spill-saved" style="padding:6px 10px; color:#059669; font-weight:700;">—</td>
+                                        <td style="padding:6px 10px; color:#64748b;">Spill Directory (.duckdb_spill)</td>
                                     </tr>
                                     <tr style="border-bottom:1px solid #f1f5f9;">
                                         <td style="padding:6px 10px; font-weight:600; color:#1e293b;">Files Scanned</td>
