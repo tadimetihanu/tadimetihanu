@@ -1,7 +1,7 @@
 {
   "tenant_id": "default",
   "version": "v1.0.0",
-  "trained_at": "2026-11-12T13:57:26.771540",
+  "trained_at": "2026-11-13T02:48:30.058595",
   "metrics": {
     "sample_count": 150,
     "train_samples": 120,

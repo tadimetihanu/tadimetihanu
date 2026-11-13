@@ -1093,10 +1093,11 @@ app.post('/api/query-intelligence/analyze', authenticate, async (req, res) => {
     try {
         const { sql, targetId } = req.body;
         const tenantId = req.user.tenant_id || req.headers['x-tenant-id'] || 'default';
+        const userId = req.user.user_id;
         if (!sql || !sql.trim()) {
             return res.status(400).json({ error: 'SQL query text is required' });
         }
-        const analysis = await analyzeQueryIntelligence(sql, targetId, tenantId);
+        const analysis = await analyzeQueryIntelligence(sql, targetId, tenantId, userId);
         res.json(analysis);
     } catch (err) {
         console.error('[QI Analyze Error]', err.message);
@@ -1132,10 +1133,11 @@ app.post('/api/query-intelligence/optimize', authenticate, async (req, res) => {
     try {
         const { sql, targetId } = req.body;
         const tenantId = req.user.tenant_id || req.headers['x-tenant-id'] || 'default';
+        const userId = req.user.user_id;
         if (!sql || !sql.trim()) {
             return res.status(400).json({ error: 'SQL query text is required' });
         }
-        const analysis = await analyzeQueryIntelligence(sql, targetId, tenantId);
+        const analysis = await analyzeQueryIntelligence(sql, targetId, tenantId, userId);
         res.json({
             success: true,
             original_sql: sql,

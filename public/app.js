@@ -232,6 +232,7 @@ window.analyzeQueryOptimization = async () => {
     const editor = document.getElementById('query-editor');
     const sql = editor ? editor.value : '';
     const btn = document.getElementById('ai-optimize-btn');
+    const statusBadge = document.getElementById('opt-analysis-status-badge');
     if (!sql || !sql.trim()) {
         showToast('Please enter a SQL query to analyze optimization opportunities', 'warning');
         return;
@@ -241,6 +242,11 @@ window.analyzeQueryOptimization = async () => {
     if (btn) {
         btn.disabled = true;
         btn.innerText = '⚡ Analyzing...';
+    }
+    if (statusBadge) {
+        statusBadge.innerText = 'ANALYZING...';
+        statusBadge.style.background = '#e0e7ff';
+        statusBadge.style.color = '#3730a3';
     }
 
     try {
@@ -255,18 +261,56 @@ window.analyzeQueryOptimization = async () => {
             const panel = document.getElementById('ai-query-optimization-panel');
             if (panel) panel.style.display = 'block';
 
-            // Populate Summary
+            // 1. Status Badge Update
+            if (statusBadge && res.status_badge) {
+                statusBadge.innerText = res.status_badge.text;
+                if (res.status_badge.type === 'success') {
+                    statusBadge.style.background = '#dcfce7';
+                    statusBadge.style.color = '#15803d';
+                    statusBadge.style.borderColor = 'rgba(21,128,61,0.2)';
+                } else if (res.status_badge.type === 'warning') {
+                    statusBadge.style.background = '#fef3c7';
+                    statusBadge.style.color = '#b45309';
+                    statusBadge.style.borderColor = 'rgba(180,83,9,0.2)';
+                } else if (res.status_badge.type === 'error') {
+                    statusBadge.style.background = '#fee2e2';
+                    statusBadge.style.color = '#b91c1c';
+                    statusBadge.style.borderColor = 'rgba(185,28,28,0.2)';
+                } else {
+                    statusBadge.style.background = '#f1f5f9';
+                    statusBadge.style.color = '#475569';
+                    statusBadge.style.borderColor = 'rgba(71,85,105,0.2)';
+                }
+            }
+
+            // 2. Summary KPIs (Strict separation of Predicted vs Actual)
             const oppsEl = document.getElementById('opt-summary-opportunities');
+            const oppDescEl = document.getElementById('opt-kpi-opp-desc');
             const scanRedEl = document.getElementById('opt-summary-scan-reduction');
+            const actScanEl = document.getElementById('opt-kpi-actual-scan');
             const costSavEl = document.getElementById('opt-summary-cost-savings');
+            const actCostEl = document.getElementById('opt-kpi-actual-cost');
             const timeImpEl = document.getElementById('opt-summary-time-improvement');
+            const actTimeEl = document.getElementById('opt-kpi-actual-time');
+
+            const predScan = res.summary.predicted?.scan_reduction_pct ?? res.summary.potential_scan_reduction_pct;
+            const predCost = res.summary.predicted?.cost_savings_usd ?? res.summary.potential_cost_savings_usd;
+            const predTime = res.summary.predicted?.execution_time_improvement_pct ?? res.summary.potential_execution_time_improvement_pct;
 
             if (oppsEl) oppsEl.innerText = `${res.summary.total_opportunities} Detected`;
-            if (scanRedEl) scanRedEl.innerText = `${res.summary.potential_scan_reduction_pct}%`;
-            if (costSavEl) costSavEl.innerText = `$${res.summary.potential_cost_savings_usd.toFixed(6)} USD`;
-            if (timeImpEl) timeImpEl.innerText = `${res.summary.potential_execution_time_improvement_pct}%`;
+            if (oppDescEl) {
+                oppDescEl.innerText = res.summary.total_opportunities === 0 
+                    ? 'No bottlenecks found (Query is optimal)' 
+                    : `${res.summary.total_opportunities} actionable opportunities found`;
+            }
+            if (scanRedEl) scanRedEl.innerText = `${predScan}%`;
+            if (actScanEl) actScanEl.innerText = '— (Run Benchmark to verify)';
+            if (costSavEl) costSavEl.innerText = `$${predCost.toFixed(6)} USD`;
+            if (actCostEl) actCostEl.innerText = '— (Run Benchmark to verify)';
+            if (timeImpEl) timeImpEl.innerText = `${predTime}%`;
+            if (actTimeEl) actTimeEl.innerText = '— (Run Benchmark to verify)';
 
-            // Card 1: Projection
+            // 3. Card 1: Projection
             const cProj = res.cards.projection;
             const pBadge = document.getElementById('opt-proj-badge');
             const pMsg = document.getElementById('opt-proj-message');
@@ -274,7 +318,7 @@ window.analyzeQueryOptimization = async () => {
             const pSavings = document.getElementById('opt-proj-savings');
 
             if (pBadge) {
-                pBadge.innerText = cProj.detected ? 'SELECT * DETECTED' : 'EXPLICIT PROJECTION';
+                pBadge.innerText = cProj.badge_text || (cProj.detected ? 'SELECT * DETECTED' : 'OPTIMAL PROJECTION');
                 pBadge.style.background = cProj.detected ? 'rgba(245,158,11,0.12)' : 'rgba(16,185,129,0.12)';
                 pBadge.style.color = cProj.detected ? '#b45309' : '#059669';
             }
@@ -284,9 +328,9 @@ window.analyzeQueryOptimization = async () => {
                     ? cProj.unnecessary_columns.slice(0, 5).join(', ') + (cProj.unnecessary_columns.length > 5 ? '...' : '')
                     : 'None (Optimal)';
             }
-            if (pSavings) pSavings.innerText = `${cProj.estimated_scan_reduction_pct}% Scan Reduction`;
+            if (pSavings) pSavings.innerText = `${cProj.estimated_scan_reduction_pct}% Scan Savings`;
 
-            // Card 2: Partition
+            // 4. Card 2: Partition
             const cPart = res.cards.partition;
             const partBadge = document.getElementById('opt-part-badge');
             const partMsg = document.getElementById('opt-part-message');
@@ -294,9 +338,17 @@ window.analyzeQueryOptimization = async () => {
             const partPrune = document.getElementById('opt-part-file-prune');
 
             if (partBadge) {
-                partBadge.innerText = cPart.detected ? 'MISSING FILTER' : 'FILTER ACTIVE';
-                partBadge.style.background = cPart.detected ? 'rgba(239,68,68,0.12)' : 'rgba(16,185,129,0.12)';
-                partBadge.style.color = cPart.detected ? '#b91c1c' : '#059669';
+                partBadge.innerText = cPart.badge_text || (cPart.detected ? 'MISSING FILTER' : 'UNPARTITIONED');
+                if (cPart.status === 'FILTER_ACTIVE') {
+                    partBadge.style.background = 'rgba(16,185,129,0.12)';
+                    partBadge.style.color = '#059669';
+                } else if (cPart.status === 'MISSING_FILTER') {
+                    partBadge.style.background = 'rgba(239,68,68,0.12)';
+                    partBadge.style.color = '#b91c1c';
+                } else {
+                    partBadge.style.background = 'rgba(100,116,139,0.12)';
+                    partBadge.style.color = '#475569';
+                }
             }
             if (partMsg) partMsg.innerText = cPart.message;
             if (partCols) {
@@ -304,9 +356,13 @@ window.analyzeQueryOptimization = async () => {
                     ? cPart.available_partition_columns.join(', ')
                     : 'None';
             }
-            if (partPrune) partPrune.innerText = `${cPart.estimated_file_pruning_pct}% Partition File Skipping`;
+            if (partPrune) {
+                const elig = cPart.eligible_files || 1;
+                const skip = cPart.skipped_files || 0;
+                partPrune.innerText = `${cPart.estimated_file_pruning_pct}% Skipping (${elig} eligible, ${skip} skipped)`;
+            }
 
-            // Card 3: Storage Format
+            // 5. Card 3: Storage Format
             const cFmt = res.cards.storage_format;
             const fBadge = document.getElementById('opt-format-badge');
             const fMsg = document.getElementById('opt-format-message');
@@ -315,7 +371,7 @@ window.analyzeQueryOptimization = async () => {
             const fImpact = document.getElementById('opt-format-impact');
 
             if (fBadge) {
-                fBadge.innerText = cFmt.detected ? 'CONVERSION RECOMMENDED' : 'OPTIMAL FORMAT';
+                fBadge.innerText = cFmt.badge_text || (cFmt.detected ? 'CONVERSION RECOMMENDED' : 'OPTIMAL FORMAT');
                 fBadge.style.background = cFmt.detected ? 'rgba(245,158,11,0.12)' : 'rgba(16,185,129,0.12)';
                 fBadge.style.color = cFmt.detected ? '#b45309' : '#059669';
             }
@@ -324,7 +380,7 @@ window.analyzeQueryOptimization = async () => {
             if (fRec) fRec.innerText = cFmt.recommended_format;
             if (fImpact) fImpact.innerText = cFmt.estimated_query_speedup;
 
-            // Card 4: Execution Plan
+            // 6. Card 4: Execution Plan
             const cPlan = res.cards.execution_plan;
             const planBadge = document.getElementById('opt-plan-badge');
             const planMsg = document.getElementById('opt-plan-message');
@@ -332,26 +388,41 @@ window.analyzeQueryOptimization = async () => {
             const planJoins = document.getElementById('opt-plan-joins');
 
             if (planBadge) {
-                planBadge.innerText = cPlan.detected ? 'OPPORTUNITIES FOUND' : 'OPTIMAL PLAN';
+                planBadge.innerText = cPlan.badge_text || (cPlan.detected ? 'OPPORTUNITIES FOUND' : 'OPTIMAL PLAN');
+                planBadge.style.background = cPlan.detected ? 'rgba(245,158,11,0.12)' : 'rgba(16,185,129,0.12)';
+                planBadge.style.color = cPlan.detected ? '#b45309' : '#059669';
             }
             if (planMsg) {
                 planMsg.innerText = (cPlan.expensive_operators && cPlan.expensive_operators.length > 0)
                     ? cPlan.expensive_operators[0]
                     : 'Plan is vectorized and efficient.';
             }
-            if (planPush) planPush.innerText = cPlan.filter_pushdown_status;
-            if (planJoins) planJoins.innerText = cPlan.join_optimization_status;
+            if (planPush) planPush.innerText = cPlan.filter_pushdown_status || 'None';
+            if (planJoins) planJoins.innerText = cPlan.join_optimization_status || 'Single table scan';
 
             // Update SQL Code preview display if already open
             const codeDisplay = document.getElementById('opt-sql-code-display');
             if (codeDisplay) codeDisplay.innerText = res.optimized_sql;
 
+            // Render execution plan details in comparison container
+            renderExecutionPlanDetails(res.execution_plans, res.cards);
+
             showToast(`Optimization Analysis: ${res.summary.total_opportunities} opportunities found!`, 'info');
         } else {
             showToast(res?.error || 'Analysis failed', 'error');
+            if (statusBadge) {
+                statusBadge.innerText = 'ANALYSIS FAILED';
+                statusBadge.style.background = '#fee2e2';
+                statusBadge.style.color = '#b91c1c';
+            }
         }
     } catch (e) {
         showToast(`AI Optimization failed: ${e.message}`, 'error');
+        if (statusBadge) {
+            statusBadge.innerText = 'ANALYSIS FAILED';
+            statusBadge.style.background = '#fee2e2';
+            statusBadge.style.color = '#b91c1c';
+        }
     } finally {
         if (btn) {
             btn.disabled = false;
@@ -359,6 +430,49 @@ window.analyzeQueryOptimization = async () => {
         }
     }
 };
+
+function renderExecutionPlanDetails(executionPlans, cards = {}) {
+    if (!executionPlans) return;
+    const vBadge = document.getElementById('opt-plan-verification-badge');
+    const origDetails = document.getElementById('opt-plan-orig-details');
+    const optDetails = document.getElementById('opt-plan-opt-details');
+
+    const orig = executionPlans.original || {};
+    const opt = executionPlans.optimized || {};
+
+    if (vBadge) {
+        vBadge.innerText = executionPlans.is_verified ? 'VERIFIED EXPLAIN (DUCKDB)' : 'PREDICTED PLAN (AST)';
+        vBadge.style.background = executionPlans.is_verified ? '#e0f2fe' : '#f1f5f9';
+        vBadge.style.color = executionPlans.is_verified ? '#0369a1' : '#475569';
+    }
+
+    if (origDetails) {
+        const origOps = (orig.operators && orig.operators.length > 0) ? orig.operators.join(' ➔ ') : 'Seq Scan ➔ Projection';
+        const origProjs = Array.isArray(orig.projections) ? orig.projections.join(', ') : (orig.projections || 'All columns');
+        origDetails.innerHTML = `
+            <div style="margin-bottom:4px;"><strong>Physical Operators:</strong> ${origOps}</div>
+            <div style="margin-bottom:4px;"><strong>Projection Pushdown:</strong> ${orig.projection_pushdown_status || 'None'}</div>
+            <div style="margin-bottom:4px;"><strong>Projected Columns:</strong> ${origProjs}</div>
+            <div style="margin-bottom:4px;"><strong>Filter Pushdown:</strong> ${orig.filter_pushdown_status || 'None'}</div>
+            <div><strong>Scanned Source(s):</strong> ${(orig.tables && orig.tables.length > 0) ? orig.tables.join(', ') : 'Single table'}</div>
+        `;
+    }
+
+    if (optDetails) {
+        const optOps = (opt.operators && opt.operators.length > 0) ? opt.operators.join(' ➔ ') : 'Parquet Scan (Vectorized) ➔ Projection';
+        const optProjs = Array.isArray(opt.projections) ? opt.projections.join(', ') : (opt.projections || 'Explicit columns');
+        const projSavings = cards.projection?.estimated_scan_reduction_pct || 0;
+        const unnecCols = cards.projection?.unnecessary_columns || [];
+        optDetails.innerHTML = `
+            <div style="margin-bottom:4px;"><strong>Physical Operators:</strong> ${optOps}</div>
+            <div style="margin-bottom:4px;"><strong>Projection Pushdown:</strong> ${opt.projection_pushdown_status || 'Active'} (-${projSavings}% scan)</div>
+            <div style="margin-bottom:4px;"><strong>Projected Columns:</strong> ${optProjs}</div>
+            <div style="margin-bottom:4px;"><strong>Pruned Columns:</strong> ${unnecCols.length > 0 ? unnecCols.join(', ') : 'None (Optimal)'}</div>
+            <div style="margin-bottom:4px;"><strong>Filter Pushdown:</strong> ${opt.filter_pushdown_status || 'Active'}</div>
+            <div><strong>Execution Engine:</strong> Direct DuckDB SIMD column-vector stream</div>
+        `;
+    }
+}
 
 window.toggleShowOptimizedSql = () => {
     const box = document.getElementById('opt-sql-preview-box');
@@ -394,28 +508,7 @@ window.toggleComparePlans = () => {
     const isHidden = box.style.display === 'none';
     if (isHidden) {
         if (_currentOptimizationAnalysis) {
-            const cards = _currentOptimizationAnalysis.cards || {};
-            const origDetails = document.getElementById('opt-plan-orig-details');
-            const optDetails = document.getElementById('opt-plan-opt-details');
-
-            if (origDetails) {
-                const issues = cards.execution_plan?.expensive_operators || [];
-                origDetails.innerHTML = `
-                    <div style="margin-bottom:4px;"><strong>Physical Scan:</strong> Full-width SeqScan (All columns read)</div>
-                    <div style="margin-bottom:4px;"><strong>Column Decoding:</strong> Decodes all chunks off storage</div>
-                    <div><strong>Operators:</strong> ${issues.length > 0 ? issues.join(' • ') : 'SeqScan ➔ Full Column Decode'}</div>
-                `;
-            }
-
-            if (optDetails) {
-                const projSavings = cards.projection?.estimated_scan_reduction_pct || 0;
-                const prunedCols = cards.projection?.unnecessary_columns || [];
-                optDetails.innerHTML = `
-                    <div style="margin-bottom:4px;"><strong>Projection Pushdown:</strong> Vectorized column pruning active</div>
-                    <div style="margin-bottom:4px;"><strong>Pruned Columns:</strong> ${prunedCols.length > 0 ? prunedCols.join(', ') : 'Unneeded columns skipped'} (-${projSavings}% scan)</div>
-                    <div><strong>Execution Pipeline:</strong> Direct column chunk projection ➔ DuckDB SIMD stream</div>
-                `;
-            }
+            renderExecutionPlanDetails(_currentOptimizationAnalysis.execution_plans, _currentOptimizationAnalysis.cards);
         }
         box.style.display = 'block';
         box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -463,6 +556,20 @@ window.runOptimizationBenchmark = async () => {
             if (scanPctEl) scanPctEl.innerText = `-${res.savings.scan_reduction_pct}%`;
             if (timeSavedEl) timeSavedEl.innerText = `${res.savings.time_saved_ms} ms (${res.savings.time_reduction_pct}%)`;
             if (costPctEl) costPctEl.innerText = `-${res.savings.cost_reduction_pct}% ($${res.savings.cost_saved_usd})`;
+
+            // Update Summary Card ACTUAL values (Clearly distinguishing Predicted from Actual)
+            const actScanEl = document.getElementById('opt-kpi-actual-scan');
+            const actCostEl = document.getElementById('opt-kpi-actual-cost');
+            const actTimeEl = document.getElementById('opt-kpi-actual-time');
+
+            if (actScanEl) actScanEl.innerText = `-${res.savings.scan_reduction_pct}% (-${res.savings.scan_saved_formatted})`;
+            if (actCostEl) actCostEl.innerText = `-$${res.savings.cost_saved_usd} (-${res.savings.cost_reduction_pct}%)`;
+            if (actTimeEl) actTimeEl.innerText = `${res.savings.time_saved_ms} ms (-${res.savings.time_reduction_pct}%)`;
+
+            // If benchmark verified execution plans, re-render plan comparison
+            if (res.execution_plans) {
+                renderExecutionPlanDetails(res.execution_plans, _currentOptimizationAnalysis.cards);
+            }
 
             showToast(`🏁 Benchmark Completed: -${res.savings.scan_reduction_pct}% Scan Reduction!`, 'success');
         } else {
