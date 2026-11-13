@@ -74,3 +74,4 @@ def linear_weighted_fusion(
     results = list(combined.values())
     results.sort(key=lambda x: x["score"], reverse=True)
     return results
+

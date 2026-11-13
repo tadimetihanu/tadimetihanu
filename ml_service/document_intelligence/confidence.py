@@ -36,3 +36,4 @@ def calculate_entropy_confidence(probabilities: List[float]) -> float:
 
     confidence = (1.0 - norm_entropy) * 100.0
     return round(max(10.0, min(99.9, confidence)), 2)
+

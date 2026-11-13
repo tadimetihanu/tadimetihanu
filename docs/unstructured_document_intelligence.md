@@ -119,3 +119,4 @@ All endpoints enforce mandatory authentication via header: `X-API-Key: <ML_SERVI
   - Memory: `2Gi` request, `6Gi` limit.
   - Model weight caching volume mounted at `/app/cache`.
   - Readiness probe hooked to `/api/ml/document/health`.
+

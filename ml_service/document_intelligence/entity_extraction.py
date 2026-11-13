@@ -306,3 +306,4 @@ class EntityExtractionEngine:
             client.index_entities(entities)
         except Exception:
             pass
+

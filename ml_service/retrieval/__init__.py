@@ -9,3 +9,4 @@ __all__ = [
     "reciprocal_rank_fusion", "linear_weighted_fusion",
     "get_hybrid_coordinator", "HybridRetrievalCoordinator"
 ]
+

@@ -102,3 +102,4 @@ def get_opensearch_client() -> OpenSearchRetrievalClient:
     if _opensearch_instance is None:
         _opensearch_instance = OpenSearchRetrievalClient()
     return _opensearch_instance
+

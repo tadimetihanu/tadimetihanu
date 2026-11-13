@@ -165,3 +165,4 @@ class DocumentSummarizer:
             findings = [summary_paragraphs[0]] if summary_paragraphs else ["General documentation context overview."]
 
         return summary_text, findings
+

@@ -139,3 +139,4 @@ class CrossEncoderReranker:
             scores.append(round(min(0.99, max(0.05, score)), 4))
 
         return scores
+

@@ -7,3 +7,4 @@ __all__ = [
     "get_model_registry", "ModelRegistry",
     "evaluate_classification", "evaluate_ner", "evaluate_reranking", "evaluate_anomaly_detection"
 ]
+

@@ -49,3 +49,4 @@ def get_hybrid_coordinator() -> HybridRetrievalCoordinator:
     if _coordinator is None:
         _coordinator = HybridRetrievalCoordinator()
     return _coordinator
+

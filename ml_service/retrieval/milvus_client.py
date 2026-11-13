@@ -107,3 +107,4 @@ def get_milvus_client() -> MilvusRetrievalClient:
     if _milvus_instance is None:
         _milvus_instance = MilvusRetrievalClient()
     return _milvus_instance
+

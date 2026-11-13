@@ -23,3 +23,4 @@ class DocumentCitation(BaseModel):
     page_number: Optional[int] = 1
     snippet: Optional[str] = None
     similarity_score: Optional[float] = None
+
