@@ -258,6 +258,58 @@ CREATE TABLE IF NOT EXISTS ml_prediction_history (
     model_version TEXT DEFAULT 'v1.0.0',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS document_classifications (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    document_id TEXT NOT NULL,
+    predicted_category TEXT NOT NULL,
+    confidence_score REAL DEFAULT 0.0,
+    is_corrected INTEGER DEFAULT 0,
+    corrected_category TEXT,
+    model_name TEXT,
+    model_version TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS extracted_entities (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    document_id TEXT NOT NULL,
+    chunk_id TEXT,
+    page_number INTEGER DEFAULT 1,
+    entity_type TEXT NOT NULL,
+    entity_value TEXT NOT NULL,
+    confidence_score REAL DEFAULT 0.0,
+    start_char INTEGER,
+    end_char INTEGER,
+    model_name TEXT,
+    model_version TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS document_anomalies (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    document_id TEXT NOT NULL,
+    anomaly_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    confidence_score REAL DEFAULT 0.0,
+    explanation TEXT,
+    indicator_payload TEXT,
+    model_version TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS document_clusters (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    cluster_id INTEGER NOT NULL,
+    document_id TEXT NOT NULL,
+    similarity_score REAL DEFAULT 0.0,
+    model_version TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 `;
 
 const POSTGRES_SCHEMA = `
@@ -520,6 +572,63 @@ CREATE TABLE IF NOT EXISTS ml_prediction_history (
     model_version VARCHAR(64) DEFAULT 'v1.0.0',
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS document_classifications (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
+    document_id VARCHAR(255) NOT NULL,
+    predicted_category VARCHAR(128) NOT NULL,
+    confidence_score NUMERIC(5, 2) DEFAULT 0.0,
+    is_corrected INTEGER DEFAULT 0,
+    corrected_category VARCHAR(128),
+    model_name VARCHAR(128),
+    model_version VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS extracted_entities (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
+    document_id VARCHAR(255) NOT NULL,
+    chunk_id VARCHAR(255),
+    page_number INTEGER DEFAULT 1,
+    entity_type VARCHAR(128) NOT NULL,
+    entity_value TEXT NOT NULL,
+    confidence_score NUMERIC(5, 2) DEFAULT 0.0,
+    start_char INTEGER,
+    end_char INTEGER,
+    model_name VARCHAR(128),
+    model_version VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS document_anomalies (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
+    document_id VARCHAR(255) NOT NULL,
+    anomaly_type VARCHAR(128) NOT NULL,
+    severity VARCHAR(32) NOT NULL,
+    confidence_score NUMERIC(5, 2) DEFAULT 0.0,
+    explanation TEXT,
+    indicator_payload TEXT,
+    model_version VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS document_clusters (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
+    cluster_id INTEGER NOT NULL,
+    document_id VARCHAR(255) NOT NULL,
+    similarity_score NUMERIC(5, 4) DEFAULT 0.0,
+    model_version VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_doc_class_tenant ON document_classifications(tenant_id, document_id);
+CREATE INDEX IF NOT EXISTS idx_extracted_ent_tenant ON extracted_entities(tenant_id, document_id, entity_type);
+CREATE INDEX IF NOT EXISTS idx_doc_anom_tenant ON document_anomalies(tenant_id, document_id);
+CREATE INDEX IF NOT EXISTS idx_doc_clust_tenant ON document_clusters(tenant_id, cluster_id);
 
 CREATE INDEX IF NOT EXISTS idx_query_opt_runs_tenant ON query_optimization_runs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_ml_pred_hist_tenant ON ml_prediction_history(tenant_id);

@@ -17,7 +17,64 @@ def get_db_connection():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    _ensure_tables(conn)
     return conn
+
+def _ensure_tables(conn):
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS document_classifications (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT 'default',
+                document_id TEXT NOT NULL,
+                predicted_category TEXT NOT NULL,
+                confidence_score REAL DEFAULT 0.0,
+                is_corrected INTEGER DEFAULT 0,
+                corrected_category TEXT,
+                model_name TEXT,
+                model_version TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS extracted_entities (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT 'default',
+                document_id TEXT NOT NULL,
+                chunk_id TEXT,
+                page_number INTEGER DEFAULT 1,
+                entity_type TEXT NOT NULL,
+                entity_value TEXT NOT NULL,
+                confidence_score REAL DEFAULT 0.0,
+                start_char INTEGER,
+                end_char INTEGER,
+                model_name TEXT,
+                model_version TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS document_anomalies (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT 'default',
+                document_id TEXT NOT NULL,
+                anomaly_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                confidence_score REAL DEFAULT 0.0,
+                explanation TEXT,
+                indicator_payload TEXT,
+                model_version TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS document_clusters (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT 'default',
+                cluster_id INTEGER NOT NULL,
+                document_id TEXT NOT NULL,
+                similarity_score REAL DEFAULT 0.0,
+                model_version TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        conn.commit()
+    except Exception:
+        pass
 
 def generate_synthetic_seed_telemetry(tenant_id: str = "default", sample_count: int = 120) -> pd.DataFrame:
     """

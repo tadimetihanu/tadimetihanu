@@ -1,22 +1,22 @@
 {
   "tenant_id": "default",
   "version": "v1.0.0",
-  "trained_at": "2026-11-13T02:48:30.058595",
+  "trained_at": "2026-11-13T17:03:26.822198",
   "metrics": {
-    "sample_count": 150,
-    "train_samples": 120,
-    "test_samples": 30,
-    "scan_r2": 0.5915458585060271,
-    "scan_mae_bytes": 77484290.01666667,
-    "time_r2": 0.0,
-    "time_mae_ms": 317.40083532333375,
-    "cost_r2": 0.0,
-    "cost_mae_usd": 0.0005317737561526088,
+    "sample_count": 20,
+    "train_samples": 16,
+    "test_samples": 4,
+    "scan_r2": 0.9864231909415562,
+    "scan_mae_bytes": 10505115.625,
+    "time_r2": 0.9030320183342875,
+    "time_mae_ms": 210.02674388885498,
+    "cost_r2": 0.7140839312219218,
+    "cost_mae_usd": 0.00026339662372265593,
     "algorithm": "XGBoost Regressor (Trained via Scikit-Learn Pipeline)"
   },
   "residual_std": {
-    "scan": 188609092.6972146,
-    "time": 682.8264855063547,
-    "cost": 0.0010168305754963238
+    "scan": 15806487.224245356,
+    "time": 99.29072726621052,
+    "cost": 0.0003639988778855522
   }
 }

@@ -16,16 +16,16 @@ spec:
     spec:
       containers:
       - name: ml-service
-        image: ciqacr4781.azurecr.io/cloudobjectiq-ml:v1
+        image: ciqacr4781.azurecr.io/cloudobjectiq-ml:v2
         ports:
         - containerPort: 8000
         resources:
           requests:
-            cpu: "500m"
-            memory: "1Gi"
+            cpu: "1000m"
+            memory: "2Gi"
           limits:
-            cpu: "2000m"
-            memory: "3Gi"
+            cpu: "4000m"
+            memory: "6Gi"
         env:
         - name: ML_SERVICE_API_KEY
           valueFrom:
@@ -39,18 +39,41 @@ spec:
               name: cloudobjectiq-secrets
               key: database-url
               optional: true
+        - name: HF_HOME
+          value: "/app/cache/huggingface"
+        - name: TORCH_HOME
+          value: "/app/cache/torch"
+        - name: OPENSEARCH_URL
+          valueFrom:
+            configMapKeyRef:
+              name: cloudobjectiq-config
+              key: opensearch-url
+              optional: true
+        - name: MILVUS_URI
+          valueFrom:
+            configMapKeyRef:
+              name: cloudobjectiq-config
+              key: milvus-uri
+              optional: true
+        volumeMounts:
+        - name: model-cache-volume
+          mountPath: /app/cache
         livenessProbe:
           httpGet:
             path: /api/ml/health
             port: 8000
-          initialDelaySeconds: 15
+          initialDelaySeconds: 20
           periodSeconds: 20
         readinessProbe:
           httpGet:
-            path: /api/ml/health
+            path: /api/ml/document/health
             port: 8000
-          initialDelaySeconds: 5
+          initialDelaySeconds: 10
           periodSeconds: 10
+      volumes:
+      - name: model-cache-volume
+        emptyDir:
+          sizeLimit: 10Gi
 ---
 apiVersion: v1
 kind: Service
@@ -84,4 +107,9 @@ spec:
       target:
         type: Utilization
         averageUtilization: 70
-
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80

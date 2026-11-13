@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Pre-create cache directories
+RUN mkdir -p /app/cache/huggingface /app/cache/torch
+
 COPY ml_service/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -18,6 +21,7 @@ EXPOSE 8000
 
 ENV PYTHONUNBUFFERED=1
 ENV ML_SERVICE_API_KEY="cloudobjectiq_ml_internal_key_2026"
+ENV HF_HOME="/app/cache/huggingface"
+ENV TORCH_HOME="/app/cache/torch"
 
 CMD ["uvicorn", "ml_service.app:app", "--host", "0.0.0.0", "--port", "8000"]
-
