@@ -63,6 +63,7 @@
                 <button class="ghost-btn" onclick="showAdminTab('spark')">Spark Jobs</button>
                 <button class="ghost-btn" onclick="showAdminTab('analytics')">Log Analytics</button>
                 <button class="ghost-btn" onclick="showAdminTab('rag')">RAG Engine</button>
+                <button class="ghost-btn" onclick="window.openDocumentIntelligenceModal()" style="color:#4338ca; font-weight:700;">🧠 Document ML</button>
             </div>
 
             <div id="admin-content">
@@ -261,7 +262,9 @@
             <h1>CloudObject<span style="font-weight: 300; opacity: 0.7;">IQ</span></h1>
         </div>
         <div class="header-right" style="display: flex; gap: 15px; align-items: center;">
-            
+            <button class="btn btn-secondary" onclick="window.openDocumentIntelligenceModal()" id="doc-ml-nav-btn" style="display:inline-flex; align-items:center; gap:6px; font-weight:700; color:#4338ca; border:1px solid #c7d2fe; background:#eef2ff; padding:6px 14px; border-radius:8px; cursor:pointer;" title="Unstructured Document Intelligence & Test Cases">
+                <span style="font-size:1.05rem;">🧠</span> Document ML
+            </button>
             <span id="admin-btn-container"></span>
             <div id="user-profile" style="font-size: 0.8rem; color: var(--text-muted); cursor:pointer; text-decoration:underline;" onclick="openProfile()"></div>
             <button class="settings-btn" onclick="openSettings()" title="Connections & Settings">⚙️</button>
@@ -1591,6 +1594,226 @@
         </div>
     </div>
 
-    <script src="app.js?v=21"></script>
+    <!-- ── Document ML Intelligence Center & Verification Modal ── -->
+    <div class="modal-overlay" id="doc-intelligence-modal" onclick="if(event.target.id==='doc-intelligence-modal') window.closeDocumentIntelligenceModal()" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:9999; backdrop-filter:blur(4px); align-items:center; justify-content:center;">
+        <div class="modal" style="width:1050px; max-width:95vw; max-height:90vh; background:#ffffff; border-radius:16px; box-shadow:0 25px 50px -12px rgba(0,0,0,0.25); display:flex; flex-direction:column; overflow:hidden; border:1px solid #e2e8f0; font-family:'Outfit', sans-serif;">
+            
+            <!-- Modal Header -->
+            <div style="background:linear-gradient(135deg, #1e1b4b, #312e81, #4338ca); padding:20px 28px; color:white; display:flex; justify-content:space-between; align-items:center;">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <span style="font-size:1.8rem; background:rgba(255,255,255,0.15); width:46px; height:46px; display:flex; align-items:center; justify-content:center; border-radius:12px;">🧠</span>
+                    <div>
+                        <h2 style="margin:0; font-size:1.25rem; font-weight:700; letter-spacing:-0.02em;">Document ML Intelligence Center</h2>
+                        <p style="margin:3px 0 0 0; font-size:0.78rem; color:#c7d2fe;">Enterprise Unstructured Document Machine Learning, Verification Suite & Multi-Task Playgrounds</p>
+                    </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <span id="doc-ml-status-pill" style="font-size:0.72rem; font-weight:700; background:rgba(16,185,129,0.2); color:#a7f3d0; border:1px solid rgba(16,185,129,0.4); padding:4px 10px; border-radius:20px;">
+                        🟢 Online (CPU/GPU Ready)
+                    </span>
+                    <button onclick="window.closeDocumentIntelligenceModal()" style="background:none; border:none; color:white; font-size:1.4rem; cursor:pointer; line-height:1; opacity:0.8; transition:opacity 0.2s;">✕</button>
+                </div>
+            </div>
+
+            <!-- Modal Body Scrollable -->
+            <div style="padding:22px 28px; overflow-y:auto; flex:1; display:flex; flex-direction:column; gap:20px; background:#f8fafc;">
+                
+                <!-- 🧪 Section 1: Automated Verification Suite (27 Test Cases) -->
+                <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; padding:20px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                        <div>
+                            <span style="font-size:0.72rem; font-weight:800; text-transform:uppercase; color:#4338ca; letter-spacing:0.05em;">Live Verification & Test Cases</span>
+                            <h3 style="margin:3px 0 0 0; font-size:1.05rem; font-weight:700; color:#0f172a;">Automated Document ML Verification Suite (27 Test Cases)</h3>
+                        </div>
+                        <button id="btn-run-doc-tests" class="btn btn-primary" onclick="window.runDocumentMlSuiteLive()" style="background:#4338ca; border-color:#4338ca; color:white; font-weight:700; padding:8px 18px; border-radius:8px; display:flex; align-items:center; gap:8px; cursor:pointer;">
+                            <span>🧪</span> Run Live Verification Suite
+                        </button>
+                    </div>
+
+                    <!-- Progress / Status Bar -->
+                    <div id="doc-test-summary-bar" style="display:none; background:#f1f5f9; border-radius:10px; padding:12px 16px; margin-bottom:14px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                            <span id="doc-test-overall-badge" style="font-size:0.85rem; font-weight:800; color:#15803d;">✅ ALL 27 TESTS PASSED</span>
+                            <span id="doc-test-runtime" style="font-size:0.75rem; color:#64748b; font-weight:600;">Duration: 0.94s</span>
+                        </div>
+                        <div style="display:flex; gap:16px; font-size:0.78rem;">
+                            <span>Total Test Cases: <b id="doc-test-total">27</b></span>
+                            <span style="color:#15803d;">Passed: <b id="doc-test-passed">27</b></span>
+                            <span style="color:#dc2626;">Failed: <b id="doc-test-failed">0</b></span>
+                            <span style="color:#4338ca;">Success Rate: <b id="doc-test-rate">100%</b></span>
+                        </div>
+                    </div>
+
+                    <!-- Test Cases Table -->
+                    <div id="doc-test-table-container" style="display:none; max-height:240px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:8px;">
+                        <table style="width:100%; border-collapse:collapse; font-size:0.75rem; text-align:left;">
+                            <thead style="background:#f8fafc; color:#64748b; text-transform:uppercase; font-size:0.68rem; position:sticky; top:0;">
+                                <tr>
+                                    <th style="padding:8px 12px; border-bottom:1px solid #e2e8f0;">ID</th>
+                                    <th style="padding:8px 12px; border-bottom:1px solid #e2e8f0;">Suite</th>
+                                    <th style="padding:8px 12px; border-bottom:1px solid #e2e8f0;">Test Case Name</th>
+                                    <th style="padding:8px 12px; border-bottom:1px solid #e2e8f0;">Capability</th>
+                                    <th style="padding:8px 12px; border-bottom:1px solid #e2e8f0;">Latency</th>
+                                    <th style="padding:8px 12px; border-bottom:1px solid #e2e8f0; text-align:right;">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="doc-test-tbody">
+                                <!-- Populated dynamically by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 🕹️ Section 2: Interactive ML Feature Playgrounds -->
+                <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; padding:20px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                        <div>
+                            <span style="font-size:0.72rem; font-weight:800; text-transform:uppercase; color:#059669; letter-spacing:0.05em;">Interactive Feature Testing</span>
+                            <h3 style="margin:3px 0 0 0; font-size:1.05rem; font-weight:700; color:#0f172a;">Multi-Task Document Intelligence Playgrounds</h3>
+                        </div>
+                    </div>
+
+                    <!-- Tabs Navigation -->
+                    <div style="display:flex; gap:8px; border-bottom:1px solid #e2e8f0; padding-bottom:8px; margin-bottom:18px; overflow-x:auto;">
+                        <button class="doc-ml-tab-btn active" onclick="window.switchDocMlTab('classification')" id="tab-btn-doc-classification" style="padding:6px 12px; border-radius:6px; font-size:0.75rem; font-weight:700; border:1px solid #e2e8f0; cursor:pointer;">📑 Classification</button>
+                        <button class="doc-ml-tab-btn" onclick="window.switchDocMlTab('ner')" id="tab-btn-doc-ner" style="padding:6px 12px; border-radius:6px; font-size:0.75rem; font-weight:700; border:1px solid #e2e8f0; cursor:pointer;">🔍 Named Entities</button>
+                        <button class="doc-ml-tab-btn" onclick="window.switchDocMlTab('rerank')" id="tab-btn-doc-rerank" style="padding:6px 12px; border-radius:6px; font-size:0.75rem; font-weight:700; border:1px solid #e2e8f0; cursor:pointer;">⚡ Hybrid Reranker</button>
+                        <button class="doc-ml-tab-btn" onclick="window.switchDocMlTab('similarity')" id="tab-btn-doc-similarity" style="padding:6px 12px; border-radius:6px; font-size:0.75rem; font-weight:700; border:1px solid #e2e8f0; cursor:pointer;">👥 Similarity & Duplicates</button>
+                        <button class="doc-ml-tab-btn" onclick="window.switchDocMlTab('anomalies')" id="tab-btn-doc-anomalies" style="padding:6px 12px; border-radius:6px; font-size:0.75rem; font-weight:700; border:1px solid #e2e8f0; cursor:pointer;">🚨 Financial Anomalies</button>
+                        <button class="doc-ml-tab-btn" onclick="window.switchDocMlTab('summarize')" id="tab-btn-doc-summarize" style="padding:6px 12px; border-radius:6px; font-size:0.75rem; font-weight:700; border:1px solid #e2e8f0; cursor:pointer;">📝 Summarization</button>
+                        <button class="doc-ml-tab-btn" onclick="window.switchDocMlTab('models')" id="tab-btn-doc-models" style="padding:6px 12px; border-radius:6px; font-size:0.75rem; font-weight:700; border:1px solid #e2e8f0; cursor:pointer;">⚙️ Model Governance</button>
+                    </div>
+
+                    <!-- Tab 1: Classification -->
+                    <div id="doc-ml-tab-classification" class="doc-ml-tab-content">
+                        <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
+                            <span style="font-size:0.75rem; font-weight:700; color:#64748b;">Preset Samples:</span>
+                            <button class="btn btn-secondary" onclick="window.loadDocSample('invoice')" style="font-size:0.72rem; padding:3px 8px;">Vendor Invoice</button>
+                            <button class="btn btn-secondary" onclick="window.loadDocSample('contract')" style="font-size:0.72rem; padding:3px 8px;">Master Agreement (NDA)</button>
+                            <button class="btn btn-secondary" onclick="window.loadDocSample('financial')" style="font-size:0.72rem; padding:3px 8px;">Earnings Report (10-K)</button>
+                            <button class="btn btn-secondary" onclick="window.loadDocSample('tech')" style="font-size:0.72rem; padding:3px 8px;">Kubernetes Spec</button>
+                            <button class="btn btn-secondary" onclick="window.loadDocSample('custom_shipping')" style="font-size:0.72rem; padding:3px 8px;">Shipping Manifest</button>
+                        </div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                            <div>
+                                <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Document Text Content</label>
+                                <textarea id="doc-classify-input" rows="7" style="width:100%; border:1px solid #cbd5e1; border-radius:8px; padding:10px; font-size:0.78rem; font-family:monospace; resize:vertical;"></textarea>
+                                <div style="display:flex; gap:10px; margin-top:8px;">
+                                    <input type="text" id="doc-classify-custom" placeholder="Optional custom categories (e.g. Shipping Manifest, Medical Records)" style="flex:1; border:1px solid #cbd5e1; border-radius:6px; padding:6px 10px; font-size:0.75rem;">
+                                    <button class="btn btn-primary" onclick="window.runLiveClassification()" style="background:#4338ca; border-color:#4338ca; color:white; font-size:0.75rem; padding:6px 16px; border-radius:6px; font-weight:700;">Classify</button>
+                                </div>
+                            </div>
+                            <div id="doc-classify-result" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:14px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center;">
+                                <span style="font-size:0.8rem; color:#94a3b8;">Click "Classify" or choose a preset sample to view live inference.</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 2: Named Entity Recognition -->
+                    <div id="doc-ml-tab-ner" class="doc-ml-tab-content" style="display:none;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                            <span style="font-size:0.75rem; font-weight:700; color:#64748b;">Target Document Text:</span>
+                            <button class="btn btn-primary" onclick="window.runLiveNer()" style="background:#059669; border-color:#059669; color:white; font-size:0.75rem; padding:6px 16px; border-radius:6px; font-weight:700;">Extract Entities</button>
+                        </div>
+                        <textarea id="doc-ner-input" rows="5" style="width:100%; border:1px solid #cbd5e1; border-radius:8px; padding:10px; font-size:0.78rem; font-family:monospace; margin-bottom:12px;">INVOICE #INV-88392
+Contract No: CTR-55102
+Date: October 14, 2026
+Prepared by: Johnathan Davis
+Company: Apex Technologies Inc
+Bill To: Quantum Solutions LLC
+Total Amount: $78,500.00
+Email: accounts@apextech.com
+Tax ID: 12-3456789</textarea>
+                        <div id="doc-ner-results" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px; min-height:80px;">
+                            <span style="font-size:0.78rem; color:#94a3b8;">Entities will be categorized and highlighted here.</span>
+                        </div>
+                    </div>
+
+                    <!-- Tab 3: Reranker -->
+                    <div id="doc-ml-tab-rerank" class="doc-ml-tab-content" style="display:none;">
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Search Query</label>
+                            <div style="display:flex; gap:10px;">
+                                <input type="text" id="doc-rerank-query" value="vectorized SQL query optimizer with columnar pruning in DuckDB" style="flex:1; border:1px solid #cbd5e1; border-radius:6px; padding:6px 10px; font-size:0.78rem;">
+                                <button class="btn btn-primary" onclick="window.runLiveRerank()" style="background:#2563eb; border-color:#2563eb; color:white; font-size:0.75rem; padding:6px 16px; border-radius:6px; font-weight:700;">Cross-Encoder Rerank</button>
+                            </div>
+                        </div>
+                        <div id="doc-rerank-results" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px;">
+                            <span style="font-size:0.78rem; color:#94a3b8;">Click "Cross-Encoder Rerank" to evaluate candidate reordering.</span>
+                        </div>
+                    </div>
+
+                    <!-- Tab 4: Similarity -->
+                    <div id="doc-ml-tab-similarity" class="doc-ml-tab-content" style="display:none;">
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:10px;">
+                            <div>
+                                <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Reference Document</label>
+                                <textarea id="doc-sim-ref" rows="4" style="width:100%; border:1px solid #cbd5e1; border-radius:8px; padding:8px; font-size:0.78rem;">Standard non-disclosure agreement entered into by and between Acme Corp and Beta LLC on 2026-01-01 with confidentiality obligations.</textarea>
+                            </div>
+                            <div>
+                                <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Candidate Document (Near-Duplicate)</label>
+                                <textarea id="doc-sim-cand" rows="4" style="width:100%; border:1px solid #cbd5e1; border-radius:8px; padding:8px; font-size:0.78rem;">Standard non-disclosure agreement entered into by and between Acme Corp and Beta LLC on 2026-01-02 with confidentiality obligations.</textarea>
+                            </div>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                            <button class="btn btn-primary" onclick="window.runLiveSimilarity()" style="background:#7c3aed; border-color:#7c3aed; color:white; font-size:0.75rem; padding:6px 16px; border-radius:6px; font-weight:700;">Analyze Similarity & Duplicates</button>
+                        </div>
+                        <div id="doc-sim-results" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px;">
+                            <span style="font-size:0.78rem; color:#94a3b8;">SHA-256 exact match and MinHash near-duplicate results will render here.</span>
+                        </div>
+                    </div>
+
+                    <!-- Tab 5: Anomalies -->
+                    <div id="doc-ml-tab-anomalies" class="doc-ml-tab-content" style="display:none;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                            <span style="font-size:0.75rem; font-weight:700; color:#64748b;">Preset Financial Invoices Batch:</span>
+                            <button class="btn btn-primary" onclick="window.runLiveAnomalies()" style="background:#dc2626; border-color:#dc2626; color:white; font-size:0.75rem; padding:6px 16px; border-radius:6px; font-weight:700;">Detect Financial Anomalies</button>
+                        </div>
+                        <div id="doc-anomalies-results" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px;">
+                            <span style="font-size:0.78rem; color:#94a3b8;">Click "Detect Financial Anomalies" to evaluate Isolation Forest and statistical checks.</span>
+                        </div>
+                    </div>
+
+                    <!-- Tab 6: Summarization -->
+                    <div id="doc-ml-tab-summarize" class="doc-ml-tab-content" style="display:none;">
+                        <div style="display:flex; gap:10px; margin-bottom:8px; align-items:center;">
+                            <select id="doc-summarize-type" style="border:1px solid #cbd5e1; border-radius:6px; padding:6px 10px; font-size:0.75rem;">
+                                <option value="executive">Executive Summary</option>
+                                <option value="key_findings">Key Findings Extraction</option>
+                                <option value="section">Section Summary</option>
+                            </select>
+                            <button class="btn btn-primary" onclick="window.runLiveSummarize()" style="background:#0891b2; border-color:#0891b2; color:white; font-size:0.75rem; padding:6px 16px; border-radius:6px; font-weight:700;">Generate Summary</button>
+                        </div>
+                        <textarea id="doc-summarize-input" rows="4" style="width:100%; border:1px solid #cbd5e1; border-radius:8px; padding:8px; font-size:0.78rem; margin-bottom:10px;">CloudObjectIQ is an enterprise data lakehouse federation platform unifying AWS S3, Azure ADLS Gen2, and Apache Iceberg tables. Recent benchmarking verified a 74% reduction in cloud data scan volume and a 3.8x speedup in analytical query latency through DuckDB vectorized query execution. Total Q3 infrastructure cost savings exceeded $48,000 across analytics pipelines.</textarea>
+                        <div id="doc-summarize-results" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px;">
+                            <span style="font-size:0.78rem; color:#94a3b8;">Synthesized summary and extracted bullet points will appear here.</span>
+                        </div>
+                    </div>
+
+                    <!-- Tab 7: Models & Governance -->
+                    <div id="doc-ml-tab-models" class="doc-ml-tab-content" style="display:none;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                            <span style="font-size:0.75rem; font-weight:700; color:#64748b;">Active ML Model Artifacts & Runtimes:</span>
+                            <button class="btn btn-secondary" onclick="window.loadDocModelsStatus()" style="font-size:0.72rem; padding:4px 10px;">🔄 Refresh Status</button>
+                        </div>
+                        <div id="doc-models-container" style="border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+
+            <!-- Modal Footer -->
+            <div style="background:#ffffff; border-top:1px solid #e2e8f0; padding:12px 28px; display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size:0.75rem; color:#64748b;">CloudObjectIQ ML Service v2.0.0 • Connected to Python FastAPI Gateway</span>
+                <button class="btn btn-secondary" onclick="window.closeDocumentIntelligenceModal()" style="font-size:0.75rem; padding:6px 18px;">Close</button>
+            </div>
+
+        </div>
+    </div>
+
+    <script src="app.js?v=22"></script>
 </body>
 </html>

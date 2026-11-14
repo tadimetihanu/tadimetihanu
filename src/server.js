@@ -1081,6 +1081,73 @@ app.get('/api/ml/telemetry', authenticate, async (req, res) => {
     }
 });
 
+// ── UNSTRUCTURED DOCUMENT ML INTELLIGENCE GATEWAY ROUTES ───
+const { forwardToMlService, runDocumentMlTestSuite } = require('./services/document_ml');
+
+// POST /api/ml/document/test-suite/run - Live test suite execution for Render UI
+app.post('/api/ml/document/test-suite/run', authenticate, async (req, res) => {
+    try {
+        const report = await runDocumentMlTestSuite();
+        res.json(report);
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Proxy routes to Python Document ML microservice
+app.post('/api/ml/document/classify', authenticate, async (req, res) => {
+    const tenantId = req.user.tenant_id || 'default';
+    const result = await forwardToMlService('/api/ml/document/classify', 'POST', req.body, tenantId);
+    res.status(result.status).json(result.data || { error: result.error });
+});
+
+app.post('/api/ml/document/classify/correct', authenticate, async (req, res) => {
+    const tenantId = req.user.tenant_id || 'default';
+    const result = await forwardToMlService('/api/ml/document/classify/correct', 'POST', req.body, tenantId);
+    res.status(result.status).json(result.data || { error: result.error });
+});
+
+app.post('/api/ml/document/extract-entities', authenticate, async (req, res) => {
+    const tenantId = req.user.tenant_id || 'default';
+    const result = await forwardToMlService('/api/ml/document/extract-entities', 'POST', req.body, tenantId);
+    res.status(result.status).json(result.data || { error: result.error });
+});
+
+app.post('/api/ml/document/rerank', authenticate, async (req, res) => {
+    const tenantId = req.user.tenant_id || 'default';
+    const result = await forwardToMlService('/api/ml/document/rerank', 'POST', req.body, tenantId);
+    res.status(result.status).json(result.data || { error: result.error });
+});
+
+app.post('/api/ml/document/similarity', authenticate, async (req, res) => {
+    const tenantId = req.user.tenant_id || 'default';
+    const result = await forwardToMlService('/api/ml/document/similarity', 'POST', req.body, tenantId);
+    res.status(result.status).json(result.data || { error: result.error });
+});
+
+app.post('/api/ml/document/anomalies', authenticate, async (req, res) => {
+    const tenantId = req.user.tenant_id || 'default';
+    const result = await forwardToMlService('/api/ml/document/anomalies', 'POST', req.body, tenantId);
+    res.status(result.status).json(result.data || { error: result.error });
+});
+
+app.post('/api/ml/document/summarize', authenticate, async (req, res) => {
+    const tenantId = req.user.tenant_id || 'default';
+    const result = await forwardToMlService('/api/ml/document/summarize', 'POST', req.body, tenantId);
+    res.status(result.status).json(result.data || { error: result.error });
+});
+
+app.get('/api/ml/document/models', authenticate, async (req, res) => {
+    const tenantId = req.user.tenant_id || 'default';
+    const result = await forwardToMlService('/api/ml/document/models', 'GET', null, tenantId);
+    res.status(result.status).json(result.data || { error: result.error });
+});
+
+app.get('/api/ml/document/health', async (req, res) => {
+    const result = await forwardToMlService('/api/ml/document/health', 'GET', null, 'default');
+    res.status(result.status).json(result.data || { error: result.error });
+});
+
 // ── AI QUERY OPTIMIZATION & COST INTELLIGENCE ROUTES ───────
 const {
     analyzeQueryIntelligence,
