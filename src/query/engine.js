@@ -595,10 +595,35 @@ async function runQuery(userId, sql, targetId, options = {}) {
         try {
 
             
-        // [NEW] Metadata Catalog Verification
-        // Block raw URIs
-        if (sql.match(/s3:\/\//i) || sql.match(/az:\/\//i)) {
-            throw new Error('Direct cloud storage URIs are disabled. Please use the filename registered in the Metadata Catalog.');
+        // [NEW] COPY TO Destination Resolution & Cloud Target Routing
+        const copyToMatch = sql.match(/copy\s+[\s\S]+?\s+to\s+['"]([^'"]+)['"]/i);
+        let destLogicalName = null;
+        if (copyToMatch && target && target.bucket) {
+            let dest = copyToMatch[1];
+            const cleanBkt = _cleanBucketName(target.bucket) || 'datalake';
+            const prefix = (target.provider_type === 'azure' || target.provider_type === 'adls') ? 'az://' : 's3://';
+            
+            if (!dest.startsWith('s3://') && !dest.startsWith('az://') && !dest.startsWith('r2://')) {
+                // If it's a relative path (e.g. 'new_data.parquet' or '10M/new_data.parquet')
+                if (!dest.startsWith('/') && !dest.match(/^[a-zA-Z]:/)) {
+                    destLogicalName = dest;
+                    const physicalDest = prefix + cleanBkt + '/' + dest.replace(/^\/+/, '');
+                    sql = sql.replace(copyToMatch[0], copyToMatch[0].replace(dest, physicalDest));
+                }
+            } else {
+                // If user wrote s3://bucket/path or r2://bucket/path
+                destLogicalName = dest.replace(/^(?:s3|r2|az):\/\/[^\/]+\//, '');
+            }
+        }
+
+        // Block raw URIs only if accessing external/foreign buckets outside target.bucket
+        const cleanTargetBucket = _cleanBucketName(target ? target.bucket : '').toLowerCase();
+        const rawUriMatches = sql.match(/(?:s3|az|r2):\/\/([^\/\s'\"]+)/gi) || [];
+        for (const uri of rawUriMatches) {
+            const bucketName = uri.replace(/^(?:s3|az|r2):\/\//i, '').toLowerCase();
+            if (cleanTargetBucket && bucketName !== cleanTargetBucket) {
+                throw new Error(`Direct cloud storage URIs outside target bucket '${target.bucket}' are disabled. Please use the filename registered in the Metadata Catalog.`);
+            }
         }
 
         // Intercept INSERT INTO for Iceberg tables
@@ -937,6 +962,28 @@ async function runQuery(userId, sql, targetId, options = {}) {
                         }
                     }
                     throw queryErr;
+                }
+            }
+
+            // Auto-register destination file in metadata catalog if created via COPY TO
+            if (destLogicalName && targetId) {
+                try {
+                    const base = path.basename(destLogicalName);
+                    const existing = await db.get(
+                        'SELECT id FROM metadata_catalog WHERE target_id = ? AND (file_path = ? OR file_name = ?)',
+                        [targetId, destLogicalName, base]
+                    );
+                    if (!existing) {
+                        const newCatId = crypto.randomUUID ? crypto.randomUUID() : `cat_${Date.now()}`;
+                        const fmt = destLogicalName.toLowerCase().endsWith('.parquet') ? 'parquet' : (destLogicalName.toLowerCase().endsWith('.csv') ? 'csv' : 'unknown');
+                        await db.run(`
+                            INSERT INTO metadata_catalog (id, target_id, file_path, file_name, file_size, format, last_scanned)
+                            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                        `, [newCatId, targetId, destLogicalName, base, 0, fmt]);
+                        console.log(`✨ [Catalog Auto-Register] Added ${destLogicalName} to metadata catalog for target ${targetId}`);
+                    }
+                } catch (catErr) {
+                    console.warn('[Catalog Auto-Register] Warning:', catErr.message);
                 }
             }
 
