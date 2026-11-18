@@ -1555,25 +1555,167 @@ window.switchMainMode = (mode) => {
 window.handleIngestTypeChange = (type) => {
     const hostLabel = document.getElementById('ingest-host-label');
     const hostInput = document.getElementById('ingest-host');
+    const portLabel = document.getElementById('ingest-port-label');
     const portInput = document.getElementById('ingest-port');
+    const dbGroup = document.getElementById('ingest-db-group');
+    const dbLabel = document.getElementById('ingest-db-label');
+    const dbInput = document.getElementById('ingest-database');
     const userInput = document.getElementById('ingest-user');
     const passInput = document.getElementById('ingest-pass');
+    const sourceLabel = document.getElementById('ingest-source-label');
     const pathInput = document.getElementById('ingest-source-path');
 
-    if (type === 'gdrive') {
+    if (dbGroup) dbGroup.style.display = 'block';
+
+    if (type === 'postgres' || type === 'postgresql') {
+        if (hostLabel) hostLabel.innerText = 'PostgreSQL Host';
+        if (hostInput) hostInput.placeholder = 'pg-master.internal or localhost';
+        if (portInput) { portInput.disabled = false; portInput.value = '5432'; }
+        if (dbLabel) dbLabel.innerText = 'Database Name';
+        if (dbInput) dbInput.placeholder = 'production_db';
+        if (sourceLabel) sourceLabel.innerText = 'Source Table or Custom SQL Query';
+        if (pathInput) pathInput.placeholder = 'orders or SELECT * FROM customer_sales WHERE status=\'active\'';
+    } else if (type === 'oracle') {
+        if (hostLabel) hostLabel.innerText = 'Oracle SCAN / Host';
+        if (hostInput) hostInput.placeholder = 'oracle-rac.corp.net';
+        if (portInput) { portInput.disabled = false; portInput.value = '1521'; }
+        if (dbLabel) dbLabel.innerText = 'Oracle Service / SID';
+        if (dbInput) dbInput.placeholder = 'ORCL or XEPDB1';
+        if (sourceLabel) sourceLabel.innerText = 'Oracle Table or SELECT Query';
+        if (pathInput) pathInput.placeholder = 'CUSTOMERS or HR.EMPLOYEES';
+    } else if (type === 'mysql') {
+        if (hostLabel) hostLabel.innerText = 'MySQL Host Address';
+        if (hostInput) hostInput.placeholder = 'mysql.cluster.local';
+        if (portInput) { portInput.disabled = false; portInput.value = '3306'; }
+        if (dbLabel) dbLabel.innerText = 'MySQL Database';
+        if (dbInput) dbInput.placeholder = 'ecommerce_store';
+        if (sourceLabel) sourceLabel.innerText = 'Table Name or SELECT Query';
+        if (pathInput) pathInput.placeholder = 'customer_transactions';
+    } else if (type === 'sqlserver' || type === 'mssql') {
+        if (hostLabel) hostLabel.innerText = 'SQL Server Host / Instance';
+        if (hostInput) hostInput.placeholder = 'sqlserver.internal.corp';
+        if (portInput) { portInput.disabled = false; portInput.value = '1433'; }
+        if (dbLabel) dbLabel.innerText = 'Database Catalog';
+        if (dbInput) dbInput.placeholder = 'AdventureWorks';
+        if (sourceLabel) sourceLabel.innerText = 'Table Name or SELECT Query';
+        if (pathInput) pathInput.placeholder = 'SalesOrderHeader';
+    } else if (type === 'hadoop' || type === 'hdfs') {
+        if (hostLabel) hostLabel.innerText = 'HDFS NameNode (WebHDFS)';
+        if (hostInput) hostInput.placeholder = 'namenode.hadoop.cluster';
+        if (portInput) { portInput.disabled = false; portInput.value = '9870'; }
+        if (dbLabel) dbLabel.innerText = 'Cluster / Rack (Optional)';
+        if (dbInput) dbInput.placeholder = 'default-rack';
+        if (sourceLabel) sourceLabel.innerText = 'HDFS File Path';
+        if (pathInput) pathInput.placeholder = '/data/warehouse/transactions.parquet';
+    } else if (type === 'gdrive') {
         if (hostLabel) hostLabel.innerText = 'Google Drive Folder ID (or root)';
         if (hostInput) { hostInput.placeholder = 'root (or folder ID)'; hostInput.value = hostInput.value || 'root'; }
         if (portInput) { portInput.disabled = true; portInput.value = ''; }
+        if (dbGroup) dbGroup.style.display = 'none';
         if (userInput) userInput.placeholder = 'Service Account / Client ID (Optional)';
         if (passInput) passInput.placeholder = 'Private Key / Secret (Optional)';
+        if (sourceLabel) sourceLabel.innerText = 'Drive File Name';
         if (pathInput) pathInput.placeholder = 'customer_churn_analysis.csv';
     } else {
         if (hostLabel) hostLabel.innerText = 'Host Address';
         if (hostInput) hostInput.placeholder = 'ftp.example.com';
-        if (portInput) portInput.disabled = false;
+        if (portInput) { portInput.disabled = false; portInput.value = type === 'sftp' ? '22' : '21'; }
+        if (dbGroup) dbGroup.style.display = 'none';
         if (userInput) userInput.placeholder = 'admin';
         if (passInput) passInput.placeholder = '••••••••';
+        if (sourceLabel) sourceLabel.innerText = 'Remote File Path';
         if (pathInput) pathInput.placeholder = '/data/exports/daily_dump.csv';
+    }
+};
+
+window.fillIngestPreset = (type) => {
+    const sel = document.getElementById('ingest-type');
+    if (sel) {
+        sel.value = type;
+        window.handleIngestTypeChange(type);
+    }
+    const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+
+    if (type === 'postgres') {
+        setVal('ingest-host', 'localhost');
+        setVal('ingest-port', 5432);
+        setVal('ingest-database', 'ecommerce_db');
+        setVal('ingest-user', 'postgres');
+        setVal('ingest-pass', 'password123');
+        setVal('ingest-source-path', 'orders');
+        setVal('ingest-format', 'parquet');
+    } else if (type === 'oracle') {
+        setVal('ingest-host', 'oracle-scan.corp.internal');
+        setVal('ingest-port', 1521);
+        setVal('ingest-database', 'ORCL');
+        setVal('ingest-user', 'c##enterprise_admin');
+        setVal('ingest-pass', 'OraclePass_2026');
+        setVal('ingest-source-path', 'CUSTOMERS');
+        setVal('ingest-format', 'parquet');
+    } else if (type === 'mysql') {
+        setVal('ingest-host', 'mysql-master.prod.local');
+        setVal('ingest-port', 3306);
+        setVal('ingest-database', 'store_analytics');
+        setVal('ingest-user', 'mysql_user');
+        setVal('ingest-pass', 'MysqlPass@2026');
+        setVal('ingest-source-path', 'customer_transactions');
+        setVal('ingest-format', 'parquet');
+    } else if (type === 'sqlserver') {
+        setVal('ingest-host', 'sqlserver-cluster.corp');
+        setVal('ingest-port', 1433);
+        setVal('ingest-database', 'AdventureWorks');
+        setVal('ingest-user', 'sa');
+        setVal('ingest-pass', 'SqlStrongPass_2026!');
+        setVal('ingest-source-path', 'SalesOrderHeader');
+        setVal('ingest-format', 'parquet');
+    } else if (type === 'hadoop') {
+        setVal('ingest-host', 'namenode.hadoop.cluster');
+        setVal('ingest-port', 9870);
+        setVal('ingest-database', 'default-rack');
+        setVal('ingest-user', 'hdfs');
+        setVal('ingest-pass', '');
+        setVal('ingest-source-path', '/user/hadoop/warehouse/orders_partitioned.parquet');
+        setVal('ingest-format', 'parquet');
+    }
+    showStatus(`Filled sample configuration for ${type.toUpperCase()}`, 'info');
+};
+
+window.testIngestionConnection = async () => {
+    const btn = document.getElementById('ingest-test-btn');
+    const status = document.getElementById('ingest-status');
+    const type = document.getElementById('ingest-type').value;
+    const host = document.getElementById('ingest-host').value;
+    const port = document.getElementById('ingest-port').value;
+    const database = document.getElementById('ingest-database')?.value || '';
+    const user = document.getElementById('ingest-user').value;
+    const password = document.getElementById('ingest-pass').value;
+    const sourcePath = document.getElementById('ingest-source-path').value;
+
+    btn.disabled = true;
+    btn.innerText = '⏳ Testing...';
+    status.innerHTML = `<span style="color:var(--accent);">🔍 Verifying network connection & credentials for ${type.toUpperCase()}...</span>`;
+
+    try {
+        const payload = {
+            sourceConfig: { type, host, port, database, user, password, sourcePath }
+        };
+        const data = await apiFetch('/api/ingestion/test-connection', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        });
+
+        if (data.success) {
+            status.innerHTML = `<span style="color:#10b981; font-weight:700;">${data.message || '✅ Connection Successful! Ready for streaming transfer.'}</span>`;
+            showStatus('Connection Successful', 'success');
+        } else {
+            status.innerHTML = `<span style="color:var(--error); font-weight:700;">❌ Connection Failed: ${data.error}</span>`;
+            showStatus(data.error || 'Connection Failed', 'error');
+        }
+    } catch (e) {
+        status.innerHTML = `<span style="color:var(--error);">❌ Error: Request failed</span>`;
+    } finally {
+        btn.disabled = false;
+        btn.innerText = '🔌 Test Connection';
     }
 };
 
@@ -1581,23 +1723,33 @@ window.startIngestion = async () => {
     const type = document.getElementById('ingest-type').value;
     const host = document.getElementById('ingest-host').value || (type === 'gdrive' ? 'root' : '');
     const port = document.getElementById('ingest-port').value;
+    const database = document.getElementById('ingest-database')?.value || '';
     const user = document.getElementById('ingest-user').value || (type === 'gdrive' ? 'demo_gdrive_user' : '');
     const password = document.getElementById('ingest-pass').value || (type === 'gdrive' ? 'demo_gdrive_key' : '');
     const sourcePath = document.getElementById('ingest-source-path').value;
+    const format = document.getElementById('ingest-format')?.value || 'parquet';
     const targetId = document.getElementById('ingest-target').value;
     const targetFolder = document.getElementById('ingest-target-folder').value;
     const status = document.getElementById('ingest-status');
+    const btn = document.getElementById('ingest-btn');
 
-    if (!host || !sourcePath || !targetId || (type !== 'gdrive' && (!user || !password))) {
-        status.innerHTML = '<span style="color:var(--error);">Please fill out required fields (Source Host/Folder, File Path, Target Object Storage).</span>';
+    if (!host || !sourcePath || !targetId) {
+        status.innerHTML = '<span style="color:var(--error);">Please fill out required fields (Source Host, Table/Path, Target Cloud Storage).</span>';
         return;
     }
 
-    status.innerHTML = '<span style="color:var(--accent);">⌛ Connecting to Source & Streaming to Cloud Object Storage...</span>';
+    btn.disabled = true;
+    btn.innerText = '⏳ Streaming Ingestion in Progress...';
+    status.innerHTML = `<span style="color:var(--accent);">⌛ Connecting to <strong>${type.toUpperCase()}</strong> & streaming rows directly to Cloud Storage...</span>`;
     
     try {
         const payload = {
-            sourceConfig: { type, host, port, user, password, sourcePath },
+            sourceConfig: { 
+                type, host, port, database, user, password, sourcePath,
+                table: sourcePath.includes(' ') ? null : sourcePath,
+                query: sourcePath.includes(' ') ? sourcePath : null,
+                format 
+            },
             targetId, targetFolder
         };
         const data = await apiFetch('/api/ingestion/start', {
@@ -1605,13 +1757,44 @@ window.startIngestion = async () => {
             body: JSON.stringify(payload)
         });
 
-        if (data.success) {
-            status.innerHTML = `<span style="color:#10b981;">✅ Success! Streamed file to Object Storage at ${data.result.key}.</span>`;
+        if (data.success && data.result) {
+            const r = data.result;
+            const destKey = r.key || r.filename || 'data.parquet';
+            status.innerHTML = `
+                <div style="background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.3); padding:15px; border-radius:10px; margin-top:10px;">
+                    <div style="color:#10b981; font-weight:800; font-size:1rem; margin-bottom:5px;">
+                        ${r.message || '✅ Ingestion Successful!'}
+                    </div>
+                    <div style="color:var(--text-muted); font-size:0.8rem; margin-bottom:12px;">
+                        📦 Object Key: <strong style="color:var(--text);">${destKey}</strong> | Format: <strong style="color:#10b981;">${(r.format || format).toUpperCase()}</strong> ${r.rowCount ? `| Records: <strong>${r.rowCount.toLocaleString()}</strong>` : ''}
+                    </div>
+                    <button class="btn btn-primary" style="font-size:0.8rem; padding:6px 16px;" onclick="window.openIngestedQuery('${destKey}')">
+                        💻 Open & Query in SQL Engine
+                    </button>
+                </div>
+            `;
+            showStatus(`Successfully ingested ${destKey} into Cloud Storage!`, 'success');
+            // Refresh file list in sidebar
+            if (typeof loadFiles === 'function' && _activeTargetId) loadFiles(_activeTargetId);
         } else {
-            status.innerHTML = `<span style="color:var(--error);">❌ Ingestion Failed: ${data.error}</span>`;
+            status.innerHTML = `<span style="color:var(--error);">❌ Ingestion Failed: ${data.error || 'Unknown error'}</span>`;
         }
     } catch (e) {
-        status.innerHTML = `<span style="color:var(--error);">❌ Network Error: Could not start ingestion</span>`;
+        status.innerHTML = `<span style="color:var(--error);">❌ Network Error: Could not complete streaming transfer</span>`;
+    } finally {
+        btn.disabled = false;
+        btn.innerText = '🚀 Extract & Stream to Cloud Object Storage';
+    }
+};
+
+window.openIngestedQuery = (key) => {
+    window.switchMainMode('sql');
+    const editor = document.getElementById('query-editor');
+    if (editor) {
+        editor.value = `SELECT * FROM '${key}' LIMIT 100;`;
+        if (typeof window.executeQuery === 'function') {
+            window.executeQuery();
+        }
     }
 };
 

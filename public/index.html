@@ -419,47 +419,80 @@
                         
                         <!-- Sub-tabs -->
                         <div style="display:flex; gap:10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
-                            <button id="ingest-tab-ftp" class="btn" style="background:var(--accent); color:white; border:none;" onclick="window.switchIngestTab('ftp')">Direct FTP/SFTP</button>
+                            <button id="ingest-tab-ftp" class="btn" style="background:var(--accent); color:white; border:none;" onclick="window.switchIngestTab('ftp')">⚡ Universal Ingestion (Databases, Hadoop, FTP)</button>
                             <button id="ingest-tab-airbyte" class="btn" style="background:transparent; color:var(--text-muted); border:1px solid var(--border);" onclick="window.switchIngestTab('airbyte')">External Connectors (Airbyte)</button>
                         </div>
 
-                        <!-- FTP/SFTP PANEL -->
+                        <!-- UNIVERSAL INGESTION PANEL -->
                         <div id="ingest-panel-ftp">
-                            <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:20px;">Stream legacy files directly into your Cloud Storage Targets without writing to local disk.</p>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+                                <p style="font-size:0.85rem; color:var(--text-muted); margin:0;">Extract from enterprise databases & big data clusters straight into Cloud Storage without local intermediate disks.</p>
+                                <div style="display:flex; gap:6px;">
+                                    <button class="ghost-btn" style="font-size:0.7rem; padding:4px 8px; border-color:#336791; color:#336791;" onclick="window.fillIngestPreset('postgres')">🐘 PostgreSQL</button>
+                                    <button class="ghost-btn" style="font-size:0.7rem; padding:4px 8px; border-color:#ea580c; color:#ea580c;" onclick="window.fillIngestPreset('oracle')">🔴 Oracle</button>
+                                    <button class="ghost-btn" style="font-size:0.7rem; padding:4px 8px; border-color:#00758f; color:#00758f;" onclick="window.fillIngestPreset('mysql')">🐬 MySQL</button>
+                                    <button class="ghost-btn" style="font-size:0.7rem; padding:4px 8px; border-color:#0284c7; color:#0284c7;" onclick="window.fillIngestPreset('sqlserver')">🟦 SQL Server</button>
+                                    <button class="ghost-btn" style="font-size:0.7rem; padding:4px 8px; border-color:#eab308; color:#eab308;" onclick="window.fillIngestPreset('hadoop')">🐘 Hadoop HDFS</button>
+                                </div>
+                            </div>
                             
                             <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px;">
                                 <div class="field-group">
-                                    <label class="cfg-lbl">Source Protocol</label>
+                                    <label class="cfg-lbl">Source System / Protocol</label>
                                     <select id="ingest-type" class="cfg-input" onchange="window.handleIngestTypeChange && window.handleIngestTypeChange(this.value)">
-                                        <option value="ftp">FTP Server</option>
-                                        <option value="sftp">Secure FTP (SFTP)</option>
-                                        <option value="gdrive">Google Drive (Direct Sync)</option>
+                                        <optgroup label="Enterprise Databases">
+                                            <option value="postgres" selected>🐘 PostgreSQL Database</option>
+                                            <option value="oracle">🔴 Oracle Database</option>
+                                            <option value="mysql">🐬 MySQL Database</option>
+                                            <option value="sqlserver">🟦 Microsoft SQL Server</option>
+                                        </optgroup>
+                                        <optgroup label="Big Data Clusters">
+                                            <option value="hadoop">🐘 Apache Hadoop (WebHDFS Direct Stream)</option>
+                                        </optgroup>
+                                        <optgroup label="Remote File Servers">
+                                            <option value="ftp">FTP Server</option>
+                                            <option value="sftp">Secure FTP (SFTP)</option>
+                                            <option value="gdrive">📁 Google Drive (Direct Sync)</option>
+                                        </optgroup>
                                     </select>
                                 </div>
                                 <div class="field-group">
-                                    <label class="cfg-lbl" id="ingest-host-label">Host Address / Folder ID</label>
-                                    <input id="ingest-host" class="cfg-input" placeholder="ftp.example.com or Google Drive Folder ID">
+                                    <label class="cfg-lbl" id="ingest-host-label">Host Address / Endpoint</label>
+                                    <input id="ingest-host" class="cfg-input" placeholder="postgres.internal.corp or 127.0.0.1" value="localhost">
                                 </div>
                             </div>
 
-                            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px; margin-bottom:20px;">
+                            <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:15px; margin-bottom:20px;">
                                 <div class="field-group">
-                                    <label class="cfg-lbl">Port (Optional)</label>
-                                    <input id="ingest-port" type="number" class="cfg-input" placeholder="21 / 22">
+                                    <label class="cfg-lbl" id="ingest-port-label">Port</label>
+                                    <input id="ingest-port" type="number" class="cfg-input" placeholder="5432" value="5432">
+                                </div>
+                                <div class="field-group" id="ingest-db-group">
+                                    <label class="cfg-lbl" id="ingest-db-label">Database / SID</label>
+                                    <input id="ingest-database" class="cfg-input" placeholder="production_db" value="ecommerce_db">
                                 </div>
                                 <div class="field-group">
                                     <label class="cfg-lbl">Username</label>
-                                    <input id="ingest-user" class="cfg-input" placeholder="admin">
+                                    <input id="ingest-user" class="cfg-input" placeholder="postgres" value="admin">
                                 </div>
                                 <div class="field-group">
                                     <label class="cfg-lbl">Password</label>
-                                    <input id="ingest-pass" type="password" class="cfg-input" placeholder="••••••••">
+                                    <input id="ingest-pass" type="password" class="cfg-input" placeholder="••••••••" value="password123">
                                 </div>
                             </div>
 
-                            <div class="field-group" style="margin-bottom:20px;">
-                                <label class="cfg-lbl">Source File Path (Absolute path on FTP)</label>
-                                <input id="ingest-source-path" class="cfg-input" placeholder="/data/exports/daily_dump.csv">
+                            <div style="display:grid; grid-template-columns:2fr 1fr; gap:20px; margin-bottom:20px;">
+                                <div class="field-group">
+                                    <label class="cfg-lbl" id="ingest-source-label">Source Table Name or Custom SQL Query</label>
+                                    <input id="ingest-source-path" class="cfg-input" placeholder="orders or customer_transactions" value="orders">
+                                </div>
+                                <div class="field-group">
+                                    <label class="cfg-lbl">Output Conversion Format</label>
+                                    <select id="ingest-format" class="cfg-input">
+                                        <option value="parquet" selected>Apache Parquet (.parquet) - Columnar</option>
+                                        <option value="csv">Standard CSV (.csv)</option>
+                                    </select>
+                                </div>
                             </div>
 
                             <hr style="border:none; border-top:1px solid var(--border); margin:20px 0;">
@@ -467,16 +500,19 @@
                             <h3 style="margin-top:0; font-size:1rem; color:var(--text);">Destination Cloud Storage</h3>
                             <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px;">
                                 <div class="field-group">
-                                    <label class="cfg-lbl">Target Object Storage</label>
+                                    <label class="cfg-lbl">Target Object Storage (e.g. Cloudflare R2 / S3 / Azure)</label>
                                     <select id="ingest-target" class="cfg-input"></select>
                                 </div>
                                 <div class="field-group">
-                                    <label class="cfg-lbl">Destination Folder (Optional)</label>
+                                    <label class="cfg-lbl">Destination Subfolder (Optional)</label>
                                     <input id="ingest-target-folder" class="cfg-input" placeholder="raw_data/incoming/">
                                 </div>
                             </div>
 
-                            <button id="ingest-btn" class="btn btn-primary" style="width:100%; height:45px; font-size:1rem; font-weight:700; background:linear-gradient(135deg, #f59e0b, #d97706); border:none;" onclick="window.startIngestion()">🚀 Start Streaming Transfer</button>
+                            <div style="display:flex; gap:12px;">
+                                <button id="ingest-test-btn" class="btn btn-secondary" style="height:45px; padding:0 25px; font-weight:700;" onclick="window.testIngestionConnection()">🔌 Test Connection</button>
+                                <button id="ingest-btn" class="btn btn-primary" style="flex:1; height:45px; font-size:1rem; font-weight:700; background:linear-gradient(135deg, #10b981, #059669); border:none;" onclick="window.startIngestion()">🚀 Extract & Stream to Cloud Object Storage</button>
+                            </div>
                             <div id="ingest-status" style="margin-top:15px; font-size:0.85rem; text-align:center; min-height:20px;"></div>
                         </div>
 

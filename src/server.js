@@ -497,6 +497,21 @@ app.get('/api/download/:targetId', authenticate, checkAccess('read'), async (req
     }
 });
 
+app.post('/api/ingestion/test-connection', authenticate, async (req, res) => {
+    try {
+        const { sourceConfig } = req.body;
+        if (!sourceConfig || !sourceConfig.type) {
+            return res.status(400).json({ success: false, error: 'Source configuration with protocol type is required' });
+        }
+        const { testIngestionConnection } = require('./services/ingestion');
+        const result = await testIngestionConnection(sourceConfig);
+        res.json(result);
+    } catch (err) {
+        console.error('Ingestion Connection Test Error:', err);
+        res.status(400).json({ success: false, error: err.message });
+    }
+});
+
 app.post('/api/ingestion/start', authenticate, async (req, res) => {
     try {
         const { sourceConfig, targetId, targetFolder } = req.body;
