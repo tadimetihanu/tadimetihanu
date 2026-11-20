@@ -40,6 +40,7 @@
     "isomorphic-git": "^1.41.8",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
+    "mysql2": "^3.24.6",
     "next": "^14.2.0",
     "node-sql-parser": "^5.4.0",
     "openai": "^6.32.0",

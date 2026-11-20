@@ -665,6 +665,29 @@
                 <div class="action-bar" style="padding:12px 20px; display:flex !important; align-items:center !important; gap:8px !important; flex-wrap:nowrap !important; border-top:1px solid rgba(0,0,0,0.06); overflow-x:auto; width:100%; box-sizing:border-box;">
                     <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
                         <button class="btn btn-primary" id="run-btn" onclick="executeQuery()" style="white-space:nowrap; flex-shrink:0;">Execute Query</button>
+                        
+                        <!-- DQE Execution Engine Selector -->
+                        <div style="display:flex; align-items:center; gap:5px; background:rgba(0,0,0,0.04); border:1px solid var(--border); border-radius:8px; padding:3px 8px; flex-shrink:0;">
+                            <span style="font-size:0.75rem; font-weight:700; color:var(--text-muted);">Engine:</span>
+                            <select id="query-engine-select" style="background:transparent; border:none; font-size:0.78rem; font-weight:700; color:var(--text); outline:none; cursor:pointer;" onchange="window.handleEngineChange && window.handleEngineChange(this.value)">
+                                <option value="duckdb" selected>🦆 DuckDB (In-Memory)</option>
+                                <option value="auto">⚡ AUTO (Intelligent Multi-Engine)</option>
+                                <option value="doris">🐬 Apache Doris (Distributed MPP)</option>
+                                <option value="spark">⚡ Apache Spark (Batch)</option>
+                            </select>
+                        </div>
+
+                        <button class="btn btn-secondary" onclick="window.explainCurrentQuery()" id="explain-query-btn"
+                            style="background:rgba(14,165,233,0.1); border-color:#0284c7; color:#0284c7; font-weight:700; white-space:nowrap; flex-shrink:0;"
+                            title="Inspect Execution Plan & Pipeline Stages across engines">
+                            🗺️ Explain Plan
+                        </button>
+                        <button class="btn btn-secondary" onclick="window.openClusterMonitoringModal()" id="cluster-monitor-btn"
+                            style="background:rgba(16,185,129,0.1); border-color:#10b981; color:#059669; font-weight:700; white-space:nowrap; flex-shrink:0;"
+                            title="Inspect Distributed Backend Workers & Cluster Telemetry">
+                            📊 Workers
+                        </button>
+
                         <button class="btn btn-secondary" onclick="clearEditor()" style="white-space:nowrap; flex-shrink:0;">Clear</button>
                         <button class="btn btn-secondary" onclick="switchView('chart'); document.querySelector('.results-card').scrollIntoView({behavior:'smooth'})" id="chart-toggle-btn" style="display:none; white-space:nowrap; flex-shrink:0;">📊 Chart View</button>
                         <button class="btn btn-secondary" onclick="openSaveDialog()" id="save-query-btn"
@@ -1082,6 +1105,7 @@
                     <div class="results-tabs">
                         <button id="view-tab-table" class="view-tab active" onclick="switchView('table')">📋 Table View</button>
                         <button id="view-tab-chart" class="view-tab" onclick="switchView('chart')">📊 Chart View</button>
+                        <button id="view-tab-plan" class="view-tab" onclick="switchView('plan')">🗺️ Execution Plan</button>
                     </div>
                     <div id="export-btns" style="display:none; gap:8px; align-items:center;">
                         <button class="btn btn-secondary" onclick="window.openCreateIcebergModal()" style="font-size:0.72rem; padding:5px 12px; background:rgba(2,132,199,0.1); border-color:#0284c7; color:#0284c7; font-weight:700;" title="Create/Export as an Apache Iceberg table">🧊 Save as Iceberg</button>
@@ -1160,6 +1184,37 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
+
+                <!-- DQE Execution Plan Panel -->
+                <div id="plan-panel" style="display:none; padding:20px 24px; background:#f8fafc; border-top:1px solid var(--border);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:10px;">
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <span id="plan-engine-badge" style="background:#0284c7; color:white; font-size:0.75rem; font-weight:800; padding:4px 10px; border-radius:999px;">DUCKDB</span>
+                            <span style="font-size:0.9rem; font-weight:800; color:var(--text);" id="plan-title">Execution Plan & Pipeline Stages</span>
+                        </div>
+                        <div style="display:flex; gap:8px;">
+                            <button class="btn btn-secondary" style="font-size:0.72rem; padding:5px 12px;" onclick="window.explainCurrentQuery()">🔄 Refresh Plan</button>
+                            <button class="btn btn-secondary" style="font-size:0.72rem; padding:5px 12px;" onclick="window.copyExecutionPlan()">📋 Copy Plan</button>
+                        </div>
+                    </div>
+
+                    <!-- Pipeline Stages Visual Grid -->
+                    <div id="plan-stages-container" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px; margin-bottom:16px;">
+                        <div style="background:white; border-radius:8px; border:1px solid #e2e8f0; padding:12px;">
+                            <div style="font-size:0.68rem; font-weight:700; color:#64748b; text-transform:uppercase;">Pipeline Status</div>
+                            <div style="font-size:0.85rem; font-weight:700; color:#1e293b; margin-top:3px;">Click "Explain Plan" or Execute to visualize stages</div>
+                        </div>
+                    </div>
+
+                    <!-- Native Engine EXPLAIN Tree -->
+                    <div style="background:#0f172a; border-radius:8px; padding:16px; border:1px solid #1e293b; box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                            <span style="font-size:0.72rem; font-weight:800; color:#94a3b8; text-transform:uppercase; letter-spacing:0.05em;">Physical Engine Plan (EXPLAIN)</span>
+                            <span id="plan-target-engine" style="font-family:monospace; font-size:0.68rem; color:#38bdf8;">duckdb</span>
+                        </div>
+                        <pre id="plan-raw-output" style="margin:0; font-family:'Menlo', monospace; font-size:0.82rem; color:#e2e8f0; white-space:pre-wrap; word-break:break-all; max-height:320px; overflow-y:auto; line-height:1.5;">Execute query or click "Explain Plan" to inspect physical execution operators and stages...</pre>
                     </div>
                 </div>
             </div>
@@ -1850,6 +1905,114 @@ Tax ID: 12-3456789</textarea>
         </div>
     </div>
 
-    <script src="app.js?v=22"></script>
+    <!-- Distributed Worker Monitoring & DQE Cluster Modal -->
+    <div class="modal-overlay" id="cluster-monitoring-modal" style="display:none;" onclick="if(event.target===this) window.closeClusterMonitoringModal()">
+        <div class="modal" style="width: 850px; max-height: 85vh; display: flex; flex-direction: column; padding: 0; overflow: hidden; background: #ffffff; border-radius: 16px; box-shadow: 0 20px 40px rgba(0,0,0,0.2);">
+            <!-- Modal Header -->
+            <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 18px 24px; color: white; display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 1.25rem;">📊</span>
+                    <div>
+                        <h3 style="margin: 0; font-size: 1.05rem; font-weight: 800; letter-spacing: -0.01em;">Distributed Query Execution (DQE) Worker Telemetry</h3>
+                        <div style="font-size: 0.72rem; color: #94a3b8; margin-top: 2px;">Multi-Engine Infrastructure Status & Doris Backend Topology</div>
+                    </div>
+                </div>
+                <div style="display:flex; gap:10px; align-items:center;">
+                    <button class="btn btn-secondary" onclick="window.fetchClusterStatus()" style="background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); color: white; font-size: 0.72rem; padding: 5px 12px;">🔄 Refresh Status</button>
+                    <button onclick="window.closeClusterMonitoringModal()" style="background: none; border: none; color: #94a3b8; font-size: 1.25rem; cursor: pointer;">✕</button>
+                </div>
+            </div>
+
+            <!-- Modal Content Area -->
+            <div style="padding: 20px 24px; overflow-y: auto; flex: 1; background: #f8fafc;">
+                <!-- Engine Health Overview Cards -->
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px;">
+                    <!-- DuckDB Card -->
+                    <div style="background: white; border-radius: 10px; border: 1px solid #e2e8f0; padding: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.02);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <span style="font-size: 0.75rem; font-weight: 800; color: #334155;">🦆 DuckDB In-Memory</span>
+                            <span id="cluster-duckdb-badge" style="font-size: 0.65rem; font-weight: 700; background: #dcfce7; color: #15803d; padding: 2px 8px; border-radius: 999px;">HEALTHY</span>
+                        </div>
+                        <div style="font-size: 0.7rem; color: #64748b;">Vectorized single-node execution engine</div>
+                        <div style="margin-top: 8px; font-size: 0.68rem; font-family: monospace; color: #0284c7;">Type: Embedded C++</div>
+                    </div>
+
+                    <!-- Apache Doris Card -->
+                    <div style="background: white; border-radius: 10px; border: 1px solid #e2e8f0; padding: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.02);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <span style="font-size: 0.75rem; font-weight: 800; color: #334155;">🐬 Apache Doris MPP</span>
+                            <span id="cluster-doris-badge" style="font-size: 0.65rem; font-weight: 700; background: #e0f2fe; color: #0284c7; padding: 2px 8px; border-radius: 999px;">CONNECTED</span>
+                        </div>
+                        <div style="font-size: 0.7rem; color: #64748b;" id="cluster-doris-nodes-summary">1 FE Active • 2 BE Backends</div>
+                        <div style="margin-top: 8px; font-size: 0.68rem; font-family: monospace; color: #0284c7;" id="cluster-doris-endpoint">Endpoint: 127.0.0.1:9030</div>
+                    </div>
+
+                    <!-- Apache Spark Card -->
+                    <div style="background: white; border-radius: 10px; border: 1px solid #e2e8f0; padding: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.02);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <span style="font-size: 0.75rem; font-weight: 800; color: #334155;">⚡ Apache Spark</span>
+                            <span id="cluster-spark-badge" style="font-size: 0.65rem; font-weight: 700; background: #dcfce7; color: #15803d; padding: 2px 8px; border-radius: 999px;">READY</span>
+                        </div>
+                        <div style="font-size: 0.7rem; color: #64748b;">Hadoop / ORC distributed batch</div>
+                        <div style="margin-top: 8px; font-size: 0.68rem; font-family: monospace; color: #0284c7;">Deploy Mode: Client / Standalone</div>
+                    </div>
+                </div>
+
+                <!-- Doris Backend Nodes Table -->
+                <div style="background: white; border-radius: 12px; border: 1px solid #e2e8f0; padding: 16px; margin-bottom: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <span style="font-size: 0.82rem; font-weight: 800; color: #1e293b;">Doris Backend (BE) Node Topology</span>
+                        <span style="font-size: 0.68rem; color: #64748b;">Pipeline Vectorization Enabled</span>
+                    </div>
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 0.75rem;">
+                            <thead>
+                                <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0; text-align: left;">
+                                    <th style="padding: 8px 12px; color: #64748b; font-weight: 700;">Backend ID</th>
+                                    <th style="padding: 8px 12px; color: #64748b; font-weight: 700;">Host Address</th>
+                                    <th style="padding: 8px 12px; color: #64748b; font-weight: 700;">Heartbeat Port</th>
+                                    <th style="padding: 8px 12px; color: #64748b; font-weight: 700;">Alive Status</th>
+                                    <th style="padding: 8px 12px; color: #64748b; font-weight: 700;">Tablets / Shards</th>
+                                    <th style="padding: 8px 12px; color: #64748b; font-weight: 700;">Storage Avail / Total</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cluster-doris-backends-table">
+                                <tr>
+                                    <td colspan="6" style="padding: 16px; text-align: center; color: #94a3b8;">
+                                        Loading distributed node topology...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Autoscaling and Capacity Management Policy -->
+                <div style="background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 16px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                        <span style="font-size: 0.8rem; font-weight: 800; color: #1e293b;">Autoscaling & Resource Policy</span>
+                        <span style="font-size: 0.65rem; font-weight: 700; background: #fef3c7; color: #b45309; padding: 2px 8px; border-radius: 999px;">CONSERVATIVE / MANUAL</span>
+                    </div>
+                    <p style="font-size: 0.72rem; color: #64748b; margin: 0 0 10px 0; line-height: 1.5;">
+                        To protect query execution state and avoid abrupt worker termination, Doris Backend autoscaling remains in manual management mode by default. Replicas scale between 2 (min) and 10 (max) upon sustained query queue saturation. Safe decommissioning procedures apply on scale-down.
+                    </p>
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; font-size: 0.7rem;">
+                        <div style="background: #f8fafc; padding: 8px; border-radius: 6px;">Min BE Replicas: <strong>2</strong></div>
+                        <div style="background: #f8fafc; padding: 8px; border-radius: 6px;">Max BE Replicas: <strong>10</strong></div>
+                        <div style="background: #f8fafc; padding: 8px; border-radius: 6px;">Scale-Up CPU Trigger: <strong>75%</strong></div>
+                        <div style="background: #f8fafc; padding: 8px; border-radius: 6px;">Graceful Cooldown: <strong>300s</strong></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div style="background: #ffffff; border-top: 1px solid #e2e8f0; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 0.72rem; color: #64748b;">CloudObjectIQ Distributed Query Execution Engine v2.1.2</span>
+                <button class="btn btn-secondary" onclick="window.closeClusterMonitoringModal()" style="font-size: 0.75rem; padding: 6px 18px;">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=23"></script>
 </body>
 </html>

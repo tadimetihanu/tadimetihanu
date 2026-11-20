@@ -1,0 +1,61 @@
+version: '3.8'
+
+# CloudObjectIQ - Apache Doris Local Development & Testing Stack
+# Runs isolated single-node Doris FE + BE alongside CloudObjectIQ
+services:
+  doris-fe:
+    image: apache/doris:2.1.2-fe-x86_64
+    container_name: cloudobjectiq-doris-fe
+    hostname: doris-fe
+    environment:
+      - FE_SERVICENAME=doris-fe
+      - ENABLE_FQDN_MODE=true
+    ports:
+      - "127.0.0.1:9030:9030" # MySQL query port (restricted to localhost)
+      - "127.0.0.1:8030:8030" # FE Web / REST API
+    volumes:
+      - doris-fe-meta:/opt/apache-doris/fe/doris-meta
+      - doris-fe-log:/opt/apache-doris/fe/log
+    networks:
+      - doris-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8030/api/bootstrap || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  doris-be:
+    image: apache/doris:2.1.2-be-x86_64
+    container_name: cloudobjectiq-doris-be
+    hostname: doris-be
+    depends_on:
+      doris-fe:
+        condition: service_healthy
+    environment:
+      - FE_SERVICENAME=doris-fe
+      - FE_QUERY_PORT=9030
+      - BE_ADDR=doris-be:9050
+    ports:
+      - "127.0.0.1:8040:8040" # BE Web / REST API
+    volumes:
+      - doris-be-storage:/opt/apache-doris/be/storage
+      - doris-be-log:/opt/apache-doris/be/log
+    networks:
+      - doris-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8040/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  doris-fe-meta:
+  doris-fe-log:
+  doris-be-storage:
+  doris-be-log:
+
+networks:
+  doris-net:
+    driver: bridge

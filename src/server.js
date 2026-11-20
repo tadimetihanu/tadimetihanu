@@ -34,6 +34,9 @@ const db = require('./db');
 const { listFiles, uploadFile, uploadStream } = require('./drivers/storage');
 const { encrypt, decrypt } = require('./utils/crypto');
 const { initDuckDB, runQuery, calculateCost, invalidateCachedFile, validateQueryAgainstDuckDB } = require('./query/engine');
+const { queryRouter, routeAndExecute, routeAndExplain } = require('./query/router');
+const { listAvailableEngines, checkAllHealth, getEngine } = require('./query/engines');
+const { isFeatureEnabled } = require('./utils/feature_flags');
 const { suggestQuery } = require('./query/ai');
 const { handleNl2Sql } = require('./nl2sql');
 const { authenticate, isAdmin, loginLimiter, SECRET_KEY } = require('./middleware/auth');
@@ -901,7 +904,7 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
     req.setTimeout(300000);
     res.setTimeout(300000);
     const { targetId } = req.params;
-    const { sql } = req.body;
+    const { sql, engine } = req.body;
     const userId = req.user.user_id;
 
     // RBAC: Block Viewers from executing arbitrary SQL
@@ -919,7 +922,7 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
         return res.json({ 
             success: true, 
             data: [{ file_content: '[BINARY/UNSTRUCTURED DATA - USE DOWNLOAD BUTTON]' }],
-            meta: { duration: 0, estimatedScan: 0, estimatedCost: 0 }
+            meta: { duration: 0, estimatedScan: 0, estimatedCost: 0, engine: 'bypass' }
         });
     }
 
@@ -928,14 +931,40 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
     const tenantId = req.user.tenant_id || req.headers['x-tenant-id'] || 'default';
 
     try {
-        const results = await runQuery(userId, sql, targetId, { tenantId });
-        const duration = Date.now() - startTime;
-        const scanMeta = results._scanMeta || calculateCost(sql, results);
+        let results;
+        let duration;
+        let scanMeta;
+        let routedEngine = 'duckdb';
+        let queryStages = [];
+
+        // Route through unified DQE if specific engine requested or DQE enabled
+        if ((engine && engine !== 'duckdb') || isFeatureEnabled('ENABLE_DQE')) {
+            const queryRes = await routeAndExecute({
+                sql,
+                targetId,
+                userId,
+                requestedEngine: engine || 'auto',
+                context: { tenantId }
+            });
+            results = queryRes.rows;
+            duration = queryRes.executionTimeMs || (Date.now() - startTime);
+            scanMeta = queryRes.scanMeta || (results && results._scanMeta) || calculateCost(sql, results);
+            routedEngine = queryRes.routedEngine || engine || 'duckdb';
+            queryStages = queryRes.stages || [];
+        } else {
+            results = await runQuery(userId, sql, targetId, { tenantId });
+            duration = Date.now() - startTime;
+            scanMeta = results._scanMeta || calculateCost(sql, results);
+            routedEngine = 'duckdb';
+        }
+
         res.json({ 
             success: true, 
             data: sanitizeBigInt(results),
             meta: {
                 duration,
+                engine: routedEngine,
+                stages: queryStages,
                 executionId: scanMeta.executionId || crypto.randomUUID(),
                 estimatedScan: scanMeta.logicalScannedBytes !== undefined ? scanMeta.logicalScannedBytes : (scanMeta.estimatedScan || 0),
                 logicalScannedBytes: scanMeta.logicalScannedBytes !== undefined ? scanMeta.logicalScannedBytes : (scanMeta.estimatedScan || 0),
@@ -1022,6 +1051,63 @@ app.post('/api/query/:targetId', authenticate, checkAccess('read'), async (req, 
         }
         console.error(`❌ [Query] Error:`, err.message);
         res.status(500).json({ error: err.message });
+    }
+});
+
+// ── DISTRIBUTED QUERY EXECUTION (DQE) ENDPOINTS ─────────────
+
+// GET /api/query/engines - List available engines and status
+app.get('/api/query/engines', authenticate, (req, res) => {
+    try {
+        const engines = listAvailableEngines();
+        res.json({ success: true, engines });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/query/explain/:targetId - Explain query plan across engines
+app.post('/api/query/explain/:targetId', authenticate, checkAccess('read'), async (req, res) => {
+    const { targetId } = req.params;
+    const { sql, engine } = req.body;
+    const userId = req.user.user_id;
+    const tenantId = req.user.tenant_id || req.headers['x-tenant-id'] || 'default';
+
+    if (!sql) return res.status(400).json({ error: 'SQL query required' });
+
+    try {
+        const plan = await routeAndExplain({
+            sql,
+            targetId,
+            userId,
+            requestedEngine: engine || 'auto',
+            context: { tenantId }
+        });
+        res.json({ success: true, ...plan });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// GET /api/dqe/cluster-status - Real-time cluster health and worker monitoring
+app.get('/api/dqe/cluster-status', authenticate, async (req, res) => {
+    try {
+        const health = await checkAllHealth();
+        res.json({ success: true, health });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/query/cancel/:queryId - Cancel in-flight query
+app.post('/api/query/cancel/:queryId', authenticate, async (req, res) => {
+    const { queryId } = req.params;
+    try {
+        const doris = getEngine('doris');
+        const cancelled = await doris.cancelQuery(queryId);
+        res.json({ success: true, cancelled });
+    } catch (err) {
+        res.json({ success: false, cancelled: false, message: err.message });
     }
 });
 

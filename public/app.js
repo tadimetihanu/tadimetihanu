@@ -2136,9 +2136,12 @@ window.executeQuery = async function() {
     if (status) status.innerText = '📡 Execution in progress...';
 
     try {
+        const engineSelect = document.getElementById('query-engine-select');
+        const selectedEngine = (engineSelect && engineSelect.value) || (_notebooks[_activeTabIdx]?.engine) || 'duckdb';
+
         const data = await apiFetch(`/api/query/${targetId}`, {
             method: 'POST',
-            body: JSON.stringify({ sql })
+            body: JSON.stringify({ sql, engine: selectedEngine })
         });
 
         const destTab = _notebooks.find(t => t.id === targetTabId) || targetTab;
@@ -2173,7 +2176,8 @@ window.executeQuery = async function() {
         if (data.success) {
             const rowsCount = data.data ? data.data.length : 0;
             const dur = data.meta ? data.meta.duration : 0;
-            let successText = `✅ Success: ${rowsCount} rows returned. (${dur}ms)`;
+            const engName = (data.meta && data.meta.engine) ? String(data.meta.engine).toUpperCase() : 'DUCKDB';
+            let successText = `✅ [${engName}] ${rowsCount} rows returned. (${dur}ms)`;
             if (data.isFixed && data.fixedSql) {
                 successText = `✨ Auto-healed typo: ${rowsCount} rows returned. (${dur}ms)`;
                 if (window.editor && typeof window.editor.setValue === 'function' && _notebooks[_activeTabIdx]?.id === targetTabId) {
@@ -2185,6 +2189,8 @@ window.executeQuery = async function() {
                 destTab.results = data.data;
                 destTab.sql = data.fixedSql || sql;
                 destTab.meta = data.meta;
+                destTab.engine = data.meta?.engine || selectedEngine;
+                destTab.stages = data.meta?.stages || [];
                 destTab.statusText = successText;
             }
             saveNotebooks();
@@ -2727,20 +2733,28 @@ window.initPowerBI = () => {
 window.switchView = (view) => {
     const tableTab = document.getElementById('view-tab-table');
     const chartTab = document.getElementById('view-tab-chart');
+    const planTab  = document.getElementById('view-tab-plan');
 
     if (tableTab) tableTab.classList.toggle('active', view === 'table');
     if (chartTab) chartTab.classList.toggle('active', view === 'chart');
+    if (planTab)  planTab.classList.toggle('active', view === 'plan');
 
     const tableContainer = document.getElementById('table-container');
     const chartPanel     = document.getElementById('chart-panel');
+    const planPanel      = document.getElementById('plan-panel');
 
     if (tableContainer) tableContainer.style.display = view === 'table' ? 'block' : 'none';
     if (chartPanel)     chartPanel.style.display     = view === 'chart' ? 'block' : 'none';
+    if (planPanel)      planPanel.style.display      = view === 'plan' ? 'block' : 'none';
 
     if (view === 'chart') {
         requestAnimationFrame(() => {
             window.initPowerBI();
         });
+    } else if (view === 'plan') {
+        if (typeof window.renderCurrentTabPlan === 'function') {
+            window.renderCurrentTabPlan();
+        }
     }
 };
 
@@ -4851,5 +4865,233 @@ window.loadDocModelsStatus = async () => {
         `;
     } catch (err) {
         container.innerHTML = `<div style="padding:16px; color:#dc2626;">Error loading model registry: ${err.message}</div>`;
+    }
+};
+
+// ── 9. DISTRIBUTED QUERY EXECUTION (DQE) & MULTI-ENGINE HANDLERS ──
+
+window.handleEngineChange = (engine) => {
+    const curTab = _notebooks[_activeTabIdx];
+    if (curTab) {
+        curTab.engine = engine;
+        saveNotebooks();
+    }
+    const engineLabel = {
+        duckdb: 'DuckDB (In-Memory)',
+        auto: 'AUTO (Intelligent Multi-Engine)',
+        doris: 'Apache Doris (Distributed MPP)',
+        spark: 'Apache Spark (Batch / Hadoop)'
+    }[engine] || engine;
+    showToast(`Execution Engine set to: ${engineLabel}`, 'info');
+};
+
+window.explainCurrentQuery = async () => {
+    const editor = document.getElementById('query-editor');
+    const sql = editor ? editor.value : '';
+    if (!sql || !sql.trim()) {
+        showToast('Please enter a SQL query to generate execution plan', 'warning');
+        return;
+    }
+
+    const targetId = _activeTargetId || (_targets && _targets[0] ? _targets[0].target_id : null);
+    if (!targetId) {
+        showToast('Please select a storage target first', 'warning');
+        return;
+    }
+
+    const engineSelect = document.getElementById('query-engine-select');
+    const engine = engineSelect ? engineSelect.value : (_notebooks[_activeTabIdx]?.engine || 'duckdb');
+
+    const btn = document.getElementById('explain-query-btn');
+    const origText = btn ? btn.innerText : '🗺️ Explain Plan';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '🗺️ Generating Plan...';
+    }
+
+    try {
+        const res = await apiFetch(`/api/query/explain/${targetId}`, {
+            method: 'POST',
+            body: JSON.stringify({ sql, engine })
+        });
+
+        if (res && res.success) {
+            const curTab = _notebooks[_activeTabIdx];
+            if (curTab) {
+                curTab.rawPlan = res.rawPlan;
+                curTab.stages = res.stages || [];
+                curTab.planEngine = res.routedEngine || engine;
+                saveNotebooks();
+            }
+            window.switchView('plan');
+            window.renderCurrentTabPlan(res);
+            showToast(`Generated execution plan using ${String(res.routedEngine || engine).toUpperCase()}`, 'success');
+        } else {
+            showToast(res?.error || 'Failed to explain query', 'error');
+        }
+    } catch (err) {
+        showToast(`Execution Plan error: ${err.message}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = origText;
+        }
+    }
+};
+
+window.renderCurrentTabPlan = (planData) => {
+    const curTab = _notebooks[_activeTabIdx];
+    const data = planData || curTab;
+    if (!data) return;
+
+    const stages = data.stages || [];
+    const rawPlan = data.rawPlan || 'No execution plan available for this query.';
+    const engine = String(data.planEngine || data.routedEngine || curTab?.engine || 'DUCKDB').toUpperCase();
+
+    const badge = document.getElementById('plan-engine-badge');
+    const targetEngine = document.getElementById('plan-target-engine');
+    const rawOutput = document.getElementById('plan-raw-output');
+    const stagesContainer = document.getElementById('plan-stages-container');
+
+    if (badge) badge.innerText = engine;
+    if (targetEngine) targetEngine.innerText = engine.toLowerCase();
+    if (rawOutput) rawOutput.innerText = rawPlan;
+
+    if (stagesContainer) {
+        if (stages.length === 0) {
+            stagesContainer.innerHTML = `
+                <div style="background:white; border-radius:8px; border:1px solid #e2e8f0; padding:12px; grid-column:1/-1;">
+                    <div style="font-size:0.75rem; color:#64748b;">No intermediate stages recorded. Click "Explain Plan" to analyze pipeline vectors.</div>
+                </div>
+            `;
+        } else {
+            stagesContainer.innerHTML = stages.map((s, idx) => `
+                <div style="background:white; border-radius:10px; border:1px solid #e2e8f0; padding:14px; box-shadow:0 2px 6px rgba(0,0,0,0.02); display:flex; flex-direction:column; justify-content:space-between;">
+                    <div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                            <span style="font-size:0.68rem; font-weight:800; color:#64748b; text-transform:uppercase;">Stage ${idx + 1}: ${s.type || 'EXECUTE'}</span>
+                            <span style="font-size:0.62rem; font-weight:700; background:${s.status === 'COMPLETED' ? '#dcfce7' : '#e0f2fe'}; color:${s.status === 'COMPLETED' ? '#15803d' : '#0369a1'}; padding:2px 6px; border-radius:4px;">${s.status || 'PLANNED'}</span>
+                        </div>
+                        <div style="font-size:0.85rem; font-weight:700; color:#1e293b; margin-bottom:4px;">${s.name}</div>
+                        <div style="font-size:0.72rem; color:#64748b; line-height:1.4;">${s.details || 'Pipeline processing vector'}</div>
+                    </div>
+                    ${s.durationMs ? `<div style="font-size:0.68rem; font-weight:700; color:#0284c7; margin-top:8px;">Duration: ${s.durationMs}ms</div>` : ''}
+                </div>
+            `).join('');
+        }
+    }
+};
+
+window.copyExecutionPlan = () => {
+    const rawOutput = document.getElementById('plan-raw-output');
+    if (!rawOutput || !rawOutput.innerText) {
+        showToast('No execution plan to copy', 'warning');
+        return;
+    }
+    navigator.clipboard.writeText(rawOutput.innerText).then(() => {
+        showToast('Execution plan copied to clipboard', 'success');
+    }).catch(() => {
+        showToast('Failed to copy to clipboard', 'error');
+    });
+};
+
+window.openClusterMonitoringModal = () => {
+    const modal = document.getElementById('cluster-monitoring-modal');
+    if (modal) {
+        modal.style.display = 'flex';
+        window.fetchClusterStatus();
+    }
+};
+
+window.closeClusterMonitoringModal = () => {
+    const modal = document.getElementById('cluster-monitoring-modal');
+    if (modal) modal.style.display = 'none';
+};
+
+window.fetchClusterStatus = async () => {
+    const duckBadge = document.getElementById('cluster-duckdb-badge');
+    const dorisBadge = document.getElementById('cluster-doris-badge');
+    const sparkBadge = document.getElementById('cluster-spark-badge');
+    const backendsTable = document.getElementById('cluster-doris-backends-table');
+    const dorisSummary = document.getElementById('cluster-doris-nodes-summary');
+
+    if (backendsTable) {
+        backendsTable.innerHTML = '<tr><td colspan="6" style="padding:16px; text-align:center; color:#64748b;">⌛ Querying cluster health...</td></tr>';
+    }
+
+    try {
+        const res = await apiFetch('/api/dqe/cluster-status');
+        if (res && res.success && res.health) {
+            const h = res.health;
+
+            // DuckDB Status
+            if (duckBadge) {
+                duckBadge.innerText = h.duckdb?.healthy ? 'HEALTHY' : 'ERROR';
+                duckBadge.style.background = h.duckdb?.healthy ? '#dcfce7' : '#fee2e2';
+                duckBadge.style.color = h.duckdb?.healthy ? '#15803d' : '#b91c1c';
+            }
+
+            // Spark Status
+            if (sparkBadge) {
+                sparkBadge.innerText = h.spark?.healthy ? 'READY' : 'DEGRADED';
+                sparkBadge.style.background = h.spark?.healthy ? '#dcfce7' : '#fef3c7';
+                sparkBadge.style.color = h.spark?.healthy ? '#15803d' : '#b45309';
+            }
+
+            // Doris Status
+            if (dorisBadge) {
+                if (h.doris?.disabled) {
+                    dorisBadge.innerText = 'DISABLED (FLAG)';
+                    dorisBadge.style.background = '#f1f5f9';
+                    dorisBadge.style.color = '#64748b';
+                } else if (h.doris?.healthy) {
+                    dorisBadge.innerText = 'HEALTHY';
+                    dorisBadge.style.background = '#dcfce7';
+                    dorisBadge.style.color = '#15803d';
+                } else {
+                    dorisBadge.innerText = 'OFFLINE';
+                    dorisBadge.style.background = '#fee2e2';
+                    dorisBadge.style.color = '#b91c1c';
+                }
+            }
+
+            if (dorisSummary && h.doris?.details) {
+                const d = h.doris.details;
+                dorisSummary.innerText = `${d.aliveFrontendCount || 0} FE Active • ${d.aliveBackendCount || 0} BE Backends`;
+            }
+
+            // Backends Table
+            if (backendsTable) {
+                const backends = h.doris?.details?.backends || [];
+                if (backends.length === 0) {
+                    backendsTable.innerHTML = `
+                        <tr>
+                            <td colspan="6" style="padding:16px; text-align:center; color:#64748b;">
+                                ${h.doris?.disabled ? 'Apache Doris is disabled by feature flag (ENABLE_DORIS_ENGINE=false).' : (h.doris?.error || 'No active Doris backends detected. Cluster running in dev mode.')}
+                            </td>
+                        </tr>
+                    `;
+                } else {
+                    backendsTable.innerHTML = backends.map(b => `
+                        <tr style="border-bottom:1px solid #f1f5f9;">
+                            <td style="padding:8px 12px; font-weight:700; color:#1e293b;">${b.id || 'N/A'}</td>
+                            <td style="padding:8px 12px; font-family:monospace; color:#0284c7;">${b.host}</td>
+                            <td style="padding:8px 12px; font-family:monospace;">${b.heartbeatPort || 9050}</td>
+                            <td style="padding:8px 12px;">
+                                <span style="font-size:0.65rem; font-weight:700; background:${b.alive ? '#dcfce7' : '#fee2e2'}; color:${b.alive ? '#15803d' : '#b91c1c'}; padding:2px 6px; border-radius:4px;">
+                                    ${b.alive ? 'ONLINE' : 'DEAD'}
+                                </span>
+                            </td>
+                            <td style="padding:8px 12px; font-weight:600;">${b.tabletNum || 0}</td>
+                            <td style="padding:8px 12px; font-family:monospace; color:#475569;">${b.availCapacity || 'N/A'} / ${b.totalCapacity || 'N/A'}</td>
+                        </tr>
+                    `).join('');
+                }
+            }
+        }
+    } catch (err) {
+        if (backendsTable) {
+            backendsTable.innerHTML = `<tr><td colspan="6" style="padding:16px; text-align:center; color:#dc2626;">Error: ${err.message}</td></tr>`;
+        }
     }
 };

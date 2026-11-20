@@ -1,0 +1,228 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloudobjectiq-dqe
+  labels:
+    app.kubernetes.io/part-of: cloudobjectiq
+    environment: development
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: doris-fe-config
+  namespace: cloudobjectiq-dqe
+data:
+  fe.conf: |
+    # CloudObjectIQ Apache Doris Development Configuration - FE
+    LOG_DIR = /opt/apache-doris/fe/log
+    DATE = 2026-11-20
+    meta_dir = /opt/apache-doris/fe/doris-meta
+    http_port = 8030
+    rpc_port = 9020
+    query_port = 9030
+    edit_log_port = 9010
+    priority_networks = 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+    enable_fqdn_mode = true
+    # Multi-Catalog / S3 scan optimizations
+    enable_pipeline_engine = true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: doris-be-config
+  namespace: cloudobjectiq-dqe
+data:
+  be.conf: |
+    # CloudObjectIQ Apache Doris Development Configuration - BE
+    LOG_DIR = /opt/apache-doris/be/log
+    be_port = 9060
+    webserver_port = 8040
+    heartbeat_service_port = 9050
+    brpc_port = 8060
+    priority_networks = 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+    # Vectorized execution and memory limits
+    enable_pipeline_engine = true
+    storage_root_path = /opt/apache-doris/be/storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: doris-fe-service
+  namespace: cloudobjectiq-dqe
+  labels:
+    app: doris-fe
+spec:
+  type: ClusterIP
+  ports:
+    - name: query-mysql
+      port: 9030
+      targetPort: 9030
+    - name: http-fe
+      port: 8030
+      targetPort: 8030
+    - name: edit-log
+      port: 9010
+      targetPort: 9010
+    - name: rpc
+      port: 9020
+      targetPort: 9020
+  selector:
+    app: doris-fe
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: doris-be-service
+  namespace: cloudobjectiq-dqe
+  labels:
+    app: doris-be
+spec:
+  clusterIP: None
+  ports:
+    - name: heartbeat
+      port: 9050
+      targetPort: 9050
+    - name: be-web
+      port: 8040
+      targetPort: 8040
+    - name: be-service
+      port: 9060
+      targetPort: 9060
+    - name: brpc
+      port: 8060
+      targetPort: 8060
+  selector:
+    app: doris-be
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: doris-fe
+  namespace: cloudobjectiq-dqe
+spec:
+  serviceName: doris-fe-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: doris-fe
+  template:
+    metadata:
+      labels:
+        app: doris-fe
+    spec:
+      containers:
+        - name: fe
+          image: apache/doris:2.1.2-fe-x86_64
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9030
+              name: query
+            - containerPort: 8030
+              name: http
+          env:
+            - name: DORIS_FE_META_DIR
+              value: /opt/apache-doris/fe/doris-meta
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+          readinessProbe:
+            httpGet:
+              path: /api/bootstrap
+              port: 8030
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/bootstrap
+              port: 8030
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          volumeMounts:
+            - name: fe-conf
+              mountPath: /opt/apache-doris/fe/conf/fe.conf
+              subPath: fe.conf
+            - name: fe-storage
+              mountPath: /opt/apache-doris/fe/doris-meta
+      volumes:
+        - name: fe-conf
+          configMap:
+            name: doris-fe-config
+  volumeClaimTemplates:
+    - metadata:
+        name: fe-storage
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: doris-be
+  namespace: cloudobjectiq-dqe
+spec:
+  serviceName: doris-be-service
+  replicas: 2
+  selector:
+    matchLabels:
+      app: doris-be
+  template:
+    metadata:
+      labels:
+        app: doris-be
+    spec:
+      containers:
+        - name: be
+          image: apache/doris:2.1.2-be-x86_64
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9050
+              name: heartbeat
+            - containerPort: 8040
+              name: web
+            - containerPort: 9060
+              name: be
+            - containerPort: 8060
+              name: brpc
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "2Gi"
+            limits:
+              cpu: "4000m"
+              memory: "8Gi"
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8040
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8040
+            initialDelaySeconds: 40
+            periodSeconds: 15
+          volumeMounts:
+            - name: be-conf
+              mountPath: /opt/apache-doris/be/conf/be.conf
+              subPath: be.conf
+            - name: be-storage
+              mountPath: /opt/apache-doris/be/storage
+      volumes:
+        - name: be-conf
+          configMap:
+            name: doris-be-config
+  volumeClaimTemplates:
+    - metadata:
+        name: be-storage
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: 20Gi
