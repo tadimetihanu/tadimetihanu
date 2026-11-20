@@ -41,3 +41,23 @@ services:
         generateValue: true
       - key: SESSION_SECRET
         generateValue: true
+      - key: ENABLE_DORIS_ENGINE
+        value: "true"
+      - key: ENABLE_DQE
+        value: "true"
+      - key: DORIS_FE_HOST
+        value: "doris-fe"
+      - key: DORIS_FE_PORT
+        value: "9030"
+
+  - type: pserv
+    name: doris-fe
+    runtime: image
+    image:
+      url: apache/doris:2.1.2-fe-x86_64
+    plan: standard
+    envVars:
+      - key: FE_SERVICENAME
+        value: doris-fe
+      - key: ENABLE_FQDN_MODE
+        value: "true"
