@@ -54,7 +54,7 @@ services:
     name: doris-fe
     runtime: image
     image:
-      url: apache/doris:2.1.2-fe-x86_64
+      url: apache/doris:fe-2.1.7
     plan: standard
     envVars:
       - key: FE_SERVICENAME

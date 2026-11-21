@@ -4,7 +4,7 @@ version: '3.8'
 # Runs isolated single-node Doris FE + BE alongside CloudObjectIQ
 services:
   doris-fe:
-    image: apache/doris:2.1.2-fe-x86_64
+    image: apache/doris:fe-2.1.7
     container_name: cloudobjectiq-doris-fe
     hostname: doris-fe
     environment:
@@ -26,7 +26,7 @@ services:
       start_period: 30s
 
   doris-be:
-    image: apache/doris:2.1.2-be-x86_64
+    image: apache/doris:be-2.1.7
     container_name: cloudobjectiq-doris-be
     hostname: doris-be
     depends_on:

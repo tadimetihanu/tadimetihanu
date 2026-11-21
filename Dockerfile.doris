@@ -1,5 +1,5 @@
 # Apache Doris Frontend (FE) - Tuned for Render Cloud Containers
-FROM apache/doris:2.1.2-fe-x86_64
+FROM apache/doris:fe-2.1.7
 
 # Tune JVM heap for Render 512MB - 1GB container limits (prevents OOM kill)
 RUN if [ -f /opt/apache-doris/fe/conf/fe.conf ]; then \
