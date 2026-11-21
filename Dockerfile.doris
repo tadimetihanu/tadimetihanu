@@ -8,6 +8,7 @@ RUN if [ -f /opt/apache-doris/fe/conf/fe.conf ]; then \
       echo "enable_fqdn_mode = true" >> /opt/apache-doris/fe/conf/fe.conf; \
     fi
 
+ENV PORT=8030
 ENV JAVA_OPTS="-Xmx384m -Xms192m -XX:+UseG1GC"
 ENV FE_SERVICENAME=doris-fe
 ENV ENABLE_FQDN_MODE=true
