@@ -160,11 +160,12 @@ class DorisEngine extends BaseQueryEngine {
 
     } catch (err) {
       const executionTimeMs = Date.now() - startTime;
-      logger.logError('doris', `Doris query execution failed (${executionTimeMs}ms)`, { error: err.message, sql });
+      const safeErrMsg = this._redactSecrets(err.message);
+      logger.logError('doris', `Doris query execution failed (${executionTimeMs}ms)`, { error: safeErrMsg, sql });
       try {
         await this._logQueryAudit(userId, targetId, sql, 0, executionTimeMs, 'failed', { executionId, tenantId });
       } catch (_) {}
-      throw new Error(`Apache Doris execution error: ${err.message}`);
+      throw new Error(`Apache Doris execution error: ${safeErrMsg}`);
 
     } finally {
       this.activeQueries.delete(executionId);
@@ -210,9 +211,11 @@ class DorisEngine extends BaseQueryEngine {
       const explainSql = `EXPLAIN ${translatedSql.replace(/;+\s*$/, '')}`;
 
       const [rows] = await conn.query(explainSql);
-      const rawPlan = Array.isArray(rows)
-        ? rows.map(r => Object.values(r).join(' ')).join('\n')
-        : String(rows);
+      const rawPlan = this._redactSecrets(
+        Array.isArray(rows)
+          ? rows.map(r => Object.values(r).join(' ')).join('\n')
+          : String(rows)
+      );
 
       const stages = this._parseDorisStages(rawPlan);
 
@@ -222,11 +225,12 @@ class DorisEngine extends BaseQueryEngine {
         stages
       };
     } catch (err) {
+      const safeErr = this._redactSecrets(err.message);
       return {
         engine: this.id,
-        rawPlan: `Doris EXPLAIN failed: ${err.message}`,
+        rawPlan: `Doris EXPLAIN failed: ${safeErr}`,
         stages: [
-          { name: 'Execution Plan', status: 'UNAVAILABLE', details: err.message }
+          { name: 'Execution Plan', status: 'UNAVAILABLE', details: safeErr }
         ]
       };
     } finally {
@@ -301,40 +305,87 @@ class DorisEngine extends BaseQueryEngine {
   }
 
   /**
-   * Translate DuckDB-style queries and object paths to Doris Multi-Catalog or S3 TVF
+   * Redact S3 credentials from plans and error messages before returning to UI or logs
+   */
+  _redactSecrets(text) {
+    if (!text) return '';
+    return String(text)
+      .replace(/("s3\.(?:access_key|secret_key)"\s*=\s*)"[^"]*"/gi, '$1"***"')
+      .replace(/(s3\.(?:access_key|secret_key)\s*=\s*)'[^']*'/gi, "$1'***'");
+  }
+
+  /**
+   * Build Apache Doris s3() Table-Valued Function for object storage file path
+   */
+  _buildDorisS3Tvf(rawPath, formatHint, target) {
+    const cleanPath = String(rawPath || '').trim().replace(/^['"]|['"]$/g, '');
+    const extMatch = cleanPath.match(/\.(parquet|csv|json|orc)$/i);
+    const format = (formatHint || (extMatch ? extMatch[1] : 'parquet')).toLowerCase();
+
+    if (!target) {
+      return `s3("uri" = "${cleanPath}", "format" = "${format}")`;
+    }
+
+    const bucket = String(target.bucket || '').trim().replace(/^s3:\/\/|^r2:\/\/|^az:\/\//i, '').replace(/^\/+|\/+$/g, '');
+    let rawEp = String(target.endpoint || '').trim();
+    let endpoint = rawEp.replace(/\/+$/, '');
+    if (endpoint && !/^https?:\/\//i.test(endpoint)) {
+      endpoint = `https://${endpoint}`;
+    }
+    if (bucket && endpoint.toLowerCase().endsWith('/' + bucket.toLowerCase())) {
+      endpoint = endpoint.slice(0, -(bucket.length + 1)).replace(/\/+$/, '');
+    }
+
+    const accessKey = target.access_key ? decryptSecret(target.access_key).trim() : '';
+    const secretKey = target.secret_key ? decryptSecret(target.secret_key).trim() : '';
+    const isR2 = (target.provider_type || '').toLowerCase() === 'r2' ||
+                 (target.provider_type || '').toLowerCase() === 'cloudflare' ||
+                 endpoint.toLowerCase().includes('r2.cloudflarestorage.com');
+    const region = isR2 ? (target.region || 'auto') : (target.region || 'us-east-1');
+
+    let uri = cleanPath;
+    if (!/^(?:s3|http|https):\/\//i.test(uri)) {
+      const key = uri.replace(/^\/+/, '');
+      uri = bucket ? `s3://${bucket}/${key}` : `s3://${key}`;
+    } else if (/^r2:\/\//i.test(uri)) {
+      uri = uri.replace(/^r2:\/\//i, 's3://');
+    }
+
+    const props = [
+      `"uri" = "${uri}"`,
+      `"format" = "${format}"`
+    ];
+    if (endpoint) props.push(`"s3.endpoint" = "${endpoint}"`);
+    if (region) props.push(`"s3.region" = "${region}"`);
+    if (accessKey) props.push(`"s3.access_key" = "${accessKey}"`);
+    if (secretKey) props.push(`"s3.secret_key" = "${secretKey}"`);
+    props.push(`"use_path_style" = "true"`);
+
+    return `s3(${props.join(', ')})`;
+  }
+
+  /**
+   * Translate DuckDB-style queries and object paths to Apache Doris S3 Table-Valued Functions (TVF)
    */
   async _translateSqlForDoris(sql, target, conn) {
     let executable = sql;
 
-    // Handle read_parquet('s3://...') or table references
-    if (target && target.provider_type && (target.provider_type === 's3' || target.provider_type === 'r2' || target.provider_type === 'minio')) {
-      let secretKey = target.secret_key ? decryptSecret(target.secret_key) : '';
-      let accessKey = target.access_key ? decryptSecret(target.access_key) : '';
-      let endpoint = target.endpoint || '';
-      if (!endpoint.startsWith('http')) {
-        endpoint = `https://${endpoint}`;
+    // 1. Rewrite read_parquet('...'), read_csv('...'), read_csv_auto('...'), read_json('...'), read_orc('...')
+    executable = executable.replace(
+      /read_(parquet|csv_auto|csv|json_auto|json|orc)\s*\(\s*['"]([^'"]+)['"]\s*(?:,[^)]*)?\)/gi,
+      (_, fnType, filePath) => {
+        const fmt = fnType.replace('_auto', '').toLowerCase();
+        return this._buildDorisS3Tvf(filePath, fmt, target);
       }
+    );
 
-      // Check if catalog exists or ensure external catalog
-      const catalogName = `cat_${target.target_id.replace(/[^a-zA-Z0-9_]/g, '_')}`;
-      try {
-        await conn.query(`
-          CREATE CATALOG IF NOT EXISTS ${catalogName} PROPERTIES (
-            "type" = "s3",
-            "s3.endpoint" = "${endpoint}",
-            "s3.access_key" = "${accessKey}",
-            "s3.secret_key" = "${secretKey}",
-            "s3.region" = "${target.region || 'us-east-1'}",
-            "use_path_style" = "true"
-          );
-        `);
-      } catch (catErr) {
-        // Fallback or ignore if catalog creation is restricted
+    // 2. Rewrite bare FROM/JOIN 'path/to/file.parquet' references
+    executable = executable.replace(
+      /((?:FROM|JOIN)\s+)['"]([^'"]+\.(?:parquet|csv|json|orc))['"]/gi,
+      (_, keyword, filePath) => {
+        return `${keyword}${this._buildDorisS3Tvf(filePath, null, target)}`;
       }
-    }
-
-    // Strip read_parquet() wrapper if user typed read_parquet('...')
-    executable = executable.replace(/read_parquet\(\s*['"]([^'"]+)['"]\s*\)/gi, '$1');
+    );
 
     return executable;
   }
