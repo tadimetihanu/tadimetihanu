@@ -1,18 +1,21 @@
 # Apache Doris Frontend (FE) - Tuned for Render Cloud Containers
 FROM apache/doris:fe-2.1.7
 
-# Tune JVM heap for Render 512MB - 1GB container limits (prevents OOM kill)
+# 1. Tune JVM heap for Render memory limits (prevents OOM kill)
+# 2. Configure http_port = 10000 so Render port scanner detects it immediately
 RUN if [ -f /opt/apache-doris/fe/conf/fe.conf ]; then \
       sed -i 's/-Xmx[0-9]*[mgMG]/-Xmx384m/g' /opt/apache-doris/fe/conf/fe.conf && \
       sed -i 's/-Xms[0-9]*[mgMG]/-Xms192m/g' /opt/apache-doris/fe/conf/fe.conf && \
+      sed -i 's/^http_port = .*/http_port = 10000/g' /opt/apache-doris/fe/conf/fe.conf && \
       echo "enable_fqdn_mode = true" >> /opt/apache-doris/fe/conf/fe.conf; \
     fi
 
-ENV PORT=8030
+ENV PORT=10000
 ENV JAVA_OPTS="-Xmx384m -Xms192m -XX:+UseG1GC"
 ENV FE_SERVICENAME=doris-fe
 ENV ENABLE_FQDN_MODE=true
 
-EXPOSE 9030 8030 9010 9020
+EXPOSE 9030 10000 8030 9010 9020
 
-ENTRYPOINT ["/opt/apache-doris/fe/bin/start_fe.sh"]
+# Run in foreground with --console so Render captures logs and tracks process
+CMD ["/opt/apache-doris/fe/bin/start_fe.sh", "--console"]
