@@ -52,7 +52,8 @@ class DorisEngine extends BaseQueryEngine {
         connectionLimit: 10,
         queueLimit: 0,
         connectTimeout: 10000,
-        multipleStatements: true
+        multipleStatements: true,
+        ssl: false
       });
     }
     return this.pool;
