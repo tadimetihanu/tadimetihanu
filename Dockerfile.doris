@@ -3,7 +3,7 @@ FROM apache/doris:fe-2.1.7
 
 WORKDIR /app
 
-COPY RenderHealth.java /app/RenderHealth.java
+COPY RenderHealth* /app/
 COPY start_doris_fe.sh /app/start_doris_fe.sh
 
 RUN chmod +x /app/start_doris_fe.sh

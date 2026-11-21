@@ -1,11 +1,29 @@
 #!/bin/bash
 set -e
 
-echo "🚀 [Doris Render] Starting instant health listener on port ${PORT:-10000}..."
-java /app/RenderHealth.java &
-HEALTH_PID=$!
+# Find Java binary
+if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+    JAVA_BIN="$JAVA_HOME/bin/java"
+elif command -v java >/dev/null 2>&1; then
+    JAVA_BIN="java"
+else
+    JAVA_BIN=$(find /usr/lib/jvm -name java -type f 2>/dev/null | head -n 1)
+fi
 
-echo "🔧 [Doris Render] Configuring Doris FE network & memory..."
+echo "🚀 [Doris Render] Using Java binary: $JAVA_BIN"
+
+# Start instant health responder on PORT (default 10000)
+cd /app
+if [ -n "$JAVA_BIN" ]; then
+    if [ -f /app/RenderHealth.class ]; then
+        $JAVA_BIN -cp /app RenderHealth &
+    elif [ -f /app/RenderHealth.java ]; then
+        $JAVA_BIN /app/RenderHealth.java &
+    fi
+    echo "✅ [Doris Render] Health listener started on port ${PORT:-10000}"
+fi
+
+# Configure fe.conf
 FE_CONF="/opt/apache-doris/fe/conf/fe.conf"
 if [ -f "$FE_CONF" ]; then
     sed -i 's/-Xmx[0-9]*[mgMG]/-Xmx384m/g' "$FE_CONF" 2>/dev/null || true
@@ -20,5 +38,5 @@ export JAVA_OPTS="-Xmx384m -Xms192m -XX:+UseG1GC"
 export FE_SERVICENAME="doris-fe"
 export ENABLE_FQDN_MODE="true"
 
-echo "🐬 [Doris Render] Launching Apache Doris FE on MySQL port 9030..."
+echo "🐬 [Doris Render] Starting Apache Doris FE..."
 exec /opt/apache-doris/fe/bin/start_fe.sh --console
