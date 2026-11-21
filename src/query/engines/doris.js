@@ -26,7 +26,11 @@ class DorisEngine extends BaseQueryEngine {
       }
     });
 
-    this.host = process.env.DORIS_FE_HOST || config.host || '127.0.0.1';
+    let host = process.env.DORIS_FE_HOST || config.host;
+    if (!host || (host === '127.0.0.1' && (process.env.RENDER || process.env.RENDER_SERVICE_ID))) {
+      host = 'doris-fe';
+    }
+    this.host = host || '127.0.0.1';
     this.port = parseInt(process.env.DORIS_FE_PORT || config.port || 9030, 10);
     this.user = process.env.DORIS_USER || config.user || 'root';
     this.password = process.env.DORIS_PASSWORD || config.password || '';
@@ -41,6 +45,16 @@ class DorisEngine extends BaseQueryEngine {
    * Initialize connection pool with safe limits
    */
   async _getPool() {
+    let host = process.env.DORIS_FE_HOST || this.host;
+    if (!host || (host === '127.0.0.1' && (process.env.RENDER || process.env.RENDER_SERVICE_ID))) {
+      host = 'doris-fe';
+    }
+    if (this.pool && this.host !== host) {
+      try { await this.pool.end(); } catch (_) {}
+      this.pool = null;
+    }
+    this.host = host;
+
     if (!this.pool) {
       this.pool = mysql.createPool({
         host: this.host,
