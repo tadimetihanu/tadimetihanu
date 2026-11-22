@@ -2755,6 +2755,11 @@ window.switchView = (view) => {
         if (typeof window.renderCurrentTabPlan === 'function') {
             window.renderCurrentTabPlan();
         }
+        const curTab = _notebooks[_activeTabIdx];
+        const editorSql = (document.getElementById('query-editor')?.value || '').trim();
+        if ((!curTab || !curTab.rawPlan) && editorSql && !window._isExplainingPlan && typeof window.explainCurrentQuery === 'function') {
+            window.explainCurrentQuery();
+        }
     }
 };
 
@@ -4909,6 +4914,8 @@ window.explainCurrentQuery = async () => {
         btn.innerText = '🗺️ Generating Plan...';
     }
 
+    if (window._isExplainingPlan) return;
+    window._isExplainingPlan = true;
     try {
         const res = await apiFetch(`/api/query/explain/${targetId}`, {
             method: 'POST',
@@ -4932,6 +4939,7 @@ window.explainCurrentQuery = async () => {
     } catch (err) {
         showToast(`Execution Plan error: ${err.message}`, 'error');
     } finally {
+        window._isExplainingPlan = false;
         if (btn) {
             btn.disabled = false;
             btn.innerText = origText;

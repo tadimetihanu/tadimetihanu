@@ -26,11 +26,14 @@ class DorisEngine extends BaseQueryEngine {
       }
     });
 
+    const isRender = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
     let host = process.env.DORIS_FE_HOST || config.host;
-    if (!host || (host === '127.0.0.1' && (process.env.RENDER || process.env.RENDER_SERVICE_ID))) {
+    if (!host) {
+      host = isRender ? 'doris-fe' : '127.0.0.1';
+    } else if (host === '127.0.0.1' && isRender) {
       host = 'doris-fe';
     }
-    this.host = host || '127.0.0.1';
+    this.host = host;
     this.port = parseInt(process.env.DORIS_FE_PORT || config.port || 9030, 10);
     this.user = process.env.DORIS_USER || config.user || 'root';
     this.password = process.env.DORIS_PASSWORD || config.password || '';
@@ -45,8 +48,11 @@ class DorisEngine extends BaseQueryEngine {
    * Initialize connection pool with safe limits
    */
   async _getPool() {
+    const isRender = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
     let host = process.env.DORIS_FE_HOST || this.host;
-    if (!host || (host === '127.0.0.1' && (process.env.RENDER || process.env.RENDER_SERVICE_ID))) {
+    if (!host) {
+      host = isRender ? 'doris-fe' : '127.0.0.1';
+    } else if (host === '127.0.0.1' && isRender) {
       host = 'doris-fe';
     }
     if (this.pool && this.host !== host) {
@@ -66,11 +72,33 @@ class DorisEngine extends BaseQueryEngine {
         connectionLimit: 10,
         queueLimit: 0,
         connectTimeout: 10000,
+        enableKeepAlive: true,
+        keepAliveInitialDelay: 10000,
         multipleStatements: true,
         ssl: false
       });
     }
     return this.pool;
+  }
+
+  _isConnectionResetError(err) {
+    if (!err) return false;
+    const code = String(err.code || '').toUpperCase();
+    const msg = String(err.message || '');
+    return (
+      code === 'ECONNRESET' ||
+      code === 'PROTOCOL_CONNECTION_LOST' ||
+      code === 'EPIPE' ||
+      /ECONNRESET|connection is in closed state|Connection lost/i.test(msg)
+    );
+  }
+
+  async _resetPool() {
+    if (this.pool) {
+      const oldPool = this.pool;
+      this.pool = null;
+      try { await oldPool.end(); } catch (_) {}
+    }
   }
 
   /**
@@ -82,6 +110,7 @@ class DorisEngine extends BaseQueryEngine {
     const tenantId = context.tenantId || 'default';
     const pool = await this._getPool();
     let conn = null;
+    let shouldDestroyConn = false;
 
     try {
       conn = await pool.getConnection();
@@ -92,11 +121,11 @@ class DorisEngine extends BaseQueryEngine {
         onStageUpdate({ stage: 'SESSION_INIT', message: 'Configuring Doris session and catalog...' });
       }
 
-      // Configure Doris session optimization
+      // Configure Doris session optimization (ignore version-specific variables on older Doris releases)
       const timeoutSec = Math.ceil(timeoutMs / 1000);
       await conn.query(`SET query_timeout = ${timeoutSec};`);
-      await conn.query(`SET enable_pipeline_engine = true;`);
-      await conn.query(`SET enable_parallel_result_sink = true;`);
+      try { await conn.query(`SET enable_pipeline_engine = true;`); } catch (_) {}
+      try { await conn.query(`SET enable_parallel_result_sink = true;`); } catch (_) {}
 
       // Prepare target catalog or S3 table translation
       let target = null;
@@ -159,6 +188,26 @@ class DorisEngine extends BaseQueryEngine {
       };
 
     } catch (err) {
+      if (this._isConnectionResetError(err)) {
+        shouldDestroyConn = true;
+        if (!context._retried) {
+          logger.logInfo('doris', `Doris connection reset (${err.code || err.message}); resetting pool and retrying once...`);
+          this.activeQueries.delete(executionId);
+          if (conn) {
+            try { conn.destroy(); } catch (_) {}
+            conn = null;
+          }
+          await this._resetPool();
+          return this.executeQuery({
+            sql,
+            targetId,
+            userId,
+            context: { ...context, _retried: true },
+            timeoutMs,
+            onStageUpdate
+          });
+        }
+      }
       const executionTimeMs = Date.now() - startTime;
       const safeErrMsg = this._redactSecrets(err.message);
       logger.logError('doris', `Doris query execution failed (${executionTimeMs}ms)`, { error: safeErrMsg, sql });
@@ -170,7 +219,11 @@ class DorisEngine extends BaseQueryEngine {
     } finally {
       this.activeQueries.delete(executionId);
       if (conn) {
-        conn.release();
+        if (shouldDestroyConn) {
+          try { conn.destroy(); } catch (_) {}
+        } else {
+          conn.release();
+        }
       }
     }
   }
@@ -355,6 +408,7 @@ class DorisEngine extends BaseQueryEngine {
       `"uri" = "${uri}"`,
       `"format" = "${format}"`
     ];
+    if (format === 'json') props.push(`"strip_outer_array" = "true"`);
     if (endpoint) props.push(`"s3.endpoint" = "${endpoint}"`);
     if (region) props.push(`"s3.region" = "${region}"`);
     if (accessKey) props.push(`"s3.access_key" = "${accessKey}"`);
